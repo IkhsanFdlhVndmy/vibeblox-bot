@@ -145,7 +145,7 @@ async function updateLiveLeaderboard() {
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-// === 1. FITUR REACTION VOUCH ===
+    // === 1. FITUR REACTION VOUCH ===
     const vouchChannelId = '1488903383963406507'; // Pastikan ID channel ini udah benar
     if (message.channel.id === vouchChannelId) {
         try {
@@ -301,9 +301,14 @@ client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
 
     if (interaction.customId.startsWith('lb_page_')) {
+        // Tahan loading dari Discord
+        await interaction.deferUpdate(); 
+        
         const page = parseInt(interaction.customId.split('_')[2]);
         const boardData = await generateLeaderboard(page);
-        await interaction.update(boardData);
+        
+        // Pakai editReply karena sudah di-deferUpdate
+        await interaction.editReply(boardData); 
     }
 });
 
