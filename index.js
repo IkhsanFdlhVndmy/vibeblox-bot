@@ -48,14 +48,13 @@ async function updateSpenderRoles(member, spentUang) {
             await member.roles.remove(rolePrime);
         }
     } catch (err) {
-        console.error("Gagal update role (Pastikan posisi Role Bot di atas role Prime/Elite/Client):", err.message);
+        console.error("Gagal update role:", err.message);
     }
 }
 
-// === FUNGSI GENERATE LEADERBOARD (MAX 10 PAGE) ===
-async function generateLeaderboard(page) {
+// === FUNGSI PENGOLAH DATA LEADERBOARD (CORE) ===
+async function getLeaderboardData(page) {
     if (page > 10) page = 10;
-
     const limit = 10; 
     const skip = (page - 1) * limit;
 
@@ -69,7 +68,6 @@ async function generateLeaderboard(page) {
     let totalAmountServer = storeData ? storeData.totalUangMasuk : 0;
 
     let description = '';
-    
     let rankIndex = 0;
     for (const user of users) {
         const rank = skip + rankIndex + 1;
@@ -82,48 +80,61 @@ async function generateLeaderboard(page) {
         let namaUser = "Unknown";
         try {
             let fetchedUser = client.users.cache.get(user.userId);
-            
-            if (!fetchedUser) {
-                fetchedUser = await client.users.fetch(user.userId);
-            }
-            
+            if (!fetchedUser) fetchedUser = await client.users.fetch(user.userId);
             namaUser = fetchedUser.username; 
         } catch (err) {
             namaUser = "Akun_Dihapus";
         }
 
-        if (namaUser.length > 12) {
-            namaUser = namaUser.substring(0, 12) + '..';
-        }
+        if (namaUser.length > 12) namaUser = namaUser.substring(0, 12) + '..';
 
         description += `${rankMedal} **@${namaUser}** — 💸 **Rp ${user.uangMasuk.toLocaleString('id-ID')}**\n`;
         rankIndex++;
     }
 
     if (description === '') description = 'Belum ada data transaksi pembeli nih.';
-
     description += `\n\n💰 **Total Amount Server**\n💸 **Rp ${totalAmountServer.toLocaleString('id-ID')}**\n\nTingkatkan transaksimu untuk naik pangkat!`;
 
     const embed = new EmbedBuilder()
         .setTitle(`🏆 Top Spenders Vibeblox (Hal ${page})`)
-        .setColor('#4F4580') // <--- WARNA BERUBAH DI SINI
+        .setColor('#4F4580') 
         .setDescription(description);
 
-    const row = new ActionRowBuilder()
-        .addComponents(
-            new ButtonBuilder()
-                .setCustomId(`lb_page_${page - 1}`)
-                .setLabel('◀ Prev')
-                .setStyle(ButtonStyle.Primary)
-                .setDisabled(page <= 1),
-            new ButtonBuilder()
-                .setCustomId(`lb_page_${page + 1}`)
-                .setLabel('Next ▶')
-                .setStyle(ButtonStyle.Primary)
-                .setDisabled(page >= totalPages) 
-        );
+    return { embed, totalPages };
+}
 
-    return { embeds: [embed], components: [row] };
+// === FUNGSI TAMPILAN GLOBAL (Papan Utama di Channel) ===
+async function generateGlobalBoard() {
+    const data = await getLeaderboardData(1); // Selalu tampilin halaman 1
+    
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId('open_personal_board')
+            .setLabel('🔍 Lihat Semua Halaman')
+            .setStyle(ButtonStyle.Success)
+    );
+
+    return { embeds: [data.embed], components: [row] };
+}
+
+// === FUNGSI TAMPILAN PERSONAL (Pop-up Rahasia Tiap User) ===
+async function generatePersonalBoard(page) {
+    const data = await getLeaderboardData(page);
+    
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+            .setCustomId(`lb_page_${page - 1}`)
+            .setLabel('◀ Prev')
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(page <= 1),
+        new ButtonBuilder()
+            .setCustomId(`lb_page_${page + 1}`)
+            .setLabel('Next ▶')
+            .setStyle(ButtonStyle.Primary)
+            .setDisabled(page >= data.totalPages) 
+    );
+
+    return { embeds: [data.embed], components: [row] };
 }
 
 // === FUNGSI AUTO-UPDATE LEADERBOARD ===
@@ -138,7 +149,8 @@ async function updateLiveLeaderboard() {
         const message = await channel.messages.fetch(storeData.leaderboardMessageId);
         if (!message) return;
 
-        const boardData = await generateLeaderboard(1); 
+        // Update papan utamanya aja (selalu hal 1)
+        const boardData = await generateGlobalBoard(); 
         await message.edit(boardData); 
     } catch (err) {
         console.error("Leaderboard gagal update:", err.message);
@@ -153,9 +165,7 @@ client.on('messageCreate', async (message) => {
     if (message.channel.id === vouchChannelId) {
         try {
             await message.react('1502074502228738098'); 
-        } catch (err) {
-            console.error('Bot gagal ngasih reaction:', err);
-        }
+        } catch (err) {}
     }
 
     const prefix = '!'; 
@@ -167,7 +177,7 @@ client.on('messageCreate', async (message) => {
     if (command === 'setupboard') {
         if (!message.member.permissions.has('Administrator')) return;
         
-        const boardData = await generateLeaderboard(1);
+        const boardData = await generateGlobalBoard();
         const sentMessage = await message.channel.send(boardData);
 
         let storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' });
@@ -187,9 +197,7 @@ client.on('messageCreate', async (message) => {
     const allowedRoles = ['1489612423521374309', '1489612221544665231'];
     const hasRole = message.member.roles.cache.some(role => allowedRoles.includes(role.id));
     
-    if (!hasRole) {
-        return message.reply('❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.');
-    }
+    if (!hasRole) return message.reply('❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.');
 
     const validCommands = ['adduangmasuk', 'minuangmasuk', 'adduangkeluar', 'minuangkeluar', 'summary'];
     if (!validCommands.includes(command)) return;
@@ -290,40 +298,42 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// === SISTEM ANTI-SPAM (DISABLE BUTTON SAAT LOADING) ===
+// === EVENT: INTERAKSI TOMBOL ===
 const isUpdating = new Set();
 
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
 
-    if (interaction.customId.startsWith('lb_page_')) {
-        // Kalau tombol udah diklik dan lagi proses, abaikan klik selanjutnya secara mutlak
-        if (isUpdating.has(interaction.message.id)) return;
+    // 1. Jika tombol "Lihat Semua Halaman" ditekan (Membuka Papan Personal)
+    if (interaction.customId === 'open_personal_board') {
+        // deferReply dengan {ephemeral: true} membuat balasan HANYA terlihat oleh user yang ngeklik
+        await interaction.deferReply({ ephemeral: true });
         
+        const personalBoard = await generatePersonalBoard(1);
+        await interaction.editReply(personalBoard);
+        return;
+    }
+
+    // 2. Jika tombol Next/Prev di dalam Papan Personal ditekan
+    if (interaction.customId.startsWith('lb_page_')) {
+        if (isUpdating.has(interaction.message.id)) return;
         isUpdating.add(interaction.message.id);
 
         try {
-            // 1. Ambil format tombol saat ini, lalu matikan dan ganti labelnya jadi "Loading..."
             const disabledRows = interaction.message.components.map(row => {
                 return ActionRowBuilder.from(row).setComponents(
                     row.components.map(btn => ButtonBuilder.from(btn).setDisabled(true).setLabel('Loading...'))
                 );
             });
-
-            // 2. Update pesan seketika (ini bakal ngerespon interaksi ke Discord di bawah 1 detik)
             await interaction.update({ components: disabledRows });
 
-            // 3. Bot tarik data (proses yang memakan waktu)
             const page = parseInt(interaction.customId.split('_')[2]);
-            const boardData = await generateLeaderboard(page);
+            const boardData = await generatePersonalBoard(page);
 
-            // 4. Timpa pesannya dengan data list baru & tombol yang udah nyala/normal lagi
             await interaction.editReply(boardData); 
-
         } catch (err) {
-            console.error("Kendala saat pindah halaman:", err.message);
+            console.error("Kendala saat pindah halaman personal:", err.message);
         } finally {
-            // Buka gemboknya setelah kelar
             isUpdating.delete(interaction.message.id);
         }
     }
