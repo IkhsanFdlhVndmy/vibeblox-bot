@@ -52,21 +52,26 @@ async function updateSpenderRoles(member, spentUang) {
     }
 }
 
-// === FUNGSI GENERATE LEADERBOARD (DIUPDATE) ===
+// === FUNGSI GENERATE LEADERBOARD (MAX 10 PAGE) ===
 async function generateLeaderboard(page) {
+    // Kunci page maksimal di 10 (Top 100 Pembeli)
+    if (page > 10) page = 10;
+
     const limit = 10; 
     const skip = (page - 1) * limit;
 
     const users = await User.find({ uangMasuk: { $gt: 0 } }).sort({ uangMasuk: -1 }).skip(skip).limit(limit);
     const totalUsers = await User.countDocuments({ uangMasuk: { $gt: 0 } }); 
-    const totalPages = Math.ceil(totalUsers / limit) || 1;
+    
+    // Hitung total halaman, tapi dilimit maksimal 10
+    const calculatedPages = Math.ceil(totalUsers / limit) || 1;
+    const totalPages = Math.min(calculatedPages, 10);
 
     let storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' });
     let totalAmountServer = storeData ? storeData.totalUangMasuk : 0;
 
     let description = '';
     
-    // Menggunakan for...of loop agar bisa melakukan await saat menarik nama
     let rankIndex = 0;
     for (const user of users) {
         const rank = skip + rankIndex + 1;
@@ -78,15 +83,20 @@ async function generateLeaderboard(page) {
 
         let namaUser = "Unknown";
         try {
-            // Tarik paksa data user dari Discord
-            const fetchedUser = await client.users.fetch(user.userId);
+            // 1. Cek ingatan bot (Cache)
+            let fetchedUser = client.users.cache.get(user.userId);
+            
+            // 2. Kalau nggak ada, fetch dari pusat Discord
+            if (!fetchedUser) {
+                fetchedUser = await client.users.fetch(user.userId);
+            }
+            
             namaUser = fetchedUser.username; 
         } catch (err) {
-            // Jika akun sudah dihapus oleh Discord
-            namaUser = "User_Left";
+            namaUser = "Akun_Dihapus";
         }
 
-        // Limit maksimal karakter (agar tampilan di mobile tidak kepanjangan bikin baris baru)
+        // Limit maksimal 12 karakter biar di HP rapi 1 baris
         if (namaUser.length > 12) {
             namaUser = namaUser.substring(0, 12) + '..';
         }
@@ -115,7 +125,7 @@ async function generateLeaderboard(page) {
                 .setCustomId(`lb_page_${page + 1}`)
                 .setLabel('Next ▶')
                 .setStyle(ButtonStyle.Primary)
-                .setDisabled(page >= totalPages) 
+                .setDisabled(page >= totalPages) // Tombol Next bakal mati kalau udah di Hal 10
         );
 
     return { embeds: [embed], components: [row] };
@@ -140,20 +150,15 @@ async function updateLiveLeaderboard() {
     }
 }
 
-
 // === EVENT: BACA CHAT MASUK ===
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
     // === 1. FITUR REACTION VOUCH ===
-    const vouchChannelId = '1488903383963406507'; // Pastikan ID channel ini udah benar
+    const vouchChannelId = '1488903383963406507'; 
     if (message.channel.id === vouchChannelId) {
         try {
-            // Hapus emoji bintang dan ganti pakai ID custom emoji lu
             await message.react('1502074502228738098'); 
-            
-            // Kalau lu masih mau pakai jempol, biarin aja. Kalau nggak, hapus baris di bawah ini:
-            // await message.react('👍'); 
         } catch (err) {
             console.error('Bot gagal ngasih reaction:', err);
         }
