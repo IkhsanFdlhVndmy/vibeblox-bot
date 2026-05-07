@@ -30,21 +30,18 @@ async function updateSpenderRoles(member, spentUang) {
     const rolePrime = '1490140596298580048';
 
     try {
-        // Logika Vibe Client (Asal pernah transaksi / > Rp 0)
         if (spentUang > 0 && !member.roles.cache.has(roleClient)) {
             await member.roles.add(roleClient);
         } else if (spentUang <= 0 && member.roles.cache.has(roleClient)) {
-            await member.roles.remove(roleClient); // Cabut kalau misal uangnya di-min sampai 0
+            await member.roles.remove(roleClient); 
         }
 
-        // Logika Vibe Elite (Minimal 1 Juta)
         if (spentUang >= 1000000 && !member.roles.cache.has(roleElite)) {
             await member.roles.add(roleElite);
         } else if (spentUang < 1000000 && member.roles.cache.has(roleElite)) {
             await member.roles.remove(roleElite);
         }
 
-        // Logika Vibe Prime (Minimal 10 Juta)
         if (spentUang >= 10000000 && !member.roles.cache.has(rolePrime)) {
             await member.roles.add(rolePrime);
         } else if (spentUang < 10000000 && member.roles.cache.has(rolePrime)) {
@@ -55,7 +52,7 @@ async function updateSpenderRoles(member, spentUang) {
     }
 }
 
-// === FUNGSI GENERATE LEADERBOARD ===
+// === FUNGSI GENERATE LEADERBOARD (DIUPDATE) ===
 async function generateLeaderboard(page) {
     const limit = 10; 
     const skip = (page - 1) * limit;
@@ -68,16 +65,35 @@ async function generateLeaderboard(page) {
     let totalAmountServer = storeData ? storeData.totalUangMasuk : 0;
 
     let description = '';
-    users.forEach((user, index) => {
-        const rank = skip + index + 1;
+    
+    // Menggunakan for...of loop agar bisa melakukan await saat menarik nama
+    let rankIndex = 0;
+    for (const user of users) {
+        const rank = skip + rankIndex + 1;
         let rankMedal = `**#${rank}**`;
         
         if (rank === 1) rankMedal = '🥇';
         else if (rank === 2) rankMedal = '🥈';
         else if (rank === 3) rankMedal = '🥉';
 
-        description += `${rankMedal} <@${user.userId}> — 💸 **Rp ${user.uangMasuk.toLocaleString('id-ID')}**\n`;
-    });
+        let namaUser = "Unknown";
+        try {
+            // Tarik paksa data user dari Discord
+            const fetchedUser = await client.users.fetch(user.userId);
+            namaUser = fetchedUser.username; 
+        } catch (err) {
+            // Jika akun sudah dihapus oleh Discord
+            namaUser = "User_Left";
+        }
+
+        // Limit maksimal karakter (agar tampilan di mobile tidak kepanjangan bikin baris baru)
+        if (namaUser.length > 12) {
+            namaUser = namaUser.substring(0, 12) + '..';
+        }
+
+        description += `${rankMedal} **@${namaUser}** — 💸 **Rp ${user.uangMasuk.toLocaleString('id-ID')}**\n`;
+        rankIndex++;
+    }
 
     if (description === '') description = 'Belum ada data transaksi pembeli nih.';
 
@@ -129,12 +145,15 @@ async function updateLiveLeaderboard() {
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // === 1. FITUR REACTION VOUCH ===
-    const vouchChannelId = '1488903383963406507'; // <<< JANGAN LUPA GANTI ID INI
+// === 1. FITUR REACTION VOUCH ===
+    const vouchChannelId = '1488903383963406507'; // Pastikan ID channel ini udah benar
     if (message.channel.id === vouchChannelId) {
         try {
-            await message.react('⭐');
-            await message.react('👍');
+            // Hapus emoji bintang dan ganti pakai ID custom emoji lu
+            await message.react('1502074502228738098'); 
+            
+            // Kalau lu masih mau pakai jempol, biarin aja. Kalau nggak, hapus baris di bawah ini:
+            // await message.react('👍'); 
         } catch (err) {
             console.error('Bot gagal ngasih reaction:', err);
         }
