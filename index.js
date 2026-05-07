@@ -106,7 +106,7 @@ async function generateLeaderboard(page) {
 
     const embed = new EmbedBuilder()
         .setTitle(`🏆 Top Spenders Vibeblox (Hal ${page})`)
-        .setColor(0x00E5FF) 
+        .setColor('#4F4580') // <--- WARNA BERUBAH DI SINI
         .setDescription(description);
 
     const row = new ActionRowBuilder()
