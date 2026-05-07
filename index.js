@@ -52,7 +52,7 @@ async function updateSpenderRoles(member, spentUang) {
     }
 }
 
-// === FUNGSI GENERATE LEADERBOARD (MAX 10 PAGE) ===
+// === FUNGSI GENERATE LEADERBOARD (MAX 10 PAGE & OPTIMIZED) ===
 async function generateLeaderboard(page) {
     // Kunci page maksimal di 10 (Top 100 Pembeli)
     if (page > 10) page = 10;
@@ -125,7 +125,7 @@ async function generateLeaderboard(page) {
                 .setCustomId(`lb_page_${page + 1}`)
                 .setLabel('Next ▶')
                 .setStyle(ButtonStyle.Primary)
-                .setDisabled(page >= totalPages) // Tombol Next bakal mati kalau udah di Hal 10
+                .setDisabled(page >= totalPages) 
         );
 
     return { embeds: [embed], components: [row] };
@@ -301,19 +301,38 @@ client.on('messageCreate', async (message) => {
     }
 });
 
+// === SISTEM ANTI-SPAM LEADERBOARD ===
+const isUpdating = new Set();
+
 // === EVENT: INTERAKSI TOMBOL (Paginasi Leaderboard) ===
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
 
     if (interaction.customId.startsWith('lb_page_')) {
-        // Tahan loading dari Discord
-        await interaction.deferUpdate(); 
-        
-        const page = parseInt(interaction.customId.split('_')[2]);
-        const boardData = await generateLeaderboard(page);
-        
-        // Pakai editReply karena sudah di-deferUpdate
-        await interaction.editReply(boardData); 
+        // Cek apakah bot masih loading halaman di pesan ini
+        if (isUpdating.has(interaction.message.id)) {
+            // Kalau iya, abaikan kliknya tapi tetap kasih deferUpdate biar nggak muncul pesan error merah
+            return interaction.deferUpdate().catch(() => {});
+        }
+
+        // Kunci pesan ini biar nggak bisa di-spam
+        isUpdating.add(interaction.message.id);
+
+        try {
+            // Tahan loading dari Discord
+            await interaction.deferUpdate(); 
+            
+            const page = parseInt(interaction.customId.split('_')[2]);
+            const boardData = await generateLeaderboard(page);
+            
+            // Edit pesannya
+            await interaction.editReply(boardData); 
+        } catch (err) {
+            console.error("Kendala saat pindah halaman:", err.message);
+        } finally {
+            // Wajib BUKA KUNCI pesan setelah selesai loading
+            isUpdating.delete(interaction.message.id);
+        }
     }
 });
 
