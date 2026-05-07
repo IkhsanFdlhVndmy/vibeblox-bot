@@ -52,9 +52,8 @@ async function updateSpenderRoles(member, spentUang) {
     }
 }
 
-// === FUNGSI GENERATE LEADERBOARD (MAX 10 PAGE & OPTIMIZED) ===
+// === FUNGSI GENERATE LEADERBOARD (MAX 10 PAGE) ===
 async function generateLeaderboard(page) {
-    // Kunci page maksimal di 10 (Top 100 Pembeli)
     if (page > 10) page = 10;
 
     const limit = 10; 
@@ -63,7 +62,6 @@ async function generateLeaderboard(page) {
     const users = await User.find({ uangMasuk: { $gt: 0 } }).sort({ uangMasuk: -1 }).skip(skip).limit(limit);
     const totalUsers = await User.countDocuments({ uangMasuk: { $gt: 0 } }); 
     
-    // Hitung total halaman, tapi dilimit maksimal 10
     const calculatedPages = Math.ceil(totalUsers / limit) || 1;
     const totalPages = Math.min(calculatedPages, 10);
 
@@ -83,10 +81,8 @@ async function generateLeaderboard(page) {
 
         let namaUser = "Unknown";
         try {
-            // 1. Cek ingatan bot (Cache)
             let fetchedUser = client.users.cache.get(user.userId);
             
-            // 2. Kalau nggak ada, fetch dari pusat Discord
             if (!fetchedUser) {
                 fetchedUser = await client.users.fetch(user.userId);
             }
@@ -96,7 +92,6 @@ async function generateLeaderboard(page) {
             namaUser = "Akun_Dihapus";
         }
 
-        // Limit maksimal 12 karakter biar di HP rapi 1 baris
         if (namaUser.length > 12) {
             namaUser = namaUser.substring(0, 12) + '..';
         }
@@ -154,7 +149,6 @@ async function updateLiveLeaderboard() {
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // === 1. FITUR REACTION VOUCH ===
     const vouchChannelId = '1488903383963406507'; 
     if (message.channel.id === vouchChannelId) {
         try {
@@ -170,7 +164,6 @@ client.on('messageCreate', async (message) => {
     const args = message.content.slice(prefix.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
-    // === 2. FITUR SETUP LEADERBOARD ===
     if (command === 'setupboard') {
         if (!message.member.permissions.has('Administrator')) return;
         
@@ -188,7 +181,6 @@ client.on('messageCreate', async (message) => {
         return; 
     }
 
-    // === FILTER KHUSUS COMMAND KEUANGAN ===
     const allowedChannel = '1489665490770067678';
     if (message.channel.id !== allowedChannel) return;
 
@@ -232,11 +224,8 @@ client.on('messageCreate', async (message) => {
                 message.reply(`📉 **Revisi Uang Masuk**\n👤 Pembeli: ${target.username}\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**\n📊 Total spent user: **Rp ${userData.uangMasuk.toLocaleString('id-ID')}**`);
             }
 
-            // TRIGGER AUTO ROLE
             const targetMember = await message.guild.members.fetch(target.id).catch(() => null);
             await updateSpenderRoles(targetMember, userData.uangMasuk);
-
-            // TRIGGER AUTO UPDATE LEADERBOARD
             await updateLiveLeaderboard();
         }
 
@@ -301,36 +290,40 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-// === SISTEM ANTI-SPAM LEADERBOARD ===
+// === SISTEM ANTI-SPAM (DISABLE BUTTON SAAT LOADING) ===
 const isUpdating = new Set();
 
-// === EVENT: INTERAKSI TOMBOL (Paginasi Leaderboard) ===
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
 
     if (interaction.customId.startsWith('lb_page_')) {
-        // Cek apakah bot masih loading halaman di pesan ini
-        if (isUpdating.has(interaction.message.id)) {
-            // Kalau iya, abaikan kliknya tapi tetap kasih deferUpdate biar nggak muncul pesan error merah
-            return interaction.deferUpdate().catch(() => {});
-        }
-
-        // Kunci pesan ini biar nggak bisa di-spam
+        // Kalau tombol udah diklik dan lagi proses, abaikan klik selanjutnya secara mutlak
+        if (isUpdating.has(interaction.message.id)) return;
+        
         isUpdating.add(interaction.message.id);
 
         try {
-            // Tahan loading dari Discord
-            await interaction.deferUpdate(); 
-            
+            // 1. Ambil format tombol saat ini, lalu matikan dan ganti labelnya jadi "Loading..."
+            const disabledRows = interaction.message.components.map(row => {
+                return ActionRowBuilder.from(row).setComponents(
+                    row.components.map(btn => ButtonBuilder.from(btn).setDisabled(true).setLabel('Loading...'))
+                );
+            });
+
+            // 2. Update pesan seketika (ini bakal ngerespon interaksi ke Discord di bawah 1 detik)
+            await interaction.update({ components: disabledRows });
+
+            // 3. Bot tarik data (proses yang memakan waktu)
             const page = parseInt(interaction.customId.split('_')[2]);
             const boardData = await generateLeaderboard(page);
-            
-            // Edit pesannya
+
+            // 4. Timpa pesannya dengan data list baru & tombol yang udah nyala/normal lagi
             await interaction.editReply(boardData); 
+
         } catch (err) {
             console.error("Kendala saat pindah halaman:", err.message);
         } finally {
-            // Wajib BUKA KUNCI pesan setelah selesai loading
+            // Buka gemboknya setelah kelar
             isUpdating.delete(interaction.message.id);
         }
     }
@@ -338,7 +331,6 @@ client.on('interactionCreate', async (interaction) => {
 
 client.login(process.env.TOKEN);
 
-// === WEB SERVER BOHONGAN BIAR BOT GAK TIDUR ===
 const express = require('express');
 const app = express();
 const port = process.env.PORT || 3000;
