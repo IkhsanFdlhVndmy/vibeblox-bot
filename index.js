@@ -227,7 +227,6 @@ client.on('messageCreate', async (message) => {
                 message.reply(`👁️ **Berhasil!** Akun pembeli ini ditampilkan kembali di Leaderboard.`);
             }
 
-            // Update role dan leaderboard
             const targetMember = await message.guild.members.fetch(target.id).catch(() => null);
             await updateSpenderRoles(targetMember, userData);
             await updateLiveLeaderboard();
@@ -248,15 +247,16 @@ client.on('messageCreate', async (message) => {
             if (command === 'adduangmasuk') {
                 userData.uangMasuk += amount;
                 storeData.totalUangMasuk += amount;
-                message.reply(`✅ **Uang Masuk Dicatat!**\n👤 Pembeli: ${target.username}\n💰 Nominal: **Rp ${amount.toLocaleString('id-ID')}**\n🛒 Kategori: ${kategori}`);
+                // Total spent dikembalikan ke reply
+                message.reply(`✅ **Uang Masuk Dicatat!**\n👤 Pembeli: ${target.username}\n💰 Nominal: **Rp ${amount.toLocaleString('id-ID')}**\n🛒 Kategori: ${kategori}\n📊 Total spent user: **Rp ${userData.uangMasuk.toLocaleString('id-ID')}**`);
             } else if (command === 'minuangmasuk') {
                 const bisaDikurang = Math.min(userData.uangMasuk, amount);
                 userData.uangMasuk = Math.max(0, userData.uangMasuk - amount);
                 storeData.totalUangMasuk = Math.max(0, storeData.totalUangMasuk - bisaDikurang);
-                message.reply(`📉 **Revisi Uang Masuk**\n👤 Pembeli: ${target.username}\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**`);
+                // Total spent dikembalikan ke reply
+                message.reply(`📉 **Revisi Uang Masuk**\n👤 Pembeli: ${target.username}\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**\n📊 Total spent user: **Rp ${userData.uangMasuk.toLocaleString('id-ID')}**`);
             }
 
-            // Proses simpan database cuma ditulis 1x di sini biar irit baris
             await userData.save();
             await storeData.save();
 
