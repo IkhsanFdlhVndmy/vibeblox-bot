@@ -21,34 +21,39 @@ client.once('clientReady', () => {
     console.log(`✅ Bot ${client.user.tag} Online!`);
 });
 
-// === FUNGSI AUTO ROLE PEMBELI ===
-async function updateSpenderRoles(member, spentUang) {
-    if (!member) return;
+// === FUNGSI AUTO ROLE PEMBELI (REVISI ANONYMOUS & VIBE CLIENT) ===
+async function updateSpenderRoles(member, userData) {
+    if (!member || !userData) return;
 
     const roleClient = '1489610714988417145';
     const roleElite = '1489611849245786347';
     const rolePrime = '1490140596298580048';
+    const spentUang = userData.uangMasuk;
+    const isAnon = userData.isAnonymous;
 
     try {
+        // 1. Vibe Client (Tetap dapat walaupun Anonymous)
         if (spentUang > 0 && !member.roles.cache.has(roleClient)) {
             await member.roles.add(roleClient);
         } else if (spentUang <= 0 && member.roles.cache.has(roleClient)) {
             await member.roles.remove(roleClient); 
         }
 
-        if (spentUang >= 1000000 && !member.roles.cache.has(roleElite)) {
+        // 2. Vibe Elite (Cabut kalau Anonymous)
+        if (spentUang >= 1000000 && !isAnon && !member.roles.cache.has(roleElite)) {
             await member.roles.add(roleElite);
-        } else if (spentUang < 1000000 && member.roles.cache.has(roleElite)) {
+        } else if ((spentUang < 1000000 || isAnon) && member.roles.cache.has(roleElite)) {
             await member.roles.remove(roleElite);
         }
 
-        if (spentUang >= 10000000 && !member.roles.cache.has(rolePrime)) {
+        // 3. Vibe Prime (Cabut kalau Anonymous)
+        if (spentUang >= 10000000 && !isAnon && !member.roles.cache.has(rolePrime)) {
             await member.roles.add(rolePrime);
-        } else if (spentUang < 10000000 && member.roles.cache.has(rolePrime)) {
+        } else if ((spentUang < 10000000 || isAnon) && member.roles.cache.has(rolePrime)) {
             await member.roles.remove(rolePrime);
         }
     } catch (err) {
-        console.error("Gagal update role (Pastikan posisi Role Bot di atas role Prime/Elite/Client):", err.message);
+        console.error("Gagal update role:", err.message);
     }
 }
 
@@ -69,8 +74,8 @@ async function generateLeaderboard(page) {
     let totalAmountServer = storeData ? storeData.totalUangMasuk : 0;
 
     let description = '';
-    
     let rankIndex = 0;
+    
     for (const user of users) {
         const rank = skip + rankIndex + 1;
         let rankMedal = `**#${rank}**`;
@@ -81,23 +86,19 @@ async function generateLeaderboard(page) {
 
         let namaUser = "Unknown";
         
-        // Cek apakah user minta di-hide (Anonymous)
         if (user.isAnonymous) {
             namaUser = "Anonymous";
         } else {
             try {
                 let fetchedUser = client.users.cache.get(user.userId);
-                
                 if (!fetchedUser) {
                     fetchedUser = await client.users.fetch(user.userId);
                 }
-                
                 namaUser = fetchedUser.username; 
             } catch (err) {
                 namaUser = "Akun_Dihapus";
             }
 
-            // Limit karakter cuma buat yang nggak anonymous
             if (namaUser.length > 12) {
                 namaUser = namaUser.substring(0, 12) + '..';
             }
@@ -156,6 +157,7 @@ async function updateLiveLeaderboard() {
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
+    // === FITUR REACTION VOUCH ===
     const vouchChannelId = '1488903383963406507'; 
     if (message.channel.id === vouchChannelId) {
         try {
@@ -171,6 +173,7 @@ client.on('messageCreate', async (message) => {
     const args = message.content.slice(prefix.length).trim().split(/ +/);
     const command = args.shift().toLowerCase();
 
+    // === FITUR SETUP LEADERBOARD ===
     if (command === 'setupboard') {
         if (!message.member.permissions.has('Administrator')) return;
         
@@ -188,6 +191,7 @@ client.on('messageCreate', async (message) => {
         return; 
     }
 
+    // === FILTER KHUSUS COMMAND KEUANGAN ===
     const allowedChannel = '1489665490770067678';
     if (message.channel.id !== allowedChannel) return;
 
@@ -198,7 +202,6 @@ client.on('messageCreate', async (message) => {
         return message.reply('❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.');
     }
 
-    // === TAMBAHAN FITUR ANONYMOUS DI SINI ===
     const validCommands = ['adduangmasuk', 'minuangmasuk', 'adduangkeluar', 'minuangkeluar', 'summary', 'anonymous', 'unanonymous'];
     if (!validCommands.includes(command)) return;
 
@@ -206,7 +209,7 @@ client.on('messageCreate', async (message) => {
         let storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' });
         if (!storeData) storeData = new Store({ storeId: 'VIBEBLOX_FINANCE' });
 
-        // COMMAND ANONYMOUS / UNANONYMOUS
+        // === COMMAND ANONYMOUS & UNANONYMOUS ===
         if (command === 'anonymous' || command === 'unanonymous') {
             const target = message.mentions.users.first();
             if (!target) return message.reply(`❌ Format salah! Contoh: \`!${command} @user\``);
@@ -224,11 +227,13 @@ client.on('messageCreate', async (message) => {
                 message.reply(`👁️ **Berhasil!** Akun pembeli ini ditampilkan kembali di Leaderboard.`);
             }
 
-            // Langsung auto-update leaderboard biar real-time berubah
+            // Update role dan leaderboard
+            const targetMember = await message.guild.members.fetch(target.id).catch(() => null);
+            await updateSpenderRoles(targetMember, userData);
             await updateLiveLeaderboard();
         }
 
-        // COMMAND ADDUANGMASUK / MINUANGMASUK
+        // === COMMAND UANG MASUK ===
         else if (command === 'adduangmasuk' || command === 'minuangmasuk') {
             const target = message.mentions.users.first();
             const amount = parseInt(args[1]);
@@ -243,23 +248,24 @@ client.on('messageCreate', async (message) => {
             if (command === 'adduangmasuk') {
                 userData.uangMasuk += amount;
                 storeData.totalUangMasuk += amount;
-                await userData.save();
-                await storeData.save();
-                message.reply(`✅ **Uang Masuk Dicatat!**\n👤 Pembeli: ${target.username}\n💰 Nominal: **Rp ${amount.toLocaleString('id-ID')}**\n🛒 Kategori: ${kategori}\n📊 Total spent user: **Rp ${userData.uangMasuk.toLocaleString('id-ID')}**`);
+                message.reply(`✅ **Uang Masuk Dicatat!**\n👤 Pembeli: ${target.username}\n💰 Nominal: **Rp ${amount.toLocaleString('id-ID')}**\n🛒 Kategori: ${kategori}`);
             } else if (command === 'minuangmasuk') {
                 const bisaDikurang = Math.min(userData.uangMasuk, amount);
                 userData.uangMasuk = Math.max(0, userData.uangMasuk - amount);
                 storeData.totalUangMasuk = Math.max(0, storeData.totalUangMasuk - bisaDikurang);
-                await userData.save();
-                await storeData.save();
-                message.reply(`📉 **Revisi Uang Masuk**\n👤 Pembeli: ${target.username}\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**\n📊 Total spent user: **Rp ${userData.uangMasuk.toLocaleString('id-ID')}**`);
+                message.reply(`📉 **Revisi Uang Masuk**\n👤 Pembeli: ${target.username}\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**`);
             }
 
+            // Proses simpan database cuma ditulis 1x di sini biar irit baris
+            await userData.save();
+            await storeData.save();
+
             const targetMember = await message.guild.members.fetch(target.id).catch(() => null);
-            await updateSpenderRoles(targetMember, userData.uangMasuk);
+            await updateSpenderRoles(targetMember, userData);
             await updateLiveLeaderboard();
         }
 
+        // === COMMAND UANG KELUAR ===
         else if (command === 'adduangkeluar' || command === 'minuangkeluar') {
             const amount = parseInt(args[0]);
             const keterangan = args.slice(1).join(' ') || 'Restock / Modal Toko';
@@ -269,15 +275,16 @@ client.on('messageCreate', async (message) => {
 
             if (command === 'adduangkeluar') {
                 storeData.totalUangKeluar += amount;
-                await storeData.save();
-                message.reply(`💸 **Pengeluaran Toko Dicatat!**\n💰 Nominal: **Rp ${amount.toLocaleString('id-ID')}**\n📝 Ket: ${keterangan}\n📊 Total Keluar: **Rp ${storeData.totalUangKeluar.toLocaleString('id-ID')}**`);
+                message.reply(`💸 **Pengeluaran Toko Dicatat!**\n💰 Nominal: **Rp ${amount.toLocaleString('id-ID')}**\n📝 Ket: ${keterangan}`);
             } else if (command === 'minuangkeluar') {
                 storeData.totalUangKeluar = Math.max(0, storeData.totalUangKeluar - amount);
-                await storeData.save();
-                message.reply(`📉 **Revisi Pengeluaran Toko**\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**\n📝 Ket: ${keterangan}\n📊 Total Keluar: **Rp ${storeData.totalUangKeluar.toLocaleString('id-ID')}**`);
+                message.reply(`📉 **Revisi Pengeluaran Toko**\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**\n📝 Ket: ${keterangan}`);
             }
+
+            await storeData.save();
         }
 
+        // === COMMAND SUMMARY ===
         else if (command === 'summary') {
             const income = storeData.totalUangMasuk;
             const expense = storeData.totalUangKeluar;
