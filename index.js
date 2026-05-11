@@ -52,7 +52,7 @@ async function updateSpenderRoles(member, spentUang) {
     }
 }
 
-// === FUNGSI GENERATE LEADERBOARD (MAX 10 PAGE) ===
+// === FUNGSI GENERATE LEADERBOARD (MAX 10 PAGE & FITUR ANONYMOUS) ===
 async function generateLeaderboard(page) {
     if (page > 10) page = 10;
 
@@ -80,20 +80,27 @@ async function generateLeaderboard(page) {
         else if (rank === 3) rankMedal = '🥉';
 
         let namaUser = "Unknown";
-        try {
-            let fetchedUser = client.users.cache.get(user.userId);
-            
-            if (!fetchedUser) {
-                fetchedUser = await client.users.fetch(user.userId);
+        
+        // Cek apakah user minta di-hide (Anonymous)
+        if (user.isAnonymous) {
+            namaUser = "Anonymous";
+        } else {
+            try {
+                let fetchedUser = client.users.cache.get(user.userId);
+                
+                if (!fetchedUser) {
+                    fetchedUser = await client.users.fetch(user.userId);
+                }
+                
+                namaUser = fetchedUser.username; 
+            } catch (err) {
+                namaUser = "Akun_Dihapus";
             }
-            
-            namaUser = fetchedUser.username; 
-        } catch (err) {
-            namaUser = "Akun_Dihapus";
-        }
 
-        if (namaUser.length > 12) {
-            namaUser = namaUser.substring(0, 12) + '..';
+            // Limit karakter cuma buat yang nggak anonymous
+            if (namaUser.length > 12) {
+                namaUser = namaUser.substring(0, 12) + '..';
+            }
         }
 
         description += `${rankMedal} **@${namaUser}** — 💸 **Rp ${user.uangMasuk.toLocaleString('id-ID')}**\n`;
@@ -106,7 +113,7 @@ async function generateLeaderboard(page) {
 
     const embed = new EmbedBuilder()
         .setTitle(`🏆 Top Spenders Vibeblox (Hal ${page})`)
-        .setColor('#4F4580') // <--- WARNA BERUBAH DI SINI
+        .setColor('#4F4580') 
         .setDescription(description);
 
     const row = new ActionRowBuilder()
@@ -191,14 +198,38 @@ client.on('messageCreate', async (message) => {
         return message.reply('❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.');
     }
 
-    const validCommands = ['adduangmasuk', 'minuangmasuk', 'adduangkeluar', 'minuangkeluar', 'summary'];
+    // === TAMBAHAN FITUR ANONYMOUS DI SINI ===
+    const validCommands = ['adduangmasuk', 'minuangmasuk', 'adduangkeluar', 'minuangkeluar', 'summary', 'anonymous', 'unanonymous'];
     if (!validCommands.includes(command)) return;
 
     try {
         let storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' });
         if (!storeData) storeData = new Store({ storeId: 'VIBEBLOX_FINANCE' });
 
-        if (command === 'adduangmasuk' || command === 'minuangmasuk') {
+        // COMMAND ANONYMOUS / UNANONYMOUS
+        if (command === 'anonymous' || command === 'unanonymous') {
+            const target = message.mentions.users.first();
+            if (!target) return message.reply(`❌ Format salah! Contoh: \`!${command} @user\``);
+
+            let userData = await User.findOne({ userId: target.id });
+            if (!userData) userData = new User({ userId: target.id });
+
+            if (command === 'anonymous') {
+                userData.isAnonymous = true;
+                await userData.save();
+                message.reply(`🥷 **Berhasil!** Akun pembeli ini disembunyikan menjadi **Anonymous** di Leaderboard.`);
+            } else if (command === 'unanonymous') {
+                userData.isAnonymous = false;
+                await userData.save();
+                message.reply(`👁️ **Berhasil!** Akun pembeli ini ditampilkan kembali di Leaderboard.`);
+            }
+
+            // Langsung auto-update leaderboard biar real-time berubah
+            await updateLiveLeaderboard();
+        }
+
+        // COMMAND ADDUANGMASUK / MINUANGMASUK
+        else if (command === 'adduangmasuk' || command === 'minuangmasuk') {
             const target = message.mentions.users.first();
             const amount = parseInt(args[1]);
             const kategori = args.slice(2).join(' ') || 'Tidak ada kategori';
@@ -297,33 +328,27 @@ client.on('interactionCreate', async (interaction) => {
     if (!interaction.isButton()) return;
 
     if (interaction.customId.startsWith('lb_page_')) {
-        // Kalau tombol udah diklik dan lagi proses, abaikan klik selanjutnya secara mutlak
         if (isUpdating.has(interaction.message.id)) return;
         
         isUpdating.add(interaction.message.id);
 
         try {
-            // 1. Ambil format tombol saat ini, lalu matikan dan ganti labelnya jadi "Loading..."
             const disabledRows = interaction.message.components.map(row => {
                 return ActionRowBuilder.from(row).setComponents(
                     row.components.map(btn => ButtonBuilder.from(btn).setDisabled(true).setLabel('Loading...'))
                 );
             });
 
-            // 2. Update pesan seketika (ini bakal ngerespon interaksi ke Discord di bawah 1 detik)
             await interaction.update({ components: disabledRows });
 
-            // 3. Bot tarik data (proses yang memakan waktu)
             const page = parseInt(interaction.customId.split('_')[2]);
             const boardData = await generateLeaderboard(page);
 
-            // 4. Timpa pesannya dengan data list baru & tombol yang udah nyala/normal lagi
             await interaction.editReply(boardData); 
 
         } catch (err) {
             console.error("Kendala saat pindah halaman:", err.message);
         } finally {
-            // Buka gemboknya setelah kelar
             isUpdating.delete(interaction.message.id);
         }
     }
