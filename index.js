@@ -1,5 +1,6 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+// OPTIMASI: Menambahkan 'Options' dari discord.js untuk membatasi cache
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Options } = require('discord.js');
 const mongoose = require('mongoose');
 const User = require('./models/User');
 const Store = require('./models/Store');
@@ -10,7 +11,17 @@ const client = new Client({
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers,
-    ]
+    ],
+    // === OPTIMASI SUPER: Mematikan ingatan bot yang tidak penting agar CPU & RAM sangat ringan ===
+    makeCache: Options.cacheWithLimits({
+        ...Options.DefaultMakeCacheSettings,
+        MessageManager: 15, // Hanya ingat 15 pesan terakhir (biar nggak berat)
+        PresenceManager: 0, // Matikan fitur pelacak status online/main game member
+        VoiceStateManager: 0, // Matikan pelacak voice channel
+        ThreadManager: 0, // Matikan pelacak thread
+        ReactionManager: 0, // Matikan ingatan reaksi lama
+        GuildInviteManager: 0 // Matikan pelacak invite link
+    }),
 });
 
 mongoose.connect(process.env.MONGODB_URI)
@@ -247,13 +258,11 @@ client.on('messageCreate', async (message) => {
             if (command === 'adduangmasuk') {
                 userData.uangMasuk += amount;
                 storeData.totalUangMasuk += amount;
-                // Total spent dikembalikan ke reply
                 message.reply(`✅ **Uang Masuk Dicatat!**\n👤 Pembeli: ${target.username}\n💰 Nominal: **Rp ${amount.toLocaleString('id-ID')}**\n🛒 Kategori: ${kategori}\n📊 Total spent user: **Rp ${userData.uangMasuk.toLocaleString('id-ID')}**`);
             } else if (command === 'minuangmasuk') {
                 const bisaDikurang = Math.min(userData.uangMasuk, amount);
                 userData.uangMasuk = Math.max(0, userData.uangMasuk - amount);
                 storeData.totalUangMasuk = Math.max(0, storeData.totalUangMasuk - bisaDikurang);
-                // Total spent dikembalikan ke reply
                 message.reply(`📉 **Revisi Uang Masuk**\n👤 Pembeli: ${target.username}\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**\n📊 Total spent user: **Rp ${userData.uangMasuk.toLocaleString('id-ID')}**`);
             }
 
