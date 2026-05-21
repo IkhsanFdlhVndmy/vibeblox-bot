@@ -260,12 +260,7 @@ client.on('interactionCreate', async (interaction) => {
         isUpdating.add(interaction.message.id);
 
         try {
-            const disabledRows = interaction.message.components.map(row => {
-                return ActionRowBuilder.from(row).setComponents(
-                    row.components.map(btn => ButtonBuilder.from(btn).setDisabled(true).setLabel('Loading...'))
-                );
-            });
-            await interaction.update({ components: disabledRows });
+            await interaction.deferUpdate();
 
             const page = parseInt(interaction.customId.split('_')[2]);
             const boardData = await generateLeaderboard(page);
@@ -289,6 +284,9 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.reply({ content: '❌ Anda tidak memiliki izin Administrator.', flags: MessageFlags.Ephemeral });
         }
 
+        // Defer dulu supaya tidak timeout (3 detik limit interaction)
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
         const boardData = await generateLeaderboard(1);
         const sentMessage = await interaction.channel.send(boardData);
 
@@ -299,7 +297,7 @@ client.on('interactionCreate', async (interaction) => {
         storeData.leaderboardMessageId = sentMessage.id;
         await storeData.save();
 
-        return interaction.reply({ content: '✅ Panel Leaderboard berhasil dipasang di channel ini!', flags: MessageFlags.Ephemeral });
+        return interaction.editReply({ content: '✅ Panel Leaderboard berhasil dipasang di channel ini!' });
     }
 
     // --- RESTOCK COUNTDOWN (EMBED DIPERCANTIK) ---
