@@ -68,7 +68,10 @@ const slashCommands = [
         name: 'restock', description: 'Countdown restock Robux',
         options: [
             { name: 'amount', description: 'Jumlah Robux (contoh: 55.000)', type: 3, required: true },
-            { name: 'hari', description: 'Berapa hari lagi? (contoh: 5)', type: 4, required: true }
+            { name: 'days', description: 'Hari (contoh: 5)', type: 4, required: false },
+            { name: 'hours', description: 'Jam (contoh: 12)', type: 4, required: false },
+            { name: 'minutes', description: 'Menit (contoh: 35)', type: 4, required: false },
+            { name: 'seconds', description: 'Detik (contoh: 60)', type: 4, required: false }
         ]
     },
     {
@@ -353,9 +356,17 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.editReply({ content: '❌ Nominal Robux tidak valid! Pastikan hanya memakai angka dan titik (contoh: 55.000).' });
         }
 
-        const days = interaction.options.getInteger('hari');
+        const days = interaction.options.getInteger('days') || 0;
+        const hours = interaction.options.getInteger('hours') || 0;
+        const minutes = interaction.options.getInteger('minutes') || 0;
+        const seconds = interaction.options.getInteger('seconds') || 0;
 
-        const ms = days * 24 * 60 * 60 * 1000;
+        const ms = (days * 86400000) + (hours * 3600000) + (minutes * 60000) + (seconds * 1000);
+
+        if (ms <= 0) {
+            return interaction.editReply({ content: '❌ Durasi tidak valid! Masukkan minimal salah satu: days, hours, minutes, atau seconds.' });
+        }
+
         const futureTime = new Date(Date.now() + ms);
         const unixTimestamp = Math.floor(futureTime.getTime() / 1000);
 
@@ -363,15 +374,8 @@ client.on('interactionCreate', async (interaction) => {
 
         const restockEmbed = new EmbedBuilder()
             .setColor(0x4F4580)
-            .setTitle('📦 VIBEBLOX RESTOCK INCOMING!')
-            .setDescription(`Halo warga **VibeBlox**! Amunisi Robux kita bakal segera mendarat di server. Pasang alarm dan jangan sampai kehabisan!`)
-            .addFields(
-                { name: '<:robux:1497884445494087752> Jumlah Robux', value: `**${formattedAmount} Robux**`, inline: true },
-                { name: '📅 Estimasi Hari', value: `**${days} Hari**`, inline: true },
-                { name: '⏳ Countdown', value: `<t:${unixTimestamp}:R>`, inline: false },
-                { name: '🗓️ Mendarat Pada', value: `<t:${unixTimestamp}:F>`, inline: false }
-            )
-            .setFooter({ text: 'VibeBlox Auto-Notifier • Jangan sampai kehabisan!' })
+            .setDescription(`**📦 VIBEBLOX RESTOCK INCOMING!**\nHalo warga VibeBlox! Amunisi Robux kita bakal segera mendarat di server. Pasang alarm dan jangan sampai kehabisan!\n\n# <:robux:1497884445494087752> ${formattedAmount} Robux\n\n## ⏳ <t:${unixTimestamp}:R>`)
+            .setFooter({ text: 'VibeBlox Auto-Notifier' })
             .setTimestamp();
 
         await interaction.editReply({ content: '@everyone', embeds: [restockEmbed] });
@@ -382,12 +386,7 @@ client.on('interactionCreate', async (interaction) => {
                 try {
                     const finishedEmbed = new EmbedBuilder()
                         .setColor(0x57F287)
-                        .setTitle('✅ RESTOCK SELESAI!')
-                        .setDescription(`Amunisi Robux sudah masuk sepenuhnya ke gudang **VibeBlox**! Langsung sikat sebelum diborong yang lain!`)
-                        .addFields(
-                            { name: '<:robux:1497884445494087752> Stok Ready', value: `**${formattedAmount} Robux**`, inline: true },
-                            { name: '🎉 Status', value: '**TERSEDIA SEKARANG**', inline: true }
-                        )
+                        .setDescription(`**✅ RESTOCK SELESAI!**\nAmunisi Robux sudah masuk ke gudang VibeBlox! Langsung sikat sebelum diborong yang lain!\n\n# <:robux:1497884445494087752> ${formattedAmount} Robux\n\n## 🎉 STOK READY!`)
                         .setFooter({ text: 'VibeBlox Restock Complete' })
                         .setTimestamp();
 
