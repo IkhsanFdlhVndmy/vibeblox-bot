@@ -1,5 +1,4 @@
 require('dotenv').config();
-// OPTIMASI: Menambahkan 'Options' dari discord.js untuk membatasi cache
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Options } = require('discord.js');
 const mongoose = require('mongoose');
 const User = require('./models/User');
@@ -12,15 +11,15 @@ const client = new Client({
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.GuildMembers,
     ],
-    // === OPTIMASI SUPER: Mematikan ingatan bot yang tidak penting agar CPU & RAM sangat ringan ===
+    // === OPTIMASI SUPER (TETAP DIPERTAHANKAN) ===
     makeCache: Options.cacheWithLimits({
         ...Options.DefaultMakeCacheSettings,
-        MessageManager: 15, // Hanya ingat 15 pesan terakhir (biar nggak berat)
-        PresenceManager: 0, // Matikan fitur pelacak status online/main game member
-        VoiceStateManager: 0, // Matikan pelacak voice channel
-        ThreadManager: 0, // Matikan pelacak thread
-        ReactionManager: 0, // Matikan ingatan reaksi lama
-        GuildInviteManager: 0 // Matikan pelacak invite link
+        MessageManager: 15, 
+        PresenceManager: 0, 
+        VoiceStateManager: 0, 
+        ThreadManager: 0, 
+        ReactionManager: 0, 
+        GuildInviteManager: 0 
     }),
 });
 
@@ -28,11 +27,69 @@ mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log('📂 Database MongoDB Tersambung!'))
     .catch(err => console.error('❌ Gagal koneksi DB:', err));
 
-client.once('clientReady', () => {
+// === DAFTAR SLASH COMMANDS ===
+const slashCommands = [
+    { name: 'setupboard', description: 'Setup panel Leaderboard' },
+    { 
+        name: 'restock', description: 'Countdown restock Robux',
+        options: [
+            { name: 'amount', description: 'Jumlah Robux (contoh: 55000)', type: 4, required: true },
+            { name: 'hari', description: 'Berapa hari lagi? (contoh: 5)', type: 4, required: true }
+        ]
+    },
+    {
+        name: 'adduangmasuk', description: 'Tambah saldo spent pembeli',
+        options: [
+            { name: 'user', description: 'Pilih User', type: 6, required: true },
+            { name: 'amount', description: 'Nominal Rupiah', type: 4, required: true },
+            { name: 'keterangan', description: 'Keterangan/Kategori', type: 3, required: false }
+        ]
+    },
+    {
+        name: 'minuangmasuk', description: 'Kurangi saldo spent pembeli',
+        options: [
+            { name: 'user', description: 'Pilih User', type: 6, required: true },
+            { name: 'amount', description: 'Nominal Rupiah', type: 4, required: true },
+            { name: 'keterangan', description: 'Keterangan/Kategori', type: 3, required: false }
+        ]
+    },
+    {
+        name: 'adduangkeluar', description: 'Catat pengeluaran toko',
+        options: [
+            { name: 'amount', description: 'Nominal Rupiah', type: 4, required: true },
+            { name: 'keterangan', description: 'Keterangan Pengeluaran', type: 3, required: false }
+        ]
+    },
+    {
+        name: 'minuangkeluar', description: 'Revisi/kurangi pengeluaran toko',
+        options: [
+            { name: 'amount', description: 'Nominal Rupiah', type: 4, required: true },
+            { name: 'keterangan', description: 'Keterangan Revisi', type: 3, required: false }
+        ]
+    },
+    { name: 'summary', description: 'Lihat laporan keuangan (Profit/Minus)' },
+    {
+        name: 'anonymous', description: 'Sembunyikan nama user dari Leaderboard',
+        options: [{ name: 'user', description: 'Pilih User', type: 6, required: true }]
+    },
+    {
+        name: 'unanonymous', description: 'Tampilkan kembali nama user di Leaderboard',
+        options: [{ name: 'user', description: 'Pilih User', type: 6, required: true }]
+    }
+];
+
+client.once('clientReady', async () => {
     console.log(`✅ Bot ${client.user.tag} Online!`);
+    
+    try {
+        await client.application.commands.set(slashCommands);
+        console.log('✅ Slash Commands berhasil didaftarkan!');
+    } catch (err) {
+        console.error('❌ Gagal mendaftarkan Slash Commands:', err);
+    }
 });
 
-// === FUNGSI AUTO ROLE PEMBELI (REVISI ANONYMOUS & VIBE CLIENT) ===
+// === FUNGSI AUTO ROLE PEMBELI ===
 async function updateSpenderRoles(member, userData) {
     if (!member || !userData) return;
 
@@ -43,21 +100,18 @@ async function updateSpenderRoles(member, userData) {
     const isAnon = userData.isAnonymous;
 
     try {
-        // 1. Vibe Client (Tetap dapat walaupun Anonymous)
         if (spentUang > 0 && !member.roles.cache.has(roleClient)) {
             await member.roles.add(roleClient);
         } else if (spentUang <= 0 && member.roles.cache.has(roleClient)) {
             await member.roles.remove(roleClient); 
         }
 
-        // 2. Vibe Elite (Cabut kalau Anonymous)
         if (spentUang >= 1000000 && !isAnon && !member.roles.cache.has(roleElite)) {
             await member.roles.add(roleElite);
         } else if ((spentUang < 1000000 || isAnon) && member.roles.cache.has(roleElite)) {
             await member.roles.remove(roleElite);
         }
 
-        // 3. Vibe Prime (Cabut kalau Anonymous)
         if (spentUang >= 10000000 && !isAnon && !member.roles.cache.has(rolePrime)) {
             await member.roles.add(rolePrime);
         } else if ((spentUang < 10000000 || isAnon) && member.roles.cache.has(rolePrime)) {
@@ -68,7 +122,7 @@ async function updateSpenderRoles(member, userData) {
     }
 }
 
-// === FUNGSI GENERATE LEADERBOARD (MAX 10 PAGE & FITUR ANONYMOUS) ===
+// === FUNGSI GENERATE LEADERBOARD ===
 async function generateLeaderboard(page) {
     if (page > 10) page = 10;
 
@@ -102,17 +156,12 @@ async function generateLeaderboard(page) {
         } else {
             try {
                 let fetchedUser = client.users.cache.get(user.userId);
-                if (!fetchedUser) {
-                    fetchedUser = await client.users.fetch(user.userId);
-                }
+                if (!fetchedUser) fetchedUser = await client.users.fetch(user.userId);
                 namaUser = fetchedUser.username; 
             } catch (err) {
                 namaUser = "Akun_Dihapus";
             }
-
-            if (namaUser.length > 12) {
-                namaUser = namaUser.substring(0, 12) + '..';
-            }
+            if (namaUser.length > 12) namaUser = namaUser.substring(0, 12) + '..';
         }
 
         description += `${rankMedal} **@${namaUser}** — 💸 **Rp ${user.uangMasuk.toLocaleString('id-ID')}**\n`;
@@ -145,7 +194,6 @@ async function generateLeaderboard(page) {
     return { embeds: [embed], components: [row] };
 }
 
-// === FUNGSI AUTO-UPDATE LEADERBOARD ===
 async function updateLiveLeaderboard() {
     try {
         const storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' });
@@ -164,136 +212,206 @@ async function updateLiveLeaderboard() {
     }
 }
 
-// === EVENT: BACA CHAT MASUK ===
+// === EVENT: BACA CHAT TEXT BIASA (KHUSUS VOUCH) ===
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
 
-    // === FITUR REACTION VOUCH ===
     const vouchChannelId = '1488903383963406507'; 
     if (message.channel.id === vouchChannelId) {
         try {
             await message.react('1502074502228738098'); 
+        } catch (err) {}
+    }
+});
+
+// === EVENT: INTERAKSI SLASH COMMANDS & BUTTON ===
+const isUpdating = new Set();
+
+client.on('interactionCreate', async (interaction) => {
+    if (interaction.isButton() && interaction.customId.startsWith('lb_page_')) {
+        if (isUpdating.has(interaction.message.id)) return;
+        isUpdating.add(interaction.message.id);
+
+        try {
+            const disabledRows = interaction.message.components.map(row => {
+                return ActionRowBuilder.from(row).setComponents(
+                    row.components.map(btn => ButtonBuilder.from(btn).setDisabled(true).setLabel('Loading...'))
+                );
+            });
+            await interaction.update({ components: disabledRows });
+
+            const page = parseInt(interaction.customId.split('_')[2]);
+            const boardData = await generateLeaderboard(page);
+
+            await interaction.editReply(boardData); 
         } catch (err) {
-            console.error('Bot gagal ngasih reaction:', err);
+            console.error(err);
+        } finally {
+            isUpdating.delete(interaction.message.id);
         }
+        return;
     }
 
-    const prefix = '!'; 
-    if (!message.content.startsWith(prefix)) return;
+    if (!interaction.isChatInputCommand()) return;
 
-    const args = message.content.slice(prefix.length).trim().split(/ +/);
-    const command = args.shift().toLowerCase();
+    const command = interaction.commandName;
 
-    // === FITUR SETUP LEADERBOARD ===
+    // --- SETUP BOARD ---
     if (command === 'setupboard') {
-        if (!message.member.permissions.has('Administrator')) return;
+        if (!interaction.member.permissions.has('Administrator')) {
+            return interaction.reply({ content: '❌ Anda tidak memiliki izin Administrator.', ephemeral: true });
+        }
         
         const boardData = await generateLeaderboard(1);
-        const sentMessage = await message.channel.send(boardData);
+        const sentMessage = await interaction.channel.send(boardData);
 
         let storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' });
         if (!storeData) storeData = new Store({ storeId: 'VIBEBLOX_FINANCE' });
 
-        storeData.leaderboardChannelId = message.channel.id;
+        storeData.leaderboardChannelId = interaction.channel.id;
         storeData.leaderboardMessageId = sentMessage.id;
         await storeData.save();
 
-        await message.delete().catch(() => {});
-        return; 
+        return interaction.reply({ content: '✅ Panel Leaderboard berhasil dipasang di channel ini!', ephemeral: true });
     }
 
-    // === FILTER KHUSUS COMMAND KEUANGAN ===
+    // --- RESTOCK COUNTDOWN DENGAN BAHASA NATURAL VIBEBLOX ---
+    if (command === 'restock') {
+        if (!interaction.member.roles.cache.has('1489612423521374309')) {
+            return interaction.reply({ content: '❌ Sori, command ini khusus Owner.', ephemeral: true });
+        }
+
+        const amount = interaction.options.getInteger('amount');
+        const days = interaction.options.getInteger('hari'); 
+
+        const ms = days * 24 * 60 * 60 * 1000; 
+        const futureTime = new Date(Date.now() + ms);
+        const unixTimestamp = Math.floor(futureTime.getTime() / 1000);
+
+        const formattedAmount = amount >= 1000 ? Math.floor(amount / 1000) + 'K+' : amount.toString();
+
+        const restockEmbed = new EmbedBuilder()
+            .setTitle('🚀 VibeBlox Restock Alert!')
+            .setColor('#4F4580')
+            .setDescription(`Halo Vibies! Siap-siap rebutan ya, karena kita bakal restock robux. Jangan sampai kehabisan!\n\n<:robux:1497884445494087752> **Estimasi Stok:**\n**${formattedAmount} Robux**\n\n⏳ **Bakal Mendarat Dalam:**\n> <t:${unixTimestamp}:R>\n> *(Tepatnya: <t:${unixTimestamp}:F>)*`)
+            .setFooter({ text: 'VibeBlox Auto-Notifier' })
+            .setTimestamp();
+
+        const replyMessage = await interaction.reply({ content: '@everyone', embeds: [restockEmbed], fetchReply: true });
+
+        if (ms <= 2147483647) {
+            setTimeout(async () => {
+                try {
+                    const finishedEmbed = new EmbedBuilder()
+                        .setTitle('✅ Stok Robux Sudah Mendarat!')
+                        .setColor('#4F4580')
+                        .setDescription(`Penantian selesai! Stock Robux udah ready di Community VibeBlox. Langsung aja sikat sebelum ludes diborong yang lain!\n\n<:robux:1497884445494087752> **Total Stok Masuk:**\n**${formattedAmount} Robux**`)
+                        .setFooter({ text: 'VibeBlox Restock Complete' })
+                        .setTimestamp();
+                    
+                    await replyMessage.edit({ content: '@everyone', embeds: [finishedEmbed] });
+                    await interaction.channel.send(`🚨 Notif buat @everyone! Stok **${formattedAmount} Robux** udah *ready* nih, gas langsung merapat sebelum kehabisan!`);
+                } catch (err) {
+                    console.error("Gagal update pesan saat Restock selesai:", err);
+                }
+            }, ms);
+        }
+
+        return;
+    }
+
+    // --- SECURITY FILTER UNTUK COMMAND KEUANGAN ---
     const allowedChannel = '1489665490770067678';
-    if (message.channel.id !== allowedChannel) return;
+    if (interaction.channel.id !== allowedChannel) {
+        return interaction.reply({ content: '❌ Command ini hanya bisa digunakan di channel Finance.', ephemeral: true });
+    }
 
     const allowedRoles = ['1489612423521374309', '1489612221544665231'];
-    const hasRole = message.member.roles.cache.some(role => allowedRoles.includes(role.id));
-    
+    const hasRole = interaction.member.roles.cache.some(role => allowedRoles.includes(role.id));
     if (!hasRole) {
-        return message.reply('❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.');
+        return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', ephemeral: true });
     }
-
-    const validCommands = ['adduangmasuk', 'minuangmasuk', 'adduangkeluar', 'minuangkeluar', 'summary', 'anonymous', 'unanonymous'];
-    if (!validCommands.includes(command)) return;
 
     try {
         let storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' });
         if (!storeData) storeData = new Store({ storeId: 'VIBEBLOX_FINANCE' });
 
-        // === COMMAND ANONYMOUS & UNANONYMOUS ===
+        // --- ANONYMOUS & UNANONYMOUS ---
         if (command === 'anonymous' || command === 'unanonymous') {
-            const target = message.mentions.users.first();
-            if (!target) return message.reply(`❌ Format salah! Contoh: \`!${command} @user\``);
+            const target = interaction.options.getUser('user');
 
             let userData = await User.findOne({ userId: target.id });
             if (!userData) userData = new User({ userId: target.id });
 
-            if (command === 'anonymous') {
-                userData.isAnonymous = true;
-                await userData.save();
-                message.reply(`🥷 **Berhasil!** Akun pembeli ini disembunyikan menjadi **Anonymous** di Leaderboard.`);
-            } else if (command === 'unanonymous') {
-                userData.isAnonymous = false;
-                await userData.save();
-                message.reply(`👁️ **Berhasil!** Akun pembeli ini ditampilkan kembali di Leaderboard.`);
-            }
+            userData.isAnonymous = (command === 'anonymous');
+            await userData.save();
 
-            const targetMember = await message.guild.members.fetch(target.id).catch(() => null);
+            const targetMember = await interaction.guild.members.fetch(target.id).catch(() => null);
             await updateSpenderRoles(targetMember, userData);
             await updateLiveLeaderboard();
+
+            const msgText = command === 'anonymous' 
+                ? `🥷 **Berhasil!** Akun ${target.username} disembunyikan menjadi **Anonymous** di Leaderboard.` 
+                : `👁️ **Berhasil!** Akun ${target.username} ditampilkan kembali di Leaderboard.`;
+            return interaction.reply({ content: msgText });
         }
 
-        // === COMMAND UANG MASUK ===
+        // --- ADD / MIN UANG MASUK ---
         else if (command === 'adduangmasuk' || command === 'minuangmasuk') {
-            const target = message.mentions.users.first();
-            const amount = parseInt(args[1]);
-            const kategori = args.slice(2).join(' ') || 'Tidak ada kategori';
+            const target = interaction.options.getUser('user');
+            const amount = interaction.options.getInteger('amount');
+            const kategori = interaction.options.getString('keterangan') || 'Tidak ada kategori';
 
-            if (!target || isNaN(amount)) return message.reply(`❌ Format salah! Contoh: \`!${command} @user 50000 Beli Gamepass\``);
-            if (amount <= 0) return message.reply('❌ Nominal gak boleh minus atau nol!');
+            if (amount <= 0) return interaction.reply({ content: '❌ Nominal gak boleh minus atau nol!', ephemeral: true });
 
             let userData = await User.findOne({ userId: target.id });
             if (!userData) userData = new User({ userId: target.id });
+
+            let replyMessage = '';
 
             if (command === 'adduangmasuk') {
                 userData.uangMasuk += amount;
                 storeData.totalUangMasuk += amount;
-                message.reply(`✅ **Uang Masuk Dicatat!**\n👤 Pembeli: ${target.username}\n💰 Nominal: **Rp ${amount.toLocaleString('id-ID')}**\n🛒 Kategori: ${kategori}\n📊 Total spent user: **Rp ${userData.uangMasuk.toLocaleString('id-ID')}**`);
-            } else if (command === 'minuangmasuk') {
+                replyMessage = `✅ **Uang Masuk Dicatat!**\n👤 Pembeli: ${target.username}\n💰 Nominal: **Rp ${amount.toLocaleString('id-ID')}**\n🛒 Kategori: ${kategori}\n📊 Total spent user: **Rp ${userData.uangMasuk.toLocaleString('id-ID')}**`;
+            } else {
                 const bisaDikurang = Math.min(userData.uangMasuk, amount);
                 userData.uangMasuk = Math.max(0, userData.uangMasuk - amount);
                 storeData.totalUangMasuk = Math.max(0, storeData.totalUangMasuk - bisaDikurang);
-                message.reply(`📉 **Revisi Uang Masuk**\n👤 Pembeli: ${target.username}\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**\n📊 Total spent user: **Rp ${userData.uangMasuk.toLocaleString('id-ID')}**`);
+                replyMessage = `📉 **Revisi Uang Masuk**\n👤 Pembeli: ${target.username}\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**\n📊 Total spent user: **Rp ${userData.uangMasuk.toLocaleString('id-ID')}**`;
             }
 
             await userData.save();
             await storeData.save();
 
-            const targetMember = await message.guild.members.fetch(target.id).catch(() => null);
+            const targetMember = await interaction.guild.members.fetch(target.id).catch(() => null);
             await updateSpenderRoles(targetMember, userData);
             await updateLiveLeaderboard();
+
+            return interaction.reply({ content: replyMessage });
         }
 
-        // === COMMAND UANG KELUAR ===
+        // --- ADD / MIN UANG KELUAR ---
         else if (command === 'adduangkeluar' || command === 'minuangkeluar') {
-            const amount = parseInt(args[0]);
-            const keterangan = args.slice(1).join(' ') || 'Restock / Modal Toko';
+            const amount = interaction.options.getInteger('amount');
+            const keterangan = interaction.options.getString('keterangan') || 'Restock / Modal Toko';
 
-            if (isNaN(amount)) return message.reply(`❌ Format salah! Contoh: \`!${command} 150000 Restock dari Web A\``);
-            if (amount <= 0) return message.reply('❌ Nominal gak boleh minus atau nol!');
+            if (amount <= 0) return interaction.reply({ content: '❌ Nominal gak boleh minus atau nol!', ephemeral: true });
+
+            let replyMessage = '';
 
             if (command === 'adduangkeluar') {
                 storeData.totalUangKeluar += amount;
-                message.reply(`💸 **Pengeluaran Toko Dicatat!**\n💰 Nominal: **Rp ${amount.toLocaleString('id-ID')}**\n📝 Ket: ${keterangan}`);
-            } else if (command === 'minuangkeluar') {
+                replyMessage = `💸 **Pengeluaran Toko Dicatat!**\n💰 Nominal: **Rp ${amount.toLocaleString('id-ID')}**\n📝 Ket: ${keterangan}`;
+            } else {
                 storeData.totalUangKeluar = Math.max(0, storeData.totalUangKeluar - amount);
-                message.reply(`📉 **Revisi Pengeluaran Toko**\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**\n📝 Ket: ${keterangan}`);
+                replyMessage = `📉 **Revisi Pengeluaran Toko**\n🔻 Dikurangi: **Rp ${amount.toLocaleString('id-ID')}**\n📝 Ket: ${keterangan}`;
             }
 
             await storeData.save();
+            return interaction.reply({ content: replyMessage });
         }
 
-        // === COMMAND SUMMARY ===
+        // --- SUMMARY ---
         else if (command === 'summary') {
             const income = storeData.totalUangMasuk;
             const expense = storeData.totalUangKeluar;
@@ -328,45 +446,12 @@ client.on('messageCreate', async (message) => {
                 .setFooter({ text: "Data Keuangan Internal Store" })
                 .setTimestamp();
 
-            message.reply({ embeds: [summaryEmbed] });
+            return interaction.reply({ embeds: [summaryEmbed] });
         }
 
     } catch (err) {
         console.error(err);
-        message.reply('❌ Waduh, database-nya lagi ngambek nih.');
-    }
-});
-
-// === SISTEM ANTI-SPAM (DISABLE BUTTON SAAT LOADING) ===
-const isUpdating = new Set();
-
-client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isButton()) return;
-
-    if (interaction.customId.startsWith('lb_page_')) {
-        if (isUpdating.has(interaction.message.id)) return;
-        
-        isUpdating.add(interaction.message.id);
-
-        try {
-            const disabledRows = interaction.message.components.map(row => {
-                return ActionRowBuilder.from(row).setComponents(
-                    row.components.map(btn => ButtonBuilder.from(btn).setDisabled(true).setLabel('Loading...'))
-                );
-            });
-
-            await interaction.update({ components: disabledRows });
-
-            const page = parseInt(interaction.customId.split('_')[2]);
-            const boardData = await generateLeaderboard(page);
-
-            await interaction.editReply(boardData); 
-
-        } catch (err) {
-            console.error("Kendala saat pindah halaman:", err.message);
-        } finally {
-            isUpdating.delete(interaction.message.id);
-        }
+        return interaction.reply({ content: '❌ Waduh, database-nya lagi ngambek nih.', ephemeral: true });
     }
 });
 
@@ -376,10 +461,5 @@ const express = require('express');
 const app = express();
 const port = process.env.PORT || 3000;
 
-app.get('/', (req, res) => {
-    res.send('Bot VibeBlox lagi nongkrong 24/7 nih!');
-});
-
-app.listen(port, () => {
-    console.log(`🌐 Web server nyala di port ${port}`);
-});
+app.get('/', (req, res) => res.send('Bot VibeBlox lagi nongkrong 24/7 nih!'));
+app.listen(port);
