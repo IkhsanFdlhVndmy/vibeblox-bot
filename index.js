@@ -28,12 +28,13 @@ mongoose.connect(process.env.MONGODB_URI)
     .catch(err => console.error('❌ Gagal koneksi DB:', err));
 
 // === DAFTAR SLASH COMMANDS ===
+// PERUBAHAN: Tipe 'amount' diubah dari 4 (Integer) jadi 3 (String) biar bisa pakai titik
 const slashCommands = [
     { name: 'setupboard', description: 'Setup panel Leaderboard' },
     { 
         name: 'restock', description: 'Countdown restock Robux',
         options: [
-            { name: 'amount', description: 'Jumlah Robux (contoh: 55000)', type: 4, required: true },
+            { name: 'amount', description: 'Jumlah Robux (contoh: 55.000)', type: 3, required: true },
             { name: 'hari', description: 'Berapa hari lagi? (contoh: 5)', type: 4, required: true }
         ]
     },
@@ -41,7 +42,7 @@ const slashCommands = [
         name: 'adduangmasuk', description: 'Tambah saldo spent pembeli',
         options: [
             { name: 'user', description: 'Pilih User', type: 6, required: true },
-            { name: 'amount', description: 'Nominal Rupiah', type: 4, required: true },
+            { name: 'amount', description: 'Nominal Rupiah (contoh: 50.000)', type: 3, required: true },
             { name: 'keterangan', description: 'Keterangan/Kategori', type: 3, required: false }
         ]
     },
@@ -49,21 +50,21 @@ const slashCommands = [
         name: 'minuangmasuk', description: 'Kurangi saldo spent pembeli',
         options: [
             { name: 'user', description: 'Pilih User', type: 6, required: true },
-            { name: 'amount', description: 'Nominal Rupiah', type: 4, required: true },
+            { name: 'amount', description: 'Nominal Rupiah (contoh: 50.000)', type: 3, required: true },
             { name: 'keterangan', description: 'Keterangan/Kategori', type: 3, required: false }
         ]
     },
     {
         name: 'adduangkeluar', description: 'Catat pengeluaran toko',
         options: [
-            { name: 'amount', description: 'Nominal Rupiah', type: 4, required: true },
+            { name: 'amount', description: 'Nominal Rupiah (contoh: 150.000)', type: 3, required: true },
             { name: 'keterangan', description: 'Keterangan Pengeluaran', type: 3, required: false }
         ]
     },
     {
         name: 'minuangkeluar', description: 'Revisi/kurangi pengeluaran toko',
         options: [
-            { name: 'amount', description: 'Nominal Rupiah', type: 4, required: true },
+            { name: 'amount', description: 'Nominal Rupiah (contoh: 150.000)', type: 3, required: true },
             { name: 'keterangan', description: 'Keterangan Revisi', type: 3, required: false }
         ]
     },
@@ -275,25 +276,32 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: '✅ Panel Leaderboard berhasil dipasang di channel ini!', ephemeral: true });
     }
 
-    // --- RESTOCK COUNTDOWN DENGAN BAHASA NATURAL VIBEBLOX ---
+    // --- RESTOCK COUNTDOWN SUPER HIGHLIGHT ---
     if (command === 'restock') {
         if (!interaction.member.roles.cache.has('1489612423521374309')) {
             return interaction.reply({ content: '❌ Sori, command ini khusus Owner.', ephemeral: true });
         }
 
-        const amount = interaction.options.getInteger('amount');
+        // Ambil data string (misal "55.000") lalu bersihkan titiknya jadi angka (55000)
+        const rawAmount = interaction.options.getString('amount');
+        const amount = parseInt(rawAmount.replace(/\./g, ''), 10);
+        
+        // Validasi kalau yang diinput ternyata bukan angka
+        if (isNaN(amount) || amount <= 0) {
+            return interaction.reply({ content: '❌ Nominal Robux tidak valid! Pastikan hanya memakai angka dan titik (contoh: 55.000).', ephemeral: true });
+        }
+
         const days = interaction.options.getInteger('hari'); 
 
         const ms = days * 24 * 60 * 60 * 1000; 
         const futureTime = new Date(Date.now() + ms);
         const unixTimestamp = Math.floor(futureTime.getTime() / 1000);
 
-        const formattedAmount = amount >= 1000 ? Math.floor(amount / 1000) + 'K+' : amount.toString();
+        const formattedAmount = amount >= 1000 ? Math.floor(amount / 1000) + 'K+' : amount.toLocaleString('id-ID');
 
         const restockEmbed = new EmbedBuilder()
-            .setTitle('🚀 VibeBlox Restock Alert!')
             .setColor('#4F4580')
-            .setDescription(`Halo Vibies! Siap-siap rebutan ya, karena kita bakal restock robux. Jangan sampai kehabisan!\n\n<:robux:1497884445494087752> **Estimasi Stok:**\n**${formattedAmount} Robux**\n\n⏳ **Bakal Mendarat Dalam:**\n> <t:${unixTimestamp}:R>\n> *(Tepatnya: <t:${unixTimestamp}:F>)*`)
+            .setDescription(`**📦 VIBEBLOX RESTOCK INCOMING!**\nHalo warga VibeBlox! Amunisi Robux kita bakal segera mendarat di server. Pasang alarm kalian dan jangan sampai kehabisan pas udah turun!\n\n# <:robux:1497884445494087752> ${formattedAmount} Robux\n\n## ⏳ <t:${unixTimestamp}:R>\n*(Tepatnya mendarat pada: <t:${unixTimestamp}:F>)*`)
             .setFooter({ text: 'VibeBlox Auto-Notifier' })
             .setTimestamp();
 
@@ -303,14 +311,13 @@ client.on('interactionCreate', async (interaction) => {
             setTimeout(async () => {
                 try {
                     const finishedEmbed = new EmbedBuilder()
-                        .setTitle('✅ Stok Robux Sudah Mendarat!')
                         .setColor('#4F4580')
-                        .setDescription(`Penantian selesai! Stock Robux udah ready di Community VibeBlox. Langsung aja sikat sebelum ludes diborong yang lain!\n\n<:robux:1497884445494087752> **Total Stok Masuk:**\n**${formattedAmount} Robux**`)
+                        .setDescription(`**✅ RESTOCK SELESAI!**\nPenantian berakhir! Amunisi Robux udah masuk sepenuhnya ke gudang VibeBlox. Langsung aja sikat sekarang sebelum diborong yang lain!\n\n# <:robux:1497884445494087752> ${formattedAmount} Robux\n\n## 🎉 STOK READY!`)
                         .setFooter({ text: 'VibeBlox Restock Complete' })
                         .setTimestamp();
                     
                     await replyMessage.edit({ content: '@everyone', embeds: [finishedEmbed] });
-                    await interaction.channel.send(`🚨 Notif buat @everyone! Stok **${formattedAmount} Robux** udah *ready* nih, gas langsung merapat sebelum kehabisan!`);
+                    await interaction.channel.send(`🚨 Panggilan buat @everyone! Stok **${formattedAmount} Robux** resmi mendarat! Gas merapat ke tiket sekarang!`);
                 } catch (err) {
                     console.error("Gagal update pesan saat Restock selesai:", err);
                 }
@@ -359,10 +366,13 @@ client.on('interactionCreate', async (interaction) => {
         // --- ADD / MIN UANG MASUK ---
         else if (command === 'adduangmasuk' || command === 'minuangmasuk') {
             const target = interaction.options.getUser('user');
-            const amount = interaction.options.getInteger('amount');
+            
+            // Konversi dari string "50.000" jadi angka 50000 murni
+            const rawAmount = interaction.options.getString('amount');
+            const amount = parseInt(rawAmount.replace(/\./g, ''), 10);
             const kategori = interaction.options.getString('keterangan') || 'Tidak ada kategori';
 
-            if (amount <= 0) return interaction.reply({ content: '❌ Nominal gak boleh minus atau nol!', ephemeral: true });
+            if (isNaN(amount) || amount <= 0) return interaction.reply({ content: '❌ Nominal tidak valid! Pastikan hanya menggunakan angka dan titik (contoh: 50.000).', ephemeral: true });
 
             let userData = await User.findOne({ userId: target.id });
             if (!userData) userData = new User({ userId: target.id });
@@ -392,10 +402,13 @@ client.on('interactionCreate', async (interaction) => {
 
         // --- ADD / MIN UANG KELUAR ---
         else if (command === 'adduangkeluar' || command === 'minuangkeluar') {
-            const amount = interaction.options.getInteger('amount');
+            
+            // Konversi dari string "150.000" jadi angka 150000 murni
+            const rawAmount = interaction.options.getString('amount');
+            const amount = parseInt(rawAmount.replace(/\./g, ''), 10);
             const keterangan = interaction.options.getString('keterangan') || 'Restock / Modal Toko';
 
-            if (amount <= 0) return interaction.reply({ content: '❌ Nominal gak boleh minus atau nol!', ephemeral: true });
+            if (isNaN(amount) || amount <= 0) return interaction.reply({ content: '❌ Nominal tidak valid! Pastikan hanya menggunakan angka dan titik (contoh: 150.000).', ephemeral: true });
 
             let replyMessage = '';
 
