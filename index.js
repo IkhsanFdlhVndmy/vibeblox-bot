@@ -452,17 +452,36 @@ client.on('interactionCreate', async (interaction) => {
             let userData = await User.findOne({ userId: target.id });
             if (!userData) userData = new User({ userId: target.id });
 
-            let replyMsg = '';
+            let embed;
 
             if (command === 'adduangmasuk') {
                 userData.uangMasuk += amount;
                 storeData.totalUangMasuk += amount;
-                replyMsg = `✅ **Uang Masuk Dicatat!**\n👤 Pembeli: ${target.username}\n💰 Nominal: **Rp ${formatRupiah(amount)}**\n🛒 Kategori: ${kategori}\n📊 Total spent user: **Rp ${formatRupiah(userData.uangMasuk)}**`;
+
+                embed = new EmbedBuilder()
+                    .setColor(0x57F287)
+                    .setTitle('✅ Uang Masuk Dicatat!')
+                    .addFields(
+                        { name: '👤 Pembeli', value: target.username, inline: true },
+                        { name: '💰 Nominal', value: `**Rp ${formatRupiah(amount)}**`, inline: true },
+                        { name: '🛒 Kategori', value: kategori, inline: true },
+                        { name: '📊 Total spent user', value: `**Rp ${formatRupiah(userData.uangMasuk)}**`, inline: false }
+                    )
+                    .setTimestamp();
             } else {
                 const bisaDikurang = Math.min(userData.uangMasuk, amount);
                 userData.uangMasuk = Math.max(0, userData.uangMasuk - amount);
                 storeData.totalUangMasuk = Math.max(0, storeData.totalUangMasuk - bisaDikurang);
-                replyMsg = `📉 **Revisi Uang Masuk**\n👤 Pembeli: ${target.username}\n🔻 Dikurangi: **Rp ${formatRupiah(amount)}**\n📊 Total spent user: **Rp ${formatRupiah(userData.uangMasuk)}**`;
+
+                embed = new EmbedBuilder()
+                    .setColor(0xFEE75C)
+                    .setTitle('📉 Revisi Uang Masuk')
+                    .addFields(
+                        { name: '👤 Pembeli', value: target.username, inline: true },
+                        { name: '🔻 Dikurangi', value: `**Rp ${formatRupiah(amount)}**`, inline: true },
+                        { name: '📊 Total spent user', value: `**Rp ${formatRupiah(userData.uangMasuk)}**`, inline: false }
+                    )
+                    .setTimestamp();
             }
 
             await userData.save();
@@ -472,7 +491,7 @@ client.on('interactionCreate', async (interaction) => {
             await updateSpenderRoles(targetMember, userData);
             scheduleLiveLeaderboardUpdate();
 
-            return interaction.reply({ content: replyMsg });
+            return interaction.reply({ embeds: [embed] });
         }
 
         // --- ADD / MIN UANG KELUAR ---
@@ -486,18 +505,36 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.reply({ content: '❌ Nominal tidak valid! Pastikan hanya menggunakan angka dan titik (contoh: 150.000).', flags: MessageFlags.Ephemeral });
             }
 
-            let replyMsg = '';
+            let embed;
 
             if (command === 'adduangkeluar') {
                 storeData.totalUangKeluar += amount;
-                replyMsg = `💸 **Pengeluaran Toko Dicatat!**\n💰 Nominal: **Rp ${formatRupiah(amount)}**\n📝 Ket: ${keterangan}`;
+
+                embed = new EmbedBuilder()
+                    .setColor(0xED4245)
+                    .setTitle('💸 Pengeluaran Toko Dicatat!')
+                    .addFields(
+                        { name: '💰 Nominal', value: `**Rp ${formatRupiah(amount)}**`, inline: true },
+                        { name: '📝 Keterangan', value: keterangan, inline: true },
+                        { name: '📊 Total pengeluaran', value: `**Rp ${formatRupiah(storeData.totalUangKeluar)}**`, inline: false }
+                    )
+                    .setTimestamp();
             } else {
                 storeData.totalUangKeluar = Math.max(0, storeData.totalUangKeluar - amount);
-                replyMsg = `📉 **Revisi Pengeluaran Toko**\n🔻 Dikurangi: **Rp ${formatRupiah(amount)}**\n📝 Ket: ${keterangan}`;
+
+                embed = new EmbedBuilder()
+                    .setColor(0xFEE75C)
+                    .setTitle('📉 Revisi Pengeluaran Toko')
+                    .addFields(
+                        { name: '🔻 Dikurangi', value: `**Rp ${formatRupiah(amount)}**`, inline: true },
+                        { name: '📝 Keterangan', value: keterangan, inline: true },
+                        { name: '📊 Total pengeluaran', value: `**Rp ${formatRupiah(storeData.totalUangKeluar)}**`, inline: false }
+                    )
+                    .setTimestamp();
             }
 
             await storeData.save();
-            return interaction.reply({ content: replyMsg });
+            return interaction.reply({ embeds: [embed] });
         }
 
         // --- SUMMARY ---
@@ -506,33 +543,26 @@ client.on('interactionCreate', async (interaction) => {
             const expense = storeData.totalUangKeluar;
             const profit = income - expense;
 
-            let profitTitle = "", profitStatus = "", embedColor = 0;
+            let profitLine = '';
 
             if (profit > 0) {
-                profitTitle = "✨ KEUNTUNGAN BERSIH (PROFIT)";
-                profitStatus = `📈 **Rp ${formatRupiah(profit)}**`;
-                embedColor = 3066993;
+                profitLine = `📈 **+Rp ${formatRupiah(profit)}** (PROFIT)`;
             } else if (profit < 0) {
-                const absProfit = Math.abs(profit);
-                profitTitle = "⚠️ KERUGIAN / MINUS";
-                profitStatus = `📉 **-Rp ${formatRupiah(absProfit)}**`;
-                embedColor = 15158332;
+                profitLine = `📉 **-Rp ${formatRupiah(Math.abs(profit))}** (MINUS)`;
             } else {
-                profitTitle = "⚖️ BALIK MODAL (BREAK EVEN)";
-                profitStatus = "**Rp 0**";
-                embedColor = 9807270;
+                profitLine = `⚖️ **Rp 0** (BREAK EVEN)`;
             }
 
             const summaryEmbed = new EmbedBuilder()
-                .setTitle("📊 Laporan Keuangan Vibeblox")
-                .setColor(embedColor)
+                .setColor(0xFFFFFF)
+                .setTitle('📊 Laporan Keuangan Vibeblox')
                 .addFields(
-                    { name: "🟢 Total Pemasukan", value: `Rp ${formatRupiah(income)}`, inline: true },
-                    { name: "🔴 Total Pengeluaran", value: `Rp ${formatRupiah(expense)}`, inline: true },
-                    { name: "\u200B", value: "───────────────────────", inline: false },
-                    { name: profitTitle, value: profitStatus, inline: false }
+                    { name: '🟢 Total Pemasukan', value: `**Rp ${formatRupiah(income)}**`, inline: true },
+                    { name: '🔴 Total Pengeluaran', value: `**Rp ${formatRupiah(expense)}**`, inline: true },
+                    { name: '\u200B', value: '───────────────────────', inline: false },
+                    { name: '💵 Profit / Loss', value: profitLine, inline: false }
                 )
-                .setFooter({ text: "Data Keuangan Internal Store" })
+                .setFooter({ text: 'Data Keuangan Internal Store' })
                 .setTimestamp();
 
             return interaction.reply({ embeds: [summaryEmbed] });
