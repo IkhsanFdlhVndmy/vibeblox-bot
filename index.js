@@ -511,7 +511,7 @@ client.on('interactionCreate', async (interaction) => {
                 storeData.totalUangKeluar += amount;
 
                 embed = new EmbedBuilder()
-                    .setColor(0xED4245)
+                    .setColor(0xFF0026)
                     .setTitle('💸 Pengeluaran Toko Dicatat!')
                     .addFields(
                         { name: '💰 Nominal', value: `**Rp ${formatRupiah(amount)}**`, inline: true },
