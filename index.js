@@ -558,7 +558,7 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         return interaction.reply({
-            content: '📋 **Template Vouch:**\n```\n+vouch robux @axel 3000 Robux Payout Instant\n```\n*Salin template di atas lalu paste di channel vouch.*',
+            content: '+vouch robux @axel 3000 Robux Payout Instant',
             flags: MessageFlags.Ephemeral
         });
     }
