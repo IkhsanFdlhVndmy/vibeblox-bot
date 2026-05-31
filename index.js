@@ -3,6 +3,7 @@ const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder
 const mongoose = require('mongoose');
 const User = require('./models/User');
 const Store = require('./models/Store');
+const RobuxRate = require('./models/RobuxRate');
 
 const client = new Client({
     intents: [
@@ -30,7 +31,24 @@ const client = new Client({
 });
 
 mongoose.connect(process.env.MONGODB_URI)
-    .then(() => console.log('📂 Database MongoDB Tersambung!'))
+    .then(async () => {
+        console.log('📂 Database MongoDB Tersambung!');
+        // Initialize default robux rates jika belum ada
+        const defaults = [
+            { type: 'community', rate: 108 },
+            { type: 'gamepass_after', rate: 110 },
+            { type: 'gamepass_before', rate: 77 },
+            { type: 'gig', rate: 77 },
+            { type: 'vilog', rate: 70000 }
+        ];
+        for (const d of defaults) {
+            await RobuxRate.findOneAndUpdate(
+                { type: d.type },
+                { $setOnInsert: { rate: d.rate } },
+                { upsert: true }
+            );
+        }
+    })
     .catch(err => console.error('❌ Gagal koneksi DB:', err));
 
 // =============================================================
@@ -112,6 +130,40 @@ const slashCommands = [
     {
         name: 'unanonymous', description: 'Tampilkan kembali nama user di Leaderboard',
         options: [{ name: 'user', description: 'Pilih User', type: 6, required: true }]
+    },
+    { name: 'qris', description: 'Tampilkan QRIS pembayaran VibeBlox' },
+    { name: 'bca', description: 'Tampilkan info rekening BCA VibeBlox' },
+    {
+        name: 'robux', description: 'Kalkulator harga Robux',
+        options: [
+            {
+                name: 'type', description: 'Pilih tipe pembelian', type: 3, required: true,
+                choices: [
+                    { name: 'Community', value: 'community' },
+                    { name: 'Gamepass After', value: 'gamepass_after' },
+                    { name: 'Gamepass Before', value: 'gamepass_before' },
+                    { name: 'GIG', value: 'gig' },
+                    { name: 'Vilog', value: 'vilog' }
+                ]
+            },
+            { name: 'amount', description: 'Jumlah Robux yang ingin dibeli', type: 4, required: true }
+        ]
+    },
+    {
+        name: 'hargarobux', description: 'Ubah rate harga Robux per type',
+        options: [
+            {
+                name: 'type', description: 'Pilih tipe yang ingin diubah', type: 3, required: true,
+                choices: [
+                    { name: 'Community', value: 'community' },
+                    { name: 'Gamepass After', value: 'gamepass_after' },
+                    { name: 'Gamepass Before', value: 'gamepass_before' },
+                    { name: 'GIG', value: 'gig' },
+                    { name: 'Vilog', value: 'vilog' }
+                ]
+            },
+            { name: 'rate', description: 'Rate baru (per 1 Robux / per 500 Robux untuk Vilog)', type: 4, required: true }
+        ]
     }
 ];
 
@@ -399,6 +451,175 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         return;
+    }
+
+    // --- QRIS ---
+    if (command === 'qris') {
+        const allowedRolesQris = ['1489612423521374309', '1489612221544665231'];
+        const hasRoleQris = interaction.member.roles.cache.some(role => allowedRolesQris.includes(role.id));
+        if (!hasRoleQris) {
+            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        await interaction.deferReply();
+
+        const qrisEmbed = new EmbedBuilder()
+            .setColor(0x4F4580)
+            .setTitle('💳 Pembayaran QRIS VibeBlox')
+            .setDescription('Silakan scan QRIS di bawah ini untuk melakukan pembayaran.')
+            .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1500317889872269324/1777300289337-1.png?ex=6a1c40ab&is=6a1aef2b&hm=be36eb1b73fd7c0448b6e5b989cac3eb5a15bd6cc88caefec52c55704cb534b6&')
+            .setFooter({ text: 'VibeBlox Payment' })
+            .setTimestamp();
+
+        return interaction.editReply({ embeds: [qrisEmbed] });
+    }
+
+    // --- BCA ---
+    if (command === 'bca') {
+        const allowedRolesBca = ['1489612423521374309', '1489612221544665231'];
+        const hasRoleBca = interaction.member.roles.cache.some(role => allowedRolesBca.includes(role.id));
+        if (!hasRoleBca) {
+            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        await interaction.deferReply();
+
+        const bcaEmbed = new EmbedBuilder()
+            .setColor(0x003D79)
+            .setTitle('🏦 Transfer Bank BCA VibeBlox')
+            .addFields(
+                { name: '👤 Atas Nama', value: '**Angel Vinny Vincentia Pelawi**', inline: false },
+                { name: '🔢 Nomor Rekening', value: '**8205363625**', inline: false },
+                { name: '🏦 Bank', value: '**BCA**', inline: false }
+            )
+            .setFooter({ text: 'VibeBlox Payment' })
+            .setTimestamp();
+
+        return interaction.editReply({ embeds: [bcaEmbed] });
+    }
+
+    // --- ROBUX CALCULATOR ---
+    if (command === 'robux') {
+        const allowedRolesRobux = ['1489612423521374309', '1489612221544665231'];
+        const hasRoleRobux = interaction.member.roles.cache.some(role => allowedRolesRobux.includes(role.id));
+        if (!hasRoleRobux) {
+            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        await interaction.deferReply();
+
+        const type = interaction.options.getString('type');
+        const amount = interaction.options.getInteger('amount');
+
+        if (amount <= 0) {
+            return interaction.editReply({ content: '❌ Jumlah Robux harus lebih dari 0!' });
+        }
+
+        // Ambil rate dari database
+        const rateData = await RobuxRate.findOne({ type }).lean();
+        if (!rateData) {
+            return interaction.editReply({ content: '❌ Rate untuk tipe ini belum diatur. Hubungi admin.' });
+        }
+
+        const typeNames = {
+            'community': 'Community',
+            'gamepass_after': 'Gamepass After',
+            'gamepass_before': 'Gamepass Before',
+            'gig': 'GIG',
+            'vilog': 'Vilog'
+        };
+
+        let totalHarga = 0;
+        let detailCalc = '';
+
+        if (type === 'vilog') {
+            // Vilog: kelipatan 500 robux
+            if (amount % 500 !== 0) {
+                return interaction.editReply({ content: '❌ Untuk tipe **Vilog**, jumlah Robux harus kelipatan **500**!\n*(Contoh: 500, 1000, 1500, 2000, ...)*' });
+            }
+            const kelipatan = amount / 500;
+            totalHarga = kelipatan * rateData.rate;
+            const parts = [];
+            for (let i = 0; i < kelipatan; i++) {
+                parts.push(`Rp ${formatRupiah(rateData.rate)}`);
+            }
+            detailCalc = `${kelipatan}x Rp ${formatRupiah(rateData.rate)} (per 500 Robux)\n= ${parts.join(' + ')}`;
+        } else {
+            // Type lainnya: rate * amount
+            totalHarga = rateData.rate * amount;
+            detailCalc = `Rp ${formatRupiah(rateData.rate)} × ${formatRupiah(amount)} Robux`;
+        }
+
+        const robuxEmbed = new EmbedBuilder()
+            .setColor(0x4F4580)
+            .setTitle('🧮 Kalkulator Robux VibeBlox')
+            .addFields(
+                { name: '📦 Tipe', value: `**${typeNames[type]}**`, inline: true },
+                { name: '<:robux:1497884445494087752> Jumlah Robux', value: `**${formatRupiah(amount)} R$**`, inline: true },
+                { name: '\u200B', value: '───────────────────────', inline: false },
+                { name: '📝 Perhitungan', value: detailCalc, inline: false },
+                { name: '💰 Total Harga', value: `## Rp ${formatRupiah(totalHarga)}`, inline: false }
+            )
+            .setFooter({ text: 'VibeBlox Robux Calculator' })
+            .setTimestamp();
+
+        return interaction.editReply({ embeds: [robuxEmbed] });
+    }
+
+    // --- HARGA ROBUX (UPDATE RATE) ---
+    if (command === 'hargarobux') {
+        const allowedRolesHarga = ['1489612423521374309', '1489612221544665231'];
+        const hasRoleHarga = interaction.member.roles.cache.some(role => allowedRolesHarga.includes(role.id));
+        if (!hasRoleHarga) {
+            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        await interaction.deferReply();
+
+        const type = interaction.options.getString('type');
+        const newRate = interaction.options.getInteger('rate');
+
+        if (newRate <= 0) {
+            return interaction.editReply({ content: '❌ Rate harus lebih dari 0!' });
+        }
+
+        const typeNames = {
+            'community': 'Community',
+            'gamepass_after': 'Gamepass After',
+            'gamepass_before': 'Gamepass Before',
+            'gig': 'GIG',
+            'vilog': 'Vilog'
+        };
+
+        // Ambil rate lama
+        const oldData = await RobuxRate.findOne({ type }).lean();
+        const oldRate = oldData ? oldData.rate : 0;
+
+        // Update rate
+        await RobuxRate.findOneAndUpdate(
+            { type },
+            { rate: newRate },
+            { upsert: true }
+        );
+
+        let rateDescription = '';
+        if (type === 'vilog') {
+            rateDescription = `Rp ${formatRupiah(oldRate)} → **Rp ${formatRupiah(newRate)}** /500 Robux`;
+        } else {
+            rateDescription = `Rp ${formatRupiah(oldRate)} → **Rp ${formatRupiah(newRate)}** /1 Robux`;
+        }
+
+        const updateEmbed = new EmbedBuilder()
+            .setColor(0x57F287)
+            .setTitle('✅ Rate Harga Robux Diperbarui!')
+            .addFields(
+                { name: '📦 Tipe', value: `**${typeNames[type]}**`, inline: true },
+                { name: '💱 Perubahan Rate', value: rateDescription, inline: false }
+            )
+            .setFooter({ text: 'VibeBlox Rate Manager' })
+            .setTimestamp();
+
+        return interaction.editReply({ embeds: [updateEmbed] });
     }
 
     // --- SECURITY FILTER UNTUK COMMAND KEUANGAN ---
