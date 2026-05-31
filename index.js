@@ -133,6 +133,9 @@ const slashCommands = [
     },
     { name: 'qris', description: 'Tampilkan QRIS pembayaran VibeBlox' },
     { name: 'bca', description: 'Tampilkan info rekening BCA VibeBlox' },
+    { name: 'dana', description: 'Tampilkan info pembayaran Dana VibeBlox' },
+    { name: 'gopay', description: 'Tampilkan info pembayaran GoPay VibeBlox' },
+    { name: 'vouch', description: 'Template vouch (hanya terlihat olehmu)' },
     {
         name: 'robux', description: 'Kalkulator harga Robux',
         options: [
@@ -496,6 +499,68 @@ client.on('interactionCreate', async (interaction) => {
             .setTimestamp();
 
         return interaction.editReply({ embeds: [bcaEmbed] });
+    }
+
+    // --- DANA ---
+    if (command === 'dana') {
+        const allowedRolesDana = ['1489612423521374309', '1489612221544665231'];
+        const hasRoleDana = interaction.member.roles.cache.some(role => allowedRolesDana.includes(role.id));
+        if (!hasRoleDana) {
+            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        await interaction.deferReply();
+
+        const danaEmbed = new EmbedBuilder()
+            .setColor(0x108EE9)
+            .setTitle('💙 Pembayaran Dana VibeBlox')
+            .addFields(
+                { name: '👤 Atas Nama', value: '**Muhammad Ikhsan Fadillah**', inline: false },
+                { name: '📱 Nomor Dana', value: '**08119931329**', inline: false },
+                { name: '💳 Platform', value: '**Dana**', inline: false }
+            )
+            .setFooter({ text: 'VibeBlox Payment' })
+            .setTimestamp();
+
+        return interaction.editReply({ embeds: [danaEmbed] });
+    }
+
+    // --- GOPAY ---
+    if (command === 'gopay') {
+        const allowedRolesGopay = ['1489612423521374309', '1489612221544665231'];
+        const hasRoleGopay = interaction.member.roles.cache.some(role => allowedRolesGopay.includes(role.id));
+        if (!hasRoleGopay) {
+            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        await interaction.deferReply();
+
+        const gopayEmbed = new EmbedBuilder()
+            .setColor(0x00AED6)
+            .setTitle('💚 Pembayaran GoPay VibeBlox')
+            .addFields(
+                { name: '👤 Atas Nama', value: '**Muhammad Ikhsan Fadillah**', inline: false },
+                { name: '📱 Nomor GoPay', value: '**08119931329**', inline: false },
+                { name: '💳 Platform', value: '**GoPay**', inline: false }
+            )
+            .setFooter({ text: 'VibeBlox Payment' })
+            .setTimestamp();
+
+        return interaction.editReply({ embeds: [gopayEmbed] });
+    }
+
+    // --- VOUCH TEMPLATE (Ephemeral - hanya terlihat oleh pengguna) ---
+    if (command === 'vouch') {
+        const allowedRolesVouch = ['1489612423521374309', '1489612221544665231'];
+        const hasRoleVouch = interaction.member.roles.cache.some(role => allowedRolesVouch.includes(role.id));
+        if (!hasRoleVouch) {
+            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        return interaction.reply({
+            content: '📋 **Template Vouch:**\n```\n+vouch robux @axel 3000 Robux Payout Instant\n```\n*Salin template di atas lalu paste di channel vouch.*',
+            flags: MessageFlags.Ephemeral
+        });
     }
 
     // --- ROBUX CALCULATOR ---
