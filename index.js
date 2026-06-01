@@ -39,7 +39,8 @@ mongoose.connect(process.env.MONGODB_URI)
             { type: 'gamepass_after', rate: 110 },
             { type: 'gamepass_before', rate: 77 },
             { type: 'gig', rate: 77 },
-            { type: 'vilog', rate: 70000 }
+            { type: 'vilog', rate: 70000 },
+            { type: 'robux_plus', rate: 135 }
         ];
         for (const d of defaults) {
             await RobuxRate.findOneAndUpdate(
@@ -136,6 +137,7 @@ const slashCommands = [
     { name: 'dana', description: 'Tampilkan info pembayaran Dana VibeBlox' },
     { name: 'gopay', description: 'Tampilkan info pembayaran GoPay VibeBlox' },
     { name: 'vouch', description: 'Template vouch (hanya terlihat olehmu)' },
+    { name: 'linkcommunity', description: 'Tampilkan link grup komunitas Roblox' },
     {
         name: 'robux', description: 'Kalkulator harga Robux',
         options: [
@@ -146,7 +148,8 @@ const slashCommands = [
                     { name: 'Gamepass After', value: 'gamepass_after' },
                     { name: 'Gamepass Before', value: 'gamepass_before' },
                     { name: 'GIG', value: 'gig' },
-                    { name: 'Vilog', value: 'vilog' }
+                    { name: 'Vilog', value: 'vilog' },
+                    { name: 'Robux Plus', value: 'robux_plus' }
                 ]
             },
             { name: 'amount', description: 'Jumlah Robux yang ingin dibeli', type: 4, required: true }
@@ -162,7 +165,8 @@ const slashCommands = [
                     { name: 'Gamepass After', value: 'gamepass_after' },
                     { name: 'Gamepass Before', value: 'gamepass_before' },
                     { name: 'GIG', value: 'gig' },
-                    { name: 'Vilog', value: 'vilog' }
+                    { name: 'Vilog', value: 'vilog' },
+                    { name: 'Robux Plus', value: 'robux_plus' }
                 ]
             },
             { name: 'rate', description: 'Rate baru (per 1 Robux / per 500 Robux untuk Vilog)', type: 4, required: true }
@@ -179,7 +183,8 @@ const slashCommands = [
                     { name: 'Gamepass After', value: 'gamepass_after' },
                     { name: 'Gamepass Before', value: 'gamepass_before' },
                     { name: 'GIG', value: 'gig' },
-                    { name: 'Vilog', value: 'vilog' }
+                    { name: 'Vilog', value: 'vilog' },
+                    { name: 'Robux Plus', value: 'robux_plus' }
                 ]
             },
             { name: 'amount', description: 'Jumlah Robux', type: 4, required: true }
@@ -342,6 +347,7 @@ client.on('messageCreate', async (message) => {
 
 // === EVENT: INTERAKSI SLASH COMMANDS & BUTTON ===
 const isUpdating = new Set();
+let linkCommunityActive = false;
 
 client.on('interactionCreate', async (interaction) => {
     // ----- BUTTON LEADERBOARD PAGINATION -----
@@ -461,12 +467,15 @@ client.on('interactionCreate', async (interaction) => {
                     new ButtonBuilder().setCustomId(`invf_type_gig_${msgId}`).setLabel('GIG').setStyle(ButtonStyle.Primary),
                     new ButtonBuilder().setCustomId(`invf_type_vilog_${msgId}`).setLabel('Vilog').setStyle(ButtonStyle.Primary)
                 );
+                const typeRow2 = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`invf_type_robux_plus_${msgId}`).setLabel('Robux Plus').setStyle(ButtonStyle.Primary)
+                );
                 const cancelRow = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`invf_cancel_${msgId}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
                 );
 
                 const typeEmbed = new EmbedBuilder().setColor(0x4F4580).setTitle('📋 Pilih Tipe Transaksi').setDescription('Pilih salah satu tipe di bawah:');
-                await interaction.followUp({ embeds: [typeEmbed], components: [typeRow, cancelRow], flags: MessageFlags.Ephemeral });
+                await interaction.followUp({ embeds: [typeEmbed], components: [typeRow, typeRow2, cancelRow], flags: MessageFlags.Ephemeral });
             } catch (err) {
                 console.error("Invoice Done error:", err.message);
                 isUpdating.delete(`inv_done_${msgId}`);
@@ -532,7 +541,7 @@ client.on('interactionCreate', async (interaction) => {
             const withoutPrefix = customId.replace('invf_type_', '');
             const typeValue = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
 
-            const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog' };
+            const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
 
             // Step 2: Pilih Metode Pembayaran
             const payRow = new ActionRowBuilder().addComponents(
@@ -561,7 +570,7 @@ client.on('interactionCreate', async (interaction) => {
             const method = segmentBeforeMsgId.substring(0, segmentBeforeMsgId.indexOf('_'));
             const typeValue = segmentBeforeMsgId.substring(segmentBeforeMsgId.indexOf('_') + 1);
 
-            const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog' };
+            const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
             const methodNames = { 'qris': 'QRIS', 'bca': 'BCA', 'dana': 'Dana', 'gopay': 'GoPay', 'lainnya': 'Lainnya' };
 
             const confirmEmbed = new EmbedBuilder().setColor(0xFEE75C).setTitle('⚠️ Konfirmasi')
@@ -592,7 +601,7 @@ client.on('interactionCreate', async (interaction) => {
             const method = beforeMsgId.substring(0, beforeMsgId.indexOf('_'));
             const typeValue = beforeMsgId.substring(beforeMsgId.indexOf('_') + 1);
 
-            const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog' };
+            const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
             const methodNames = { 'qris': 'QRIS', 'bca': 'BCA', 'dana': 'Dana', 'gopay': 'GoPay', 'lainnya': 'Lainnya' };
 
             await interaction.update({ content: '⏳ Memproses...', embeds: [], components: [] });
@@ -882,6 +891,30 @@ client.on('interactionCreate', async (interaction) => {
         });
     }
 
+    // --- LINK COMMUNITY ---
+    if (command === 'linkcommunity') {
+        if (linkCommunityActive) {
+            return interaction.reply({ content: '⏳ Command ini sedang digunakan oleh user lain. Coba lagi nanti.', flags: MessageFlags.Ephemeral });
+        }
+        linkCommunityActive = true;
+
+        await interaction.deferReply();
+
+        const linkEmbed = new EmbedBuilder()
+            .setColor(0x4F4580)
+            .setTitle('🔗 Link Grup Komunitas')
+            .addFields(
+                { name: 'Komunitas 1', value: '[BEJIRLAH Community](https://www.roblox.com/communities/1064667246/BEJIRLAH-Community)', inline: false },
+                { name: 'Komunitas 2', value: '[Vandamoy](https://www.roblox.com/id/communities/1108229986/Vandamoy)', inline: false }
+            )
+            .setFooter({ text: 'VibeBlox Community Links' })
+            .setTimestamp();
+
+        await interaction.editReply({ embeds: [linkEmbed] });
+        linkCommunityActive = false;
+        return;
+    }
+
     // --- ROBUX CALCULATOR ---
     if (command === 'robux') {
         const allowedRolesRobux = ['1489612423521374309', '1489612221544665231'];
@@ -910,7 +943,8 @@ client.on('interactionCreate', async (interaction) => {
             'gamepass_after': 'Gamepass After',
             'gamepass_before': 'Gamepass Before',
             'gig': 'GIG',
-            'vilog': 'Vilog'
+            'vilog': 'Vilog',
+            'robux_plus': 'Robux Plus'
         };
 
         let totalHarga = 0;
@@ -972,7 +1006,8 @@ client.on('interactionCreate', async (interaction) => {
             'gamepass_after': 'Gamepass After',
             'gamepass_before': 'Gamepass Before',
             'gig': 'GIG',
-            'vilog': 'Vilog'
+            'vilog': 'Vilog',
+            'robux_plus': 'Robux Plus'
         };
 
         // Ambil rate lama
@@ -1029,7 +1064,7 @@ client.on('interactionCreate', async (interaction) => {
             return interaction.editReply({ content: '❌ Rate untuk tipe ini belum diatur.' });
         }
 
-        const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog' };
+        const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
 
         let totalHarga = 0;
         let detailCalc = '';
