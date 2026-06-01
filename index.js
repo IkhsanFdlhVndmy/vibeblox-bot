@@ -668,11 +668,20 @@ client.on('interactionCreate', async (interaction) => {
                 const financeChannelId = '1489665490770067678';
                 const kategori = `${typeNames[typeValue] || typeValue} - ${methodNames[method] || method}`;
 
+                // Fetch username & display name
+                let pembeliDisplay = `<@${targetUserId}>`;
+                try {
+                    const fetched = targetMember || await interaction.guild.members.fetch(targetUserId);
+                    if (fetched) {
+                        pembeliDisplay = `<@${targetUserId}>\n(${fetched.displayName} • @${fetched.user.username})`;
+                    }
+                } catch (e) {}
+
                 const historyEmbed = new EmbedBuilder()
                     .setColor(0x57F287)
                     .setTitle('✅ Uang Masuk Dicatat!')
                     .addFields(
-                        { name: '👤 Pembeli', value: `<@${targetUserId}>`, inline: true },
+                        { name: '👤 Pembeli', value: pembeliDisplay, inline: true },
                         { name: '💰 Nominal', value: `**Rp ${formatRupiah(totalHarga)}**`, inline: true },
                         { name: '🛒 Kategori', value: kategori, inline: true },
                         { name: '📊 Total spent user', value: `**Rp ${formatRupiah(userData.uangMasuk)}**`, inline: false }
