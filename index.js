@@ -900,17 +900,7 @@ client.on('interactionCreate', async (interaction) => {
 
         await interaction.deferReply();
 
-        const linkEmbed = new EmbedBuilder()
-            .setColor(0x4F4580)
-            .setTitle('🔗 Link Grup Komunitas')
-            .addFields(
-                { name: 'Komunitas 1', value: '[BEJIRLAH Community](https://www.roblox.com/communities/1064667246/BEJIRLAH-Community)', inline: false },
-                { name: 'Komunitas 2', value: '[Vandamoy](https://www.roblox.com/id/communities/1108229986/Vandamoy)', inline: false }
-            )
-            .setFooter({ text: 'VibeBlox Community Links' })
-            .setTimestamp();
-
-        await interaction.editReply({ embeds: [linkEmbed] });
+        await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy' });
         linkCommunityActive = false;
         return;
     }
