@@ -975,7 +975,7 @@ client.on('interactionCreate', async (interaction) => {
                 { name: '<:robux:1497884445494087752> Jumlah Robux', value: `**${formatRupiah(amount)} R$**`, inline: true },
                 { name: '\u200B', value: '───────────────────────', inline: false },
                 { name: '📝 Perhitungan', value: detailCalc, inline: false },
-                { name: '💰 Total Harga', value: `## Rp ${formatRupiah(totalHarga)}`, inline: false }
+                { name: '💰 Total Harga', value: `**Rp ${formatRupiah(totalHarga)}**`, inline: false }
             )
             .setFooter({ text: 'VibeBlox Robux Calculator' })
             .setTimestamp();
@@ -1088,7 +1088,7 @@ client.on('interactionCreate', async (interaction) => {
                 { name: '📦 Tipe', value: `**${typeNames[type]}**`, inline: true },
                 { name: '<:robux:1497884445494087752> Jumlah Robux', value: `**${formatRupiah(amount)} R$**`, inline: true },
                 { name: '📝 Perhitungan', value: detailCalc, inline: false },
-                { name: '💰 Total Bayar', value: `## Rp ${formatRupiah(totalHarga)}`, inline: false }
+                { name: '💰 Total Bayar', value: `**Rp ${formatRupiah(totalHarga)}**`, inline: false }
             )
             .setFooter({ text: '⏳ Belum Selesai • VibeBlox Invoice' })
             .setTimestamp();
