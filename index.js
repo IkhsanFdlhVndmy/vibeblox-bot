@@ -167,6 +167,23 @@ const slashCommands = [
             },
             { name: 'rate', description: 'Rate baru (per 1 Robux / per 500 Robux untuk Vilog)', type: 4, required: true }
         ]
+    },
+    {
+        name: 'invoice', description: 'Buat invoice pembelian Robux',
+        options: [
+            { name: 'user', description: 'Pilih pembeli', type: 6, required: true },
+            {
+                name: 'type', description: 'Tipe pembelian', type: 3, required: true,
+                choices: [
+                    { name: 'Community', value: 'community' },
+                    { name: 'Gamepass After', value: 'gamepass_after' },
+                    { name: 'Gamepass Before', value: 'gamepass_before' },
+                    { name: 'GIG', value: 'gig' },
+                    { name: 'Vilog', value: 'vilog' }
+                ]
+            },
+            { name: 'amount', description: 'Jumlah Robux', type: 4, required: true }
+        ]
     }
 ];
 
@@ -367,6 +384,308 @@ client.on('interactionCreate', async (interaction) => {
         } finally {
             isUpdating.delete(msgId);
         }
+        return;
+    }
+
+    // ----- INVOICE BUTTONS -----
+    if (interaction.isButton() && interaction.customId.startsWith('inv_')) {
+        const allowedRolesInv = ['1489612423521374309', '1489612221544665231'];
+        const hasRoleInv = interaction.member.roles.cache.some(role => allowedRolesInv.includes(role.id));
+        if (!hasRoleInv) {
+            return interaction.reply({ content: '❌ Hanya Owner dan Handler yang bisa memencet tombol ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        const parts = interaction.customId.split('_');
+        const action = parts[1]; // cancel, bca, qris, dana, gopay, done
+
+        // --- CANCEL: hapus pesan invoice ---
+        if (action === 'cancel') {
+            await interaction.deferUpdate();
+            try { await interaction.message.delete(); } catch (e) {}
+            return;
+        }
+
+        // --- PAYMENT BUTTONS: tampilkan embed metode pembayaran ---
+        if (action === 'bca') {
+            const embed = new EmbedBuilder().setColor(0x003D79).setTitle('🏦 Transfer Bank BCA VibeBlox')
+                .addFields({ name: '👤 Atas Nama', value: '**Angel Vinny Vincentia Pelawi**' }, { name: '🔢 No. Rekening', value: '**8205363625**' }, { name: '🏦 Bank', value: '**BCA**' })
+                .setFooter({ text: 'VibeBlox Payment' }).setTimestamp();
+            return interaction.reply({ embeds: [embed] });
+        }
+        if (action === 'qris') {
+            const embed = new EmbedBuilder().setColor(0x4F4580).setTitle('💳 Pembayaran QRIS VibeBlox')
+                .setDescription('Silakan scan QRIS di bawah ini untuk melakukan pembayaran.')
+                .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1500317889872269324/1777300289337-1.png?ex=6a1c40ab&is=6a1aef2b&hm=be36eb1b73fd7c0448b6e5b989cac3eb5a15bd6cc88caefec52c55704cb534b6&')
+                .setFooter({ text: 'VibeBlox Payment' }).setTimestamp();
+            return interaction.reply({ embeds: [embed] });
+        }
+        if (action === 'dana') {
+            const embed = new EmbedBuilder().setColor(0x108EE9).setTitle('💙 Pembayaran Dana VibeBlox')
+                .addFields({ name: '👤 Atas Nama', value: '**Muhammad Ikhsan Fadillah**' }, { name: '📱 Nomor Dana', value: '**08119931329**' }, { name: '💳 Platform', value: '**Dana**' })
+                .setFooter({ text: 'VibeBlox Payment' }).setTimestamp();
+            return interaction.reply({ embeds: [embed] });
+        }
+        if (action === 'gopay') {
+            const embed = new EmbedBuilder().setColor(0x00AED6).setTitle('💚 Pembayaran GoPay VibeBlox')
+                .addFields({ name: '👤 Atas Nama', value: '**Muhammad Ikhsan Fadillah**' }, { name: '📱 Nomor GoPay', value: '**08119931329**' }, { name: '💳 Platform', value: '**GoPay**' })
+                .setFooter({ text: 'VibeBlox Payment' }).setTimestamp();
+            return interaction.reply({ embeds: [embed] });
+        }
+
+        // --- DONE: mulai flow ephemeral ---
+        if (action === 'done') {
+            const msgId = interaction.message.id;
+            if (isUpdating.has(`inv_done_${msgId}`)) {
+                return interaction.reply({ content: '⏳ Proses Done sedang berlangsung...', flags: MessageFlags.Ephemeral });
+            }
+            isUpdating.add(`inv_done_${msgId}`);
+
+            try {
+                // Disable Done button (loading state)
+                const currentComponents = interaction.message.components.map(row => {
+                    const newRow = ActionRowBuilder.from(row);
+                    newRow.components.forEach(btn => {
+                        if (btn.data.custom_id && btn.data.custom_id.startsWith('inv_done')) {
+                            btn.setDisabled(true).setLabel('⏳ Processing...');
+                        }
+                    });
+                    return newRow;
+                });
+                await interaction.update({ components: currentComponents });
+
+                // Step 1: Pilih Tipe Transaksi (ephemeral)
+                const typeRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`invf_type_community_${msgId}`).setLabel('Community').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`invf_type_gamepass_before_${msgId}`).setLabel('GP Before').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`invf_type_gamepass_after_${msgId}`).setLabel('GP After').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`invf_type_gig_${msgId}`).setLabel('GIG').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId(`invf_type_vilog_${msgId}`).setLabel('Vilog').setStyle(ButtonStyle.Primary)
+                );
+                const cancelRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`invf_cancel_${msgId}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
+                );
+
+                const typeEmbed = new EmbedBuilder().setColor(0x4F4580).setTitle('📋 Pilih Tipe Transaksi').setDescription('Pilih salah satu tipe di bawah:');
+                await interaction.followUp({ embeds: [typeEmbed], components: [typeRow, cancelRow], flags: MessageFlags.Ephemeral });
+            } catch (err) {
+                console.error("Invoice Done error:", err.message);
+                isUpdating.delete(`inv_done_${msgId}`);
+                // Re-enable Done button
+                try {
+                    const origComponents = interaction.message.components.map(row => {
+                        const newRow = ActionRowBuilder.from(row);
+                        newRow.components.forEach(btn => {
+                            if (btn.data.custom_id && btn.data.custom_id.startsWith('inv_done')) {
+                                btn.setDisabled(false).setLabel('✅ Done');
+                            }
+                        });
+                        return newRow;
+                    });
+                    await interaction.message.edit({ components: origComponents });
+                } catch (e) {}
+            }
+            return;
+        }
+        return;
+    }
+
+    // ----- INVOICE FLOW BUTTONS (ephemeral steps) -----
+    if (interaction.isButton() && interaction.customId.startsWith('invf_')) {
+        const allowedRolesInv = ['1489612423521374309', '1489612221544665231'];
+        const hasRoleInv = interaction.member.roles.cache.some(role => allowedRolesInv.includes(role.id));
+        if (!hasRoleInv) {
+            return interaction.reply({ content: '❌ Hanya Owner dan Handler.', flags: MessageFlags.Ephemeral });
+        }
+
+        const customId = interaction.customId;
+        const lastUnderscoreIdx = customId.lastIndexOf('_');
+        const invoiceMsgId = customId.substring(lastUnderscoreIdx + 1);
+
+        // Helper: re-enable Done button on invoice message
+        const reEnableDone = async () => {
+            isUpdating.delete(`inv_done_${invoiceMsgId}`);
+            try {
+                const invoiceMsg = await interaction.channel.messages.fetch(invoiceMsgId);
+                const origComponents = invoiceMsg.components.map(row => {
+                    const newRow = ActionRowBuilder.from(row);
+                    newRow.components.forEach(btn => {
+                        if (btn.data.custom_id && btn.data.custom_id.startsWith('inv_done')) {
+                            btn.setDisabled(false).setLabel('✅ Done');
+                        }
+                    });
+                    return newRow;
+                });
+                await invoiceMsg.edit({ components: origComponents });
+            } catch (e) {}
+        };
+
+        // --- CANCEL at any step ---
+        if (customId.startsWith('invf_cancel_')) {
+            await interaction.update({ content: '❌ Proses dibatalkan.', embeds: [], components: [] });
+            await reEnableDone();
+            return;
+        }
+
+        // --- Step 1 result: Tipe Transaksi dipilih ---
+        if (customId.startsWith('invf_type_')) {
+            // Parse type from customId: invf_type_{typeName}_{msgId}
+            const withoutPrefix = customId.replace('invf_type_', '');
+            const typeValue = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
+
+            const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog' };
+
+            // Step 2: Pilih Metode Pembayaran
+            const payRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`invf_pay_qris_${typeValue}_${invoiceMsgId}`).setLabel('QRIS').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`invf_pay_bca_${typeValue}_${invoiceMsgId}`).setLabel('BCA').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`invf_pay_dana_${typeValue}_${invoiceMsgId}`).setLabel('Dana').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`invf_pay_gopay_${typeValue}_${invoiceMsgId}`).setLabel('GoPay').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId(`invf_pay_lainnya_${typeValue}_${invoiceMsgId}`).setLabel('Lainnya').setStyle(ButtonStyle.Secondary)
+            );
+            const cancelRow2 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`invf_cancel_${invoiceMsgId}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
+            );
+
+            const payEmbed = new EmbedBuilder().setColor(0x4F4580).setTitle('💳 Pilih Metode Pembayaran')
+                .setDescription(`Tipe: **${typeNames[typeValue] || typeValue}**\nPilih metode pembayaran:`);
+
+            await interaction.update({ embeds: [payEmbed], components: [payRow, cancelRow2] });
+            return;
+        }
+
+        // --- Step 2 result: Metode Pembayaran dipilih → Konfirmasi ---
+        if (customId.startsWith('invf_pay_')) {
+            // Parse: invf_pay_{method}_{typeValue}_{msgId}
+            const withoutPrefix = customId.replace('invf_pay_', '');
+            const segmentBeforeMsgId = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
+            const method = segmentBeforeMsgId.substring(0, segmentBeforeMsgId.indexOf('_'));
+            const typeValue = segmentBeforeMsgId.substring(segmentBeforeMsgId.indexOf('_') + 1);
+
+            const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog' };
+            const methodNames = { 'qris': 'QRIS', 'bca': 'BCA', 'dana': 'Dana', 'gopay': 'GoPay', 'lainnya': 'Lainnya' };
+
+            const confirmEmbed = new EmbedBuilder().setColor(0xFEE75C).setTitle('⚠️ Konfirmasi')
+                .setDescription(`Tipe: **${typeNames[typeValue] || typeValue}**\nMetode: **${methodNames[method] || method}**\n\nApakah kamu yakin ingin menyelesaikan invoice ini?`);
+
+            const confirmRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`invf_confirm_yes_${method}_${typeValue}_${invoiceMsgId}`).setLabel('✅ Yakin').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId(`invf_confirm_no_${invoiceMsgId}`).setLabel('❌ Tidak').setStyle(ButtonStyle.Danger)
+            );
+
+            await interaction.update({ embeds: [confirmEmbed], components: [confirmRow] });
+            return;
+        }
+
+        // --- Konfirmasi: TIDAK ---
+        if (customId.startsWith('invf_confirm_no_')) {
+            await interaction.update({ content: '❌ Proses dibatalkan.', embeds: [], components: [] });
+            await reEnableDone();
+            return;
+        }
+
+        // --- Konfirmasi: YAKIN ---
+        if (customId.startsWith('invf_confirm_yes_')) {
+            // Parse: invf_confirm_yes_{method}_{typeValue}_{msgId}
+            const withoutPrefix = customId.replace('invf_confirm_yes_', '');
+            const msgIdPart = invoiceMsgId;
+            const beforeMsgId = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
+            const method = beforeMsgId.substring(0, beforeMsgId.indexOf('_'));
+            const typeValue = beforeMsgId.substring(beforeMsgId.indexOf('_') + 1);
+
+            const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog' };
+            const methodNames = { 'qris': 'QRIS', 'bca': 'BCA', 'dana': 'Dana', 'gopay': 'GoPay', 'lainnya': 'Lainnya' };
+
+            await interaction.update({ content: '⏳ Memproses...', embeds: [], components: [] });
+
+            try {
+                // Fetch invoice message to get data from embed
+                const invoiceMsg = await interaction.channel.messages.fetch(msgIdPart);
+                const invoiceEmbed = invoiceMsg.embeds[0];
+
+                // Parse userId and totalHarga from embed fields
+                let targetUserId = null;
+                let totalHarga = 0;
+
+                if (invoiceEmbed && invoiceEmbed.fields) {
+                    for (const field of invoiceEmbed.fields) {
+                        if (field.name.includes('Pembeli') && field.value.includes('<@')) {
+                            const match = field.value.match(/<@(\d+)>/);
+                            if (match) targetUserId = match[1];
+                        }
+                        if (field.name.includes('Total Harga') || field.name.includes('Total Bayar')) {
+                            const numMatch = field.value.replace(/[^\d]/g, '');
+                            if (numMatch) totalHarga = parseInt(numMatch);
+                        }
+                    }
+                }
+
+                if (!targetUserId || !totalHarga) {
+                    await interaction.editReply({ content: '❌ Gagal membaca data invoice.' });
+                    await reEnableDone();
+                    return;
+                }
+
+                // Database logic (same as /adduangmasuk)
+                let userData = await User.findOne({ userId: targetUserId });
+                if (!userData) userData = new User({ userId: targetUserId });
+                userData.uangMasuk += totalHarga;
+                await userData.save();
+
+                let storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' });
+                if (!storeData) storeData = new Store({ storeId: 'VIBEBLOX_FINANCE' });
+                storeData.totalUangMasuk += totalHarga;
+                await storeData.save();
+
+                // Auto role update
+                const targetMember = await interaction.guild.members.fetch(targetUserId).catch(() => null);
+                await updateSpenderRoles(targetMember, userData);
+                scheduleLiveLeaderboardUpdate();
+
+                // Update invoice embed to green (done)
+                const doneEmbed = EmbedBuilder.from(invoiceEmbed)
+                    .setColor(0x57F287)
+                    .setFooter({ text: '✅ Invoice Selesai • VibeBlox' });
+
+                // Disable all buttons
+                const disabledComponents = invoiceMsg.components.map(row => {
+                    const newRow = ActionRowBuilder.from(row);
+                    newRow.components.forEach(btn => btn.setDisabled(true));
+                    return newRow;
+                });
+
+                await invoiceMsg.edit({ embeds: [doneEmbed], components: disabledComponents });
+
+                // Send history to #store-finance
+                const financeChannelId = '1489665490770067678';
+                const kategori = `${typeNames[typeValue] || typeValue} - ${methodNames[method] || method}`;
+
+                const historyEmbed = new EmbedBuilder()
+                    .setColor(0x57F287)
+                    .setTitle('✅ Uang Masuk Dicatat!')
+                    .addFields(
+                        { name: '👤 Pembeli', value: `<@${targetUserId}>`, inline: true },
+                        { name: '💰 Nominal', value: `**Rp ${formatRupiah(totalHarga)}**`, inline: true },
+                        { name: '🛒 Kategori', value: kategori, inline: true },
+                        { name: '📊 Total spent user', value: `**Rp ${formatRupiah(userData.uangMasuk)}**`, inline: false }
+                    )
+                    .setTimestamp();
+
+                try {
+                    const financeChannel = await client.channels.fetch(financeChannelId);
+                    if (financeChannel) await financeChannel.send({ embeds: [historyEmbed] });
+                } catch (e) { console.error("Gagal kirim ke store-finance:", e.message); }
+
+                await interaction.editReply({ content: '✅ Invoice selesai! Pencatatan berhasil.' });
+            } catch (err) {
+                console.error("Invoice confirm error:", err.message);
+                await interaction.editReply({ content: '❌ Terjadi error saat memproses invoice.' });
+                await reEnableDone();
+            } finally {
+                isUpdating.delete(`inv_done_${msgIdPart}`);
+            }
+            return;
+        }
+
         return;
     }
 
@@ -685,6 +1004,78 @@ client.on('interactionCreate', async (interaction) => {
             .setTimestamp();
 
         return interaction.editReply({ embeds: [updateEmbed] });
+    }
+
+    // --- INVOICE ---
+    if (command === 'invoice') {
+        const allowedRolesInvoice = ['1489612423521374309', '1489612221544665231'];
+        const hasRoleInvoice = interaction.member.roles.cache.some(role => allowedRolesInvoice.includes(role.id));
+        if (!hasRoleInvoice) {
+            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        await interaction.deferReply();
+
+        const target = interaction.options.getUser('user');
+        const type = interaction.options.getString('type');
+        const amount = interaction.options.getInteger('amount');
+
+        if (amount <= 0) {
+            return interaction.editReply({ content: '❌ Jumlah Robux harus lebih dari 0!' });
+        }
+
+        const rateData = await RobuxRate.findOne({ type }).lean();
+        if (!rateData) {
+            return interaction.editReply({ content: '❌ Rate untuk tipe ini belum diatur.' });
+        }
+
+        const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog' };
+
+        let totalHarga = 0;
+        let detailCalc = '';
+
+        if (type === 'vilog') {
+            if (amount % 500 !== 0) {
+                return interaction.editReply({ content: '❌ Untuk tipe **Vilog**, jumlah Robux harus kelipatan **500**!' });
+            }
+            const kelipatan = amount / 500;
+            totalHarga = kelipatan * rateData.rate;
+            detailCalc = `${kelipatan}x Rp ${formatRupiah(rateData.rate)} (per 500 Robux)`;
+        } else {
+            totalHarga = rateData.rate * amount;
+            detailCalc = `Rp ${formatRupiah(rateData.rate)} × ${formatRupiah(amount)} Robux`;
+        }
+
+        const invoiceEmbed = new EmbedBuilder()
+            .setColor(0xFF0000)
+            .setTitle('🧾 Invoice VibeBlox')
+            .addFields(
+                { name: '👤 Pembeli', value: `<@${target.id}>`, inline: true },
+                { name: '📦 Tipe', value: `**${typeNames[type]}**`, inline: true },
+                { name: '<:robux:1497884445494087752> Jumlah Robux', value: `**${formatRupiah(amount)} R$**`, inline: true },
+                { name: '📝 Perhitungan', value: detailCalc, inline: false },
+                { name: '💰 Total Bayar', value: `## Rp ${formatRupiah(totalHarga)}`, inline: false }
+            )
+            .setFooter({ text: '⏳ Belum Selesai • VibeBlox Invoice' })
+            .setTimestamp();
+
+        const sentReply = await interaction.editReply({ embeds: [invoiceEmbed], components: [] });
+        const invoiceMsgId = sentReply.id;
+
+        // Add buttons with message ID reference
+        const row1 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`inv_cancel_${invoiceMsgId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(`inv_bca_${invoiceMsgId}`).setLabel('BCA').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`inv_qris_${invoiceMsgId}`).setLabel('QRIS').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`inv_dana_${invoiceMsgId}`).setLabel('DANA').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`inv_gopay_${invoiceMsgId}`).setLabel('GOPAY').setStyle(ButtonStyle.Secondary)
+        );
+        const row2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`inv_done_${invoiceMsgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
+        );
+
+        await interaction.editReply({ embeds: [invoiceEmbed], components: [row1, row2] });
+        return;
     }
 
     // --- SECURITY FILTER UNTUK COMMAND KEUANGAN ---
