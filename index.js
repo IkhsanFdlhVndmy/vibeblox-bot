@@ -226,9 +226,9 @@ async function updateSpenderRoles(member, userData) {
             await member.roles.remove(roleElite);
         }
 
-        if (spentUang >= 10000000 && !isAnon && !member.roles.cache.has(rolePrime)) {
+        if (spentUang >= 5000000 && !isAnon && !member.roles.cache.has(rolePrime)) {
             await member.roles.add(rolePrime);
-        } else if ((spentUang < 10000000 || isAnon) && member.roles.cache.has(rolePrime)) {
+        } else if ((spentUang < 5000000 || isAnon) && member.roles.cache.has(rolePrime)) {
             await member.roles.remove(rolePrime);
         }
     } catch (err) {
