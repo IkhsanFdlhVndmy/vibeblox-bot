@@ -66,6 +66,79 @@ function formatRupiah(num) {
     return Number(num || 0).toLocaleString('id-ID');
 }
 
+// === FUNGSI GENERATE LIVE MENU EMBED ===
+function buildMenuEmbed(menuType, rate) {
+    const embed = new EmbedBuilder().setColor(0x4F4580);
+    const authorIcon = 'https://cdn.discordapp.com/attachments/1500317839507062897/1515115963928940706/iconbot.png?ex=6a2dd533&is=6a2c83b3&hm=747d02971654e0e51f924d09f1ad3737bef4e1bf19ba157a6dd1c397093b9ce0&';
+    embed.setAuthor({ name: 'VibeBlox', iconURL: authorIcon });
+
+    const rx = '<:robux:1497884445494087752>';
+    const arr = '<:arrow:1515113279494684762>';
+    const ver = '<:verified:1502074502228738098>';
+    const rbxVer = '<:roblox:1515111266350399619>';
+    const gift = '<:purplegift:1515114763842097175>';
+
+    if (menuType === 'howtoorder') {
+        embed.setTitle('📢 CARA PEMESANAN (HOW TO ORDER) 📢')
+             .setDescription('Selamat datang di VibeBlox! Silakan ikuti panduan di bawah ini untuk melakukan transaksi.')
+             .addFields(
+                 { name: '🛒 DAFTAR HARGA (PRICELIST)', value: 'Klik tombol di bawah untuk melihat harga sesuai metode:\n• **Robux Via Community**: (Instant, tanpa potongan, wajib join 14 hari)\n• **Robux Via Gamepass**: (Sistem After Tax, terima bersih, pending 5 Hari)\n• **Robux Via Login**: (Robux Instant via login untuk top up, 5-15 menit)\n• **Robux Send Username**: (Robux instant via Roblox Plus, tanpa pending)\n• **Gift In-Game**: (Gift item langsung di dalam server)' },
+                 { name: '📋 LANGKAH-LANGKAH ORDER', value: '1. Tentukan jumlah Robux atau Item dari channel harga.\n2. Buka tiket pembelian kamu.\n3. Beri tahu admin apa yang ingin dibeli.\n4. Selesaikan pembayaran dan kirimkan bukti transfer.\n5. Admin akan memproses pesananmu dengan cepat dan aman! ' + ver }
+             )
+             .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102392457367562/Frame_61.png?ex=6a2dc88f&is=6a2c770f&hm=1a7cd451fef3f7f7e979de69fc2cb9260d3169bd29e40cfc66d53e4a26f9e33d&');
+        return embed;
+    }
+
+    // Kalkulasi kelipatan
+    const m = [100, 500, 1000, 2000, 5000, 10000];
+    let priceList = '';
+
+    if (menuType === 'vilog') {
+        const mv = [500, 1000, 1500, 2000, 5000, 10000];
+        priceList = `**Rate: Rp ${formatRupiah(rate)} / 500 Robux**\n`;
+        mv.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah((val/500)*rate)}\n`);
+        priceList += `\n*Note: Minimal pembelian 500 Robux.*`;
+        
+        embed.setTitle('📢 PRICE LIST VIA LOGIN (INSTANT) 📢')
+             .setDescription(`**100% Aman, Clean & Anti-CC** ${ver}\nTop-up Robux langsung masuk tanpa pending. Proses dijamin **100% Legal dan Anti-Phising**. Keamanan privasi kamu adalah prioritas mutlak kami; setelah proses pengisian selesai, **akun akan otomatis di-logout** dari perangkat admin.\n\n${priceList}`)
+             .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102338266955947/Frame_59.png?ex=6a2dc882&is=6a2c7702&hm=0b73e82c385053de2830cbfa93379cdc67e87fdd6e650130377f99e5bb4b28df&');
+
+    } else if (menuType === 'community') {
+        priceList = `**Rate: Rp ${rate} / 1 Robux**\n`;
+        m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
+        
+        embed.setTitle('📢 PRICE LIST VIA PAYOUT COMMUNITY (INSTANT) 📢')
+             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Link Grup Komunitas:**\nKomunitas 1:\n[BEJIRLAH Community](https://www.roblox.com/communities/1064667246/BEJIRLAH-Community)\n\nKomunitas 2:\n[Vandamoy](https://www.roblox.com/id/communities/1108229986/Vandamoy)\n\n${priceList}`)
+             .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102402657915081/Frame_57.png?ex=6a2dc892&is=6a2c7712&hm=59ff55fdb78d365538f8464c291d309c1be584876ee2ff194d350935245ee954&');
+
+    } else if (menuType === 'gamepass_after') {
+        priceList = `**Rate: Rp ${rate} / 1 Robux**\n`;
+        m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
+        
+        embed.setTitle('📢 PRICE LIST VIA GAMEPASS (AFTER TAX) 📢')
+             .setDescription(`**Jaminan Terima Bersih & 100% Legal** ${ver}\nPembelian Robux melalui sistem pembuatan Gamepass. Kami **HANYA menjual sistem After Tax (Terima Bersih)**, artinya nominal di bawah adalah **jumlah mutlak yang pasti masuk** ke saldo kamu (Pajakan 30% sepenuhnya kami yang tanggung). Estimasi Robux cair dari status pending adalah **5 Hari (120 Jam)**.\n\n${priceList}`)
+             .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102379018551316/Frame_58.png?ex=6a2dc88c&is=6a2c770c&hm=71eeb3d6c2ce1f64c4e47ab8e6f56bbbc2e2fc4948d6f004788e47befda1914f&');
+
+    } else if (menuType === 'robux_plus') {
+        priceList = `**Rate: Rp ${rate} / 1 Robux**\n`;
+        m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
+        
+        embed.setTitle('📢 PRICE LIST VIA SEND USERNAME 📢')
+             .setDescription(`**Instant & Cepat via Roblox Plus** ${ver}\nRobux dikirim secara instant tanpa pending. Kamu hanya perlu memberikan username Roblox kamu, dan kami akan mengirimkan Robux-nya menggunakan fitur Roblox Plus dengan aman.\n\n${priceList}`)
+             .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102366720852028/Frame_62.png?ex=6a2dc889&is=6a2c7709&hm=b00a59ff9fd0fdcb73d69a10188c0e37f41841f4ac4d7d7db7820f5a61362925&');
+
+    } else if (menuType === 'gig') {
+        priceList = `**Rate: Rp ${rate} / 1 Robux**\n`;
+        m.forEach(val => priceList += `${val} ${gift} ${arr} Rp ${formatRupiah(val*rate)}\n`);
+        
+        embed.setTitle('📢 PRICE LIST GIFT IN-GAME (ITEM) 📢')
+             .setDescription(`**Harga Item Termurah Untuk Semua Map & Game Roblox** ${ver}\nPembelian item langsung di dalam server game dengan harga **jauh lebih murah**. Metode ini **berlaku untuk SELURUH map & game di Roblox** yang memiliki fitur "Gift" item. Admin akan join ke server kamu dan membelikan item sesuai nominal pesanan.\n\n${priceList}\n\n**Custom nominal? Tinggal tanya admin aja!** ✅`)
+             .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102352980443347/Frame_60.png?ex=6a2dc886&is=6a2c7706&hm=a23232198e220f01660e3affc176796a2ce61536238978eb3d1c14efbbbd9017&');
+    }
+
+    return embed;
+}
+
 // =============================================================
 // === DEBOUNCE LEADERBOARD UPDATE (HEMAT RAM & API CALLS) =====
 // =============================================================
@@ -188,6 +261,23 @@ const slashCommands = [
                 ]
             },
             { name: 'amount', description: 'Jumlah Robux', type: 4, required: true }
+        ]
+    },
+    // ... command invoice sebelumnya ...
+    {
+        name: 'postmenu', description: 'Posting Live Menu Pricelist',
+        options: [
+            {
+                name: 'type', description: 'Pilih tipe menu yang mau dipost', type: 3, required: true,
+                choices: [
+                    { name: 'Community Payout', value: 'community' },
+                    { name: 'Gamepass', value: 'gamepass_after' },
+                    { name: 'Via Login (Vilog)', value: 'vilog' },
+                    { name: 'Send Username', value: 'robux_plus' },
+                    { name: 'Gift In Game', value: 'gig' },
+                    { name: 'How To Order', value: 'howtoorder' }
+                ]
+            }
         ]
     }
 ];
@@ -711,6 +801,67 @@ client.on('interactionCreate', async (interaction) => {
 
     const command = interaction.commandName;
 
+    // --- POST MENU LIVE STORE ---
+    if (command === 'postmenu') {
+        const allowedRolesMenu = ['1489612423521374309', '1489612221544665231'];
+        const hasRoleMenu = interaction.member.roles.cache.some(role => allowedRolesMenu.includes(role.id));
+        if (!hasRoleMenu) {
+            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa post menu.', flags: MessageFlags.Ephemeral });
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const typeMenu = interaction.options.getString('type');
+
+        let rate = 0;
+        if (typeMenu !== 'howtoorder') {
+            const rateData = await RobuxRate.findOne({ type: typeMenu }).lean();
+            if (!rateData) return interaction.editReply({ content: `❌ Rate untuk ${typeMenu} belum diatur di database.` });
+            rate = rateData.rate;
+        }
+
+        const embedMenu = buildMenuEmbed(typeMenu, rate);
+        let componentsRow = [];
+
+        // Buat Button Sesuai Tipe (Tanpa perlu logic interaction krn berupa LINK)
+        if (typeMenu === 'howtoorder') {
+            const rbxE = '<:robux:1497884445494087752>';
+            const giftE = '<:purplegift:1515114763842097175>';
+            const row1 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setLabel('Robux Community').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894547852398602'),
+                new ButtonBuilder().setLabel('Robux Vilog').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894800735240202'),
+                new ButtonBuilder().setLabel('Robux Gamepass').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894587673247774')
+            );
+            const row2 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setLabel('Robux Send Usn').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1490174072649416868'),
+                new ButtonBuilder().setLabel('Gift In-Game').setEmoji(giftE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894888446660739'),
+                new ButtonBuilder().setLabel('Stock Update').setEmoji('📦').setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1490149401254166618')
+            );
+            componentsRow = [row1, row2];
+        } else {
+            // Button Buy Robux Seragam (kecuali GIG beda channel kalo lu mau, tp prompt blg channelnya sama kek community)
+            const btnEmoji = typeMenu === 'gig' ? '<:purplegift:1515114763842097175>' : '<:robux:1497884445494087752>';
+            componentsRow = [new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setLabel('Buy Robux').setEmoji(btnEmoji).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488896466167795722')
+            )];
+        }
+
+        const sentMsg = await interaction.channel.send({ embeds: [embedMenu], components: componentsRow });
+
+        // Catat ke DB agar bisa diupdate otomatis
+        let storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' });
+        if (!storeData) storeData = new Store({ storeId: 'VIBEBLOX_FINANCE' });
+        
+        // Bersihkan data lama jika ada yang rusak
+        if (!storeData.menuMessages) storeData.menuMessages = [];
+        storeData.menuMessages.push({ channelId: interaction.channel.id, messageId: sentMsg.id, type: typeMenu });
+        
+        // Simpan menggunakan markModified karena tipe datanya Array
+        storeData.markModified('menuMessages');
+        await storeData.save();
+
+        return interaction.editReply({ content: '✅ Live Menu berhasil diposting!' });
+    }
+    
     // --- SETUP BOARD ---
     if (command === 'setupboard') {
         if (!interaction.member.permissions.has('Administrator')) {
@@ -984,62 +1135,63 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // --- HARGA ROBUX (UPDATE RATE) ---
+// --- HARGA ROBUX (UPDATE RATE & AUTO SYNC MENU) ---
     if (command === 'hargarobux') {
         const allowedRolesHarga = ['1489612423521374309', '1489612221544665231'];
         const hasRoleHarga = interaction.member.roles.cache.some(role => allowedRolesHarga.includes(role.id));
-        if (!hasRoleHarga) {
-            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
-        }
-
+        if (!hasRoleHarga) return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+        
         await interaction.deferReply();
 
         const type = interaction.options.getString('type');
         const newRate = interaction.options.getInteger('rate');
+        if (newRate <= 0) return interaction.editReply({ content: '❌ Rate harus lebih dari 0!' });
 
-        if (newRate <= 0) {
-            return interaction.editReply({ content: '❌ Rate harus lebih dari 0!' });
-        }
-
-        const typeNames = {
-            'community': 'Community',
-            'gamepass_after': 'Gamepass After',
-            'gamepass_before': 'Gamepass Before',
-            'gig': 'GIG',
-            'vilog': 'Vilog',
-            'robux_plus': 'Robux Plus'
-        };
-
-        // Ambil rate lama
+        const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
+        
         const oldData = await RobuxRate.findOne({ type }).lean();
         const oldRate = oldData ? oldData.rate : 0;
 
-        // Update rate
-        await RobuxRate.findOneAndUpdate(
-            { type },
-            { rate: newRate },
-            { upsert: true }
-        );
+        await RobuxRate.findOneAndUpdate({ type }, { rate: newRate }, { upsert: true });
 
-        let rateDescription = '';
-        if (type === 'vilog') {
-            rateDescription = `Rp ${formatRupiah(oldRate)} → **Rp ${formatRupiah(newRate)}** /500 Robux`;
-        } else {
-            rateDescription = `Rp ${formatRupiah(oldRate)} → **Rp ${formatRupiah(newRate)}** /1 Robux`;
+        // --- SISTEM AUTO UPDATE LIVE MENU (EVENT-DRIVEN: 0 BEBAN SERVER) ---
+        let storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' });
+        let updatedCount = 0;
+
+        if (storeData && storeData.menuMessages && storeData.menuMessages.length > 0) {
+            const validMessages = [];
+            // Looping tanpa Promise.all agar RAM 256MB Alwaysdata tetap stabil
+            for (const menu of storeData.menuMessages) {
+                if (menu.type === type) {
+                    try {
+                        const channel = await client.channels.fetch(menu.channelId);
+                        const msg = await channel.messages.fetch(menu.messageId);
+                        
+                        const newEmbed = buildMenuEmbed(type, newRate);
+                        await msg.edit({ embeds: [newEmbed] });
+                        
+                        updatedCount++;
+                        validMessages.push(menu); // Simpan yang berhasil diedit
+                    } catch (e) {
+                        // Jika pesan dihapus manual di Discord, abaikan dan jangan dimasukkan ke array valid (Auto Clean-up)
+                    }
+                } else {
+                    validMessages.push(menu); // Simpan menu tipe lain
+                }
+            }
+            
+            // Perbarui array di database agar tidak menumpuk error message
+            storeData.menuMessages = validMessages;
+            storeData.markModified('menuMessages');
+            await storeData.save();
         }
 
-        const updateEmbed = new EmbedBuilder()
-            .setColor(0x57F287)
-            .setTitle('✅ Rate Harga Robux Diperbarui!')
-            .addFields(
-                { name: '📦 Tipe', value: `**${typeNames[type]}**`, inline: true },
-                { name: '💱 Perubahan Rate', value: rateDescription, inline: false }
-            )
-            .setFooter({ text: 'VibeBlox Rate Manager' })
-            .setTimestamp();
+        let rateDescription = type === 'vilog' ? `Rp ${formatRupiah(oldRate)} → **Rp ${formatRupiah(newRate)}** /500 Robux` : `Rp ${formatRupiah(oldRate)} → **Rp ${formatRupiah(newRate)}** /1 Robux`;
 
+        const updateEmbed = new EmbedBuilder().setColor(0x57F287).setTitle('✅ Rate Harga Robux Diperbarui!').addFields({ name: '📦 Tipe', value: `**${typeNames[type]}**`, inline: true }, { name: '💱 Perubahan Rate', value: rateDescription, inline: false }, { name: '🔄 Live Menu Sync', value: `Berhasil mengupdate **${updatedCount}** post menu di server.`, inline: false }).setFooter({ text: 'VibeBlox Rate Manager' }).setTimestamp();
+        
         return interaction.editReply({ embeds: [updateEmbed] });
     }
-
     // --- INVOICE ---
     if (command === 'invoice') {
         const allowedRolesInvoice = ['1489612423521374309', '1489612221544665231'];
