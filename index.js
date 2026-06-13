@@ -826,21 +826,25 @@ client.on('interactionCreate', async (interaction) => {
                     if (financeChannel) await financeChannel.send({ embeds: [historyEmbed] });
                 } catch (e) { console.error("Gagal kirim ke store-finance:", e.message); }
 
-                // 4) GENERATE & KIRIM PESAN AUTO-VOUCH (UI/UX Mobile Friendly)
+                // 4) GENERATE & KIRIM PESAN AUTO-VOUCH (UI/UX Mobile Friendly Menggunakan Embed)
                 const vouchDesc = vouchDescriptions[typeValue] || 'Robux';
                 const vouchTemplate = `+vouch robux <@${adminUserId}> ${amountRobux} ${vouchDesc}`;
 
-                // Pesan instruksi pertama + mention
-                await interaction.channel.send({
-                    content: `📱 **Pengguna HP:** Tekan dan tahan (long-press) kotak teks di bawah ini lalu pilih 'Copy Text'.\n💻 **Pengguna PC:** Klik ikon copy di pojok kanan atas kotak teks.\n\nSetelah di-copy, silakan paste ke channel https://discord.com/channels/1488782135887401104/1488903383963406507\n<@${targetUserId}>`
-                });
+                const autoVouchEmbed = new EmbedBuilder()
+                    .setColor(0x57F287)
+                    .setTitle('📝 Terima Kasih Telah Berbelanja!')
+                    .setDescription(`Bantu toko kami dengan memberikan testimoni di channel <#1488903383963406507> ya!\n\n**📱 Pengguna HP:** Tekan dan tahan (*long-press*) teks di dalam kotak bawah ini lalu pilih **'Copy Text'**.\n**💻 Pengguna PC:** Blok teks di bawah lalu tekan **CTRL+C**.\n\n👇 **Teks Vouch:**`)
+                    .addFields(
+                        // Value di bawah sengaja DIBIARKAN POLOS tanpa tebal (**) atau backtick (```) agar bersih saat di-copy di HP
+                        { name: '\u200B', value: vouchTemplate, inline: false } 
+                    )
+                    .setFooter({ text: 'VibeBlox Auto-Vouch' })
+                    .setTimestamp();
 
-                // Pesan kedua berisi Code Block (hanya text vouch murni agar mudah dicopy)
-                await interaction.channel.send({
-                    content: `\`\`\`\n${vouchTemplate}\n\`\`\``
-                });
+                // Mengirim 1 Embed utuh tanpa mention (tag) pembeli
+                await interaction.channel.send({ embeds: [autoVouchEmbed] });
 
-                // Hapus pesan ephemeral loading
+                // Update pesan ephemeral admin
                 await interaction.editReply({ content: '✅ Invoice selesai! Pencatatan dan Auto-Vouch berhasil diproses.' });
 
             } catch (err) {
