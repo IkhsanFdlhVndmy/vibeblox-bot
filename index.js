@@ -826,20 +826,20 @@ client.on('interactionCreate', async (interaction) => {
                     if (financeChannel) await financeChannel.send({ embeds: [historyEmbed] });
                 } catch (e) { console.error("Gagal kirim ke store-finance:", e.message); }
 
-                // 4) GENERATE & KIRIM PESAN AUTO-VOUCH (UI/UX Mobile Friendly Menggunakan Embed)
+               // 4) GENERATE & KIRIM PESAN AUTO-VOUCH (UI/UX Mobile Friendly Menggunakan Embed)
+                const separator = '──────────────────────────────';
                 const vouchDesc = vouchDescriptions[typeValue] || 'Robux';
                 const vouchTemplate = `+vouch robux <@${adminUserId}> ${amountRobux} ${vouchDesc}`;
 
                 const autoVouchEmbed = new EmbedBuilder()
                     .setColor(0x57F287)
-                    .setTitle('📝 Terima Kasih Telah Berbelanja!')
-                    .setDescription(`Bantu toko kami dengan memberikan testimoni di channel <#1488903383963406507> ya!\n\n**📱 Pengguna HP:** Tekan dan tahan (*long-press*) teks di dalam kotak bawah ini lalu pilih **'Copy Text'**.\n**💻 Pengguna PC:** Blok teks di bawah lalu tekan **CTRL+C**.\n\n👇 **Teks Vouch:**`)
+                    .setTitle('📝 Terimakasih Telah Berbelanja!')
+                    .setDescription(`Kirim Teks Vouch Ke Channel <#1488903383963406507> ya!\n${separator}\n**📱 Pengguna HP:** Tekan dan tahan teks vouch di paling bawah. \n**💻 Pengguna PC:** Blok teks paling bawah lalu tekan **CTRL+C**.\n${separator}`)
                     .addFields(
-                        // Value di bawah sengaja DIBIARKAN POLOS tanpa tebal (**) atau backtick (```) agar bersih saat di-copy di HP
-                        { name: '\u200B', value: vouchTemplate, inline: false } 
+                        // Field Name diisi teks agar Discord memberikan jarak/padding otomatis. 
+                        // Field Value dibiarkan 100% murni tanpa markdown agar saat dicopy bersih.
+                        { name: '**👇 SALIN TEKS VOUCH DI BAWAH INI:**', value: vouchTemplate, inline: false } 
                     )
-                    .setFooter({ text: 'VibeBlox Auto-Vouch' })
-                    .setTimestamp();
 
                 // Mengirim 1 Embed utuh tanpa mention (tag) pembeli
                 await interaction.channel.send({ embeds: [autoVouchEmbed] });
