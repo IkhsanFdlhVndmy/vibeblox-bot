@@ -834,7 +834,7 @@ client.on('interactionCreate', async (interaction) => {
                 const autoVouchEmbed = new EmbedBuilder()
                     .setColor(0x57F287)
                     .setTitle('📝 Terimakasih Telah Berbelanja!')
-                    .setDescription(`Kirim Teks Vouch Ke Channel <#1488903383963406507> ya!\n${separator}\n**📱 Pengguna HP:** Tekan dan tahan teks vouch di paling bawah. \n**💻 Pengguna PC:** Blok teks paling bawah lalu tekan **CTRL+C**.\n${separator}`)
+                    .setDescription(`Silahkan Kirim Teks Vouch dibawah ini Ke Channel <#1488903383963406507> ya!\n${separator}\n**📱 Pengguna HP:** Tekan dan tahan teks vouch di paling bawah. \n**💻 Pengguna PC:** Blok teks paling bawah lalu tekan **CTRL+C**.\n${separator}`)
                     .addFields(
                         // Field Name diisi teks agar Discord memberikan jarak/padding otomatis. 
                         // Field Value dibiarkan 100% murni tanpa markdown agar saat dicopy bersih.
