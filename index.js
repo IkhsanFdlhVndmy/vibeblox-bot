@@ -121,17 +121,17 @@ if (menuType === 'howtoorder') {
     } else if (menuType === 'robux_plus') {
         priceList = `**Rate: Rp ${rate} / 1 Robux**\n`;
         m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
-        
+            
         embed.setTitle(`${ann} PRICE LIST VIA SEND USERNAME`)
              .setDescription(`**Instant & Cepat via Roblox Plus** ${ver}\nRobux dikirim secara instant tanpa pending. Kamu hanya perlu memberikan username Roblox kamu, dan kami akan mengirimkan Robux-nya menggunakan fitur Roblox Plus dengan aman.\n\n${priceList}`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102366720852028/Frame_62.png?ex=6a2dc889&is=6a2c7709&hm=b00a59ff9fd0fdcb73d69a10188c0e37f41841f4ac4d7d7db7820f5a61362925&');
 
     } else if (menuType === 'gig') {
         priceList = `**Rate: Rp ${rate} / 1 Robux**\n`;
-        m.forEach(val => priceList += `${val} ${gift} ${arr} Rp ${formatRupiah(val*rate)}\n`);
+        m.forEach(val => priceList += `${val} Robux ${gift} ${arr} Rp ${formatRupiah(val*rate)}\n`);
         
         embed.setTitle(`${ann} PRICE LIST GIFT IN-GAME (ITEM)`)
-             .setDescription(`**Harga Item Termurah Untuk Semua Map & Game Roblox** ${ver}\nPembelian item langsung di dalam server game dengan harga **jauh lebih murah**. Metode ini **berlaku untuk SELURUH map & game di Roblox** yang memiliki fitur "Gift" item. Admin akan join ke server kamu dan membelikan item sesuai nominal pesanan.\n\n${priceList}\n\n**Custom nominal? Tinggal tanya admin aja!** ✅`)
+             .setDescription(`**Harga Item Termurah Untuk Semua Map & Game Roblox** ${ver}\nPembelian item langsung di dalam server game dengan harga **jauh lebih murah**. Metode ini **berlaku untuk SELURUH map & game di Roblox** yang memiliki fitur "Gift" item. Admin akan join ke server kamu dan membelikan item sesuai nominal pesanan.\n\n${priceList}\n**Custom nominal? Tinggal tanya admin aja!** ✅`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102352980443347/Frame_60.png?ex=6a2dc886&is=6a2c7706&hm=a23232198e220f01660e3affc176796a2ce61536238978eb3d1c14efbbbd9017&');
     }
 
