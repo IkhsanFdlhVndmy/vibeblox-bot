@@ -82,9 +82,9 @@ function buildMenuEmbed(menuType, rate) {
     // Garis pembatas elegan untuk spacing
     const separator = '──────────────────────────────';
 
-    if (menuType === 'howtoorder') {
+if (menuType === 'howtoorder') {
         embed.setTitle(`${ann} CARA PEMESANAN (HOW TO ORDER)`)
-             .setDescription(`Selamat datang di VibeBlox! Silakan ikuti panduan di bawah ini untuk melakukan transaksi.\n\n${separator}\n\n**🛒 DAFTAR HARGA (PRICELIST)**\nKlik tombol di bawah untuk melihat harga sesuai metode:\n• **Robux Via Community**: (Instant, tanpa potongan, wajib join 14 hari)\n• **Robux Via Gamepass**: (Sistem After Tax, terima bersih, pending 5 Hari)\n• **Robux Via Login**: (Robux Instant via login untuk top up, 5-15 menit)\n• **Robux Send Username**: (Robux instant via Roblox Plus, tanpa pending)\n• **Gift In-Game**: (Gift item langsung di dalam server)\n\n${separator}\n\n**📋 LANGKAH-LANGKAH ORDER**\n1. Tentukan jumlah Robux atau Item dari channel harga.\n2. Buka tiket pembelian kamu.\n3. Beri tahu admin apa yang ingin dibeli.\n4. Selesaikan pembayaran dan kirimkan bukti transfer.\n5. Admin akan memproses pesananmu dengan cepat dan aman! ${ver}`)
+             .setDescription(`Selamat datang di VibeBlox! Silakan ikuti panduan di bawah ini untuk melakukan transaksi.\n\n${separator}\n\n**🛒 DAFTAR HARGA (PRICELIST)**\nKlik tombol di bawah untuk melihat harga sesuai metode:\n• **Robux Via Community**: (Instant, tanpa potongan, wajib join 14 hari)\n• **Robux Via Gamepass**: (Sistem After Tax, terima bersih, pending 5 Hari)\n• **Robux Via Login**: (Robux Instant via login untuk top up, 5-15 menit)\n• **Robux Send Username**: (Robux instant via Send Username, tanpa pending)\n• **Gift In-Game**: (Gift item langsung di dalam Map)\n\n${separator}\n\n**📋 LANGKAH-LANGKAH ORDER**\n1. Tentukan jumlah Robux atau Item dari channel harga.\n2. Buka tiket pembelian kamu.\n3. Beri tahu admin apa yang ingin dibeli.\n4. Selesaikan pembayaran dan kirimkan bukti transfer.\n5. Admin akan memproses pesananmu dengan cepat dan aman! ${ver}`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102392457367562/Frame_61.png?ex=6a2dc88f&is=6a2c770f&hm=1a7cd451fef3f7f7e979de69fc2cb9260d3169bd29e40cfc66d53e4a26f9e33d&');
         return embed;
     }
@@ -99,7 +99,7 @@ function buildMenuEmbed(menuType, rate) {
         priceList += `\n*Note: Minimal pembelian 500 Robux.*`;
         
         embed.setTitle(`${ann} PRICE LIST VIA LOGIN (INSTANT)`)
-             .setDescription(`**100% Aman, Clean & Anti-CC** ${ver}\nTop-up Robux langsung masuk tanpa pending. Proses dijamin **100% Legal dan Anti-Phising**. Keamanan privasi kamu adalah prioritas mutlak kami; setelah proses pengisian selesai, **akun akan otomatis di-logout** dari perangkat admin.\n\n${separator}\n\n${priceList}`)
+             .setDescription(`**100% Aman, Clean & Anti-CC** ${ver}\nTop-up Robux langsung masuk tanpa pending. Proses dijamin **100% Legal dan Anti-Phising**. Keamanan privasi kamu adalah prioritas mutlak kami; setelah proses pengisian selesai, **akun akan otomatis di-logout** dari perangkat admin.\n\n${priceList}`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102338266955947/Frame_59.png?ex=6a2dc882&is=6a2c7702&hm=0b73e82c385053de2830cbfa93379cdc67e87fdd6e650130377f99e5bb4b28df&');
 
     } else if (menuType === 'community') {
@@ -107,7 +107,7 @@ function buildMenuEmbed(menuType, rate) {
         m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
         
         embed.setTitle(`${ann} PRICE LIST VIA PAYOUT COMMUNITY (INSTANT)`)
-             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n${separator}\n\n**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\n${separator}\n\n${priceList}`)
+             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\n${priceList}`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102402657915081/Frame_57.png?ex=6a2dc892&is=6a2c7712&hm=59ff55fdb78d365538f8464c291d309c1be584876ee2ff194d350935245ee954&');
 
     } else if (menuType === 'gamepass_after') {
@@ -115,7 +115,7 @@ function buildMenuEmbed(menuType, rate) {
         m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
         
         embed.setTitle(`${ann} PRICE LIST VIA GAMEPASS (AFTER TAX)`)
-             .setDescription(`**Jaminan Terima Bersih & 100% Legal** ${ver}\nPembelian Robux melalui sistem pembuatan Gamepass. Kami **HANYA menjual sistem After Tax (Terima Bersih)**, artinya nominal di bawah adalah **jumlah mutlak yang pasti masuk** ke saldo kamu (Pajakan 30% sepenuhnya kami yang tanggung). Estimasi Robux cair dari status pending adalah **5 Hari (120 Jam)**.\n\n${separator}\n\n${priceList}`)
+             .setDescription(`**Jaminan Terima Bersih & 100% Legal** ${ver}\nPembelian Robux melalui sistem pembuatan Gamepass. Kami **HANYA menjual sistem After Tax (Terima Bersih)**, artinya nominal di bawah adalah **jumlah mutlak yang pasti masuk** ke saldo kamu (Pajakan 30% sepenuhnya kami yang tanggung). Estimasi Robux cair dari status pending adalah **5 Hari (120 Jam)**.\n\n${priceList}`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102379018551316/Frame_58.png?ex=6a2dc88c&is=6a2c770c&hm=71eeb3d6c2ce1f64c4e47ab8e6f56bbbc2e2fc4948d6f004788e47befda1914f&');
 
     } else if (menuType === 'robux_plus') {
@@ -123,7 +123,7 @@ function buildMenuEmbed(menuType, rate) {
         m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
         
         embed.setTitle(`${ann} PRICE LIST VIA SEND USERNAME`)
-             .setDescription(`**Instant & Cepat via Roblox Plus** ${ver}\nRobux dikirim secara instant tanpa pending. Kamu hanya perlu memberikan username Roblox kamu, dan kami akan mengirimkan Robux-nya menggunakan fitur Roblox Plus dengan aman.\n\n${separator}\n\n${priceList}`)
+             .setDescription(`**Instant & Cepat via Roblox Plus** ${ver}\nRobux dikirim secara instant tanpa pending. Kamu hanya perlu memberikan username Roblox kamu, dan kami akan mengirimkan Robux-nya menggunakan fitur Roblox Plus dengan aman.\n\n${priceList}`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102366720852028/Frame_62.png?ex=6a2dc889&is=6a2c7709&hm=b00a59ff9fd0fdcb73d69a10188c0e37f41841f4ac4d7d7db7820f5a61362925&');
 
     } else if (menuType === 'gig') {
@@ -131,7 +131,7 @@ function buildMenuEmbed(menuType, rate) {
         m.forEach(val => priceList += `${val} ${gift} ${arr} Rp ${formatRupiah(val*rate)}\n`);
         
         embed.setTitle(`${ann} PRICE LIST GIFT IN-GAME (ITEM)`)
-             .setDescription(`**Harga Item Termurah Untuk Semua Map & Game Roblox** ${ver}\nPembelian item langsung di dalam server game dengan harga **jauh lebih murah**. Metode ini **berlaku untuk SELURUH map & game di Roblox** yang memiliki fitur "Gift" item. Admin akan join ke server kamu dan membelikan item sesuai nominal pesanan.\n\n${separator}\n\n${priceList}\n\n**Custom nominal? Tinggal tanya admin aja!** ✅`)
+             .setDescription(`**Harga Item Termurah Untuk Semua Map & Game Roblox** ${ver}\nPembelian item langsung di dalam server game dengan harga **jauh lebih murah**. Metode ini **berlaku untuk SELURUH map & game di Roblox** yang memiliki fitur "Gift" item. Admin akan join ke server kamu dan membelikan item sesuai nominal pesanan.\n\n${priceList}\n\n**Custom nominal? Tinggal tanya admin aja!** ✅`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102352980443347/Frame_60.png?ex=6a2dc886&is=6a2c7706&hm=a23232198e220f01660e3affc176796a2ce61536238978eb3d1c14efbbbd9017&');
     }
 
