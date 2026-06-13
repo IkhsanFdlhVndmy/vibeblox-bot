@@ -482,16 +482,19 @@ client.on('interactionCreate', async (interaction) => {
         return;
     }
 
-    // ----- INVOICE BUTTONS -----
+// ----- INVOICE BUTTONS -----
     if (interaction.isButton() && interaction.customId.startsWith('inv_')) {
         const allowedRolesInv = ['1489612423521374309', '1489612221544665231'];
         const hasRoleInv = interaction.member.roles.cache.some(role => allowedRolesInv.includes(role.id));
-        if (!hasRoleInv) {
-            return interaction.reply({ content: '❌ Hanya Owner dan Handler yang bisa memencet tombol ini.', flags: MessageFlags.Ephemeral });
-        }
-
+        
         const parts = interaction.customId.split('_');
         const action = parts[1]; // cancel, bca, qris, dana, gopay, done
+        const invoiceMsgId = parts[2];
+
+        // --- HANYA ADMIN/HANDLER YANG BISA CANCEL & DONE ---
+        if ((action === 'cancel' || action === 'done') && !hasRoleInv) {
+            return interaction.reply({ content: '❌ Hanya Owner dan Handler yang bisa menekan tombol ini.', flags: MessageFlags.Ephemeral });
+        }
 
         // --- CANCEL: hapus pesan invoice ---
         if (action === 'cancel') {
@@ -500,32 +503,55 @@ client.on('interactionCreate', async (interaction) => {
             return;
         }
 
-        // --- PAYMENT BUTTONS: tampilkan embed metode pembayaran ---
-        if (action === 'bca') {
-            const embed = new EmbedBuilder().setColor(0x003D79).setTitle('🏦 Transfer Bank BCA VibeBlox')
-                .addFields({ name: '👤 Atas Nama', value: '**Angel Vinny Vincentia Pelawi**' }, { name: '🔢 No. Rekening', value: '**8205363625**' }, { name: '🏦 Bank', value: '**BCA**' })
-                .setFooter({ text: 'VibeBlox Payment' }).setTimestamp();
-            return interaction.reply({ embeds: [embed] });
+        // --- PAYMENT BUTTONS (SEMUA ORANG BISA KLIK, LALU DISABLE TOMBOLNYA ANTI SPAM) ---
+        if (['bca', 'qris', 'dana', 'gopay'].includes(action)) {
+            // Cek apakah tombol ini udah di-handle (Anti-spam/Interaction Failed Guard)
+            if (isUpdating.has(interaction.message.id)) {
+                return interaction.reply({ content: '⏳ Mohon tunggu, metode sedang dimuat...', flags: MessageFlags.Ephemeral });
+            }
+            isUpdating.add(interaction.message.id);
+
+            // 1) Segera berikan response deferUpdate() agar API Discord tidak timeout (menghindari interaction failed)
+            await interaction.deferUpdate();
+
+            try {
+                // 2) Tampilkan embed metode pembayarannya di bawah invoice
+                const embedPay = new EmbedBuilder().setTimestamp();
+                if (action === 'bca') {
+                    embedPay.setColor(0x003D79).setTitle('🏦 Transfer Bank BCA VibeBlox').addFields({ name: '👤 Atas Nama', value: '**Angel Vinny Vincentia Pelawi**' }, { name: '🔢 No. Rekening', value: '**8205363625**' }, { name: '🏦 Bank', value: '**BCA**' }).setFooter({ text: 'VibeBlox Payment' });
+                } else if (action === 'qris') {
+                    embedPay.setColor(0x4F4580).setTitle('💳 Pembayaran QRIS VibeBlox').setDescription('Silakan scan QRIS di bawah ini untuk melakukan pembayaran.').setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1500317889872269324/1777300289337-1.png?ex=6a1c40ab&is=6a1aef2b&hm=be36eb1b73fd7c0448b6e5b989cac3eb5a15bd6cc88caefec52c55704cb534b6&').setFooter({ text: 'VibeBlox Payment' });
+                } else if (action === 'dana') {
+                    embedPay.setColor(0x108EE9).setTitle('💙 Pembayaran Dana VibeBlox').addFields({ name: '👤 Atas Nama', value: '**Muhammad Ikhsan Fadillah**' }, { name: '📱 Nomor Dana', value: '**08119931329**' }, { name: '💳 Platform', value: '**Dana**' }).setFooter({ text: 'VibeBlox Payment' });
+                } else if (action === 'gopay') {
+                    embedPay.setColor(0x00AED6).setTitle('💚 Pembayaran GoPay VibeBlox').addFields({ name: '👤 Atas Nama', value: '**Muhammad Ikhsan Fadillah**' }, { name: '📱 Nomor GoPay', value: '**08119931329**' }, { name: '💳 Platform', value: '**GoPay**' }).setFooter({ text: 'VibeBlox Payment' });
+                }
+
+                await interaction.followUp({ embeds: [embedPay] });
+
+                // 3) Edit pesan utama (Invoice) untuk men-disable tombol yang baru saja dipencet
+                const newComponents = interaction.message.components.map(row => {
+                    const newRow = ActionRowBuilder.from(row);
+                    newRow.components.forEach(btn => {
+                        // Jika custom ID tombol sama dengan yang baru saja dipencet, matikan tombolnya
+                        if (btn.data.custom_id === interaction.customId) {
+                            btn.setDisabled(true);
+                        }
+                    });
+                    return newRow;
+                });
+
+                await interaction.message.edit({ components: newComponents });
+            } catch (err) {
+                console.error("Payment button error:", err);
+            } finally {
+                // Lepas lock anti-spam setelah selesai proses
+                isUpdating.delete(interaction.message.id);
+            }
+            return;
         }
-        if (action === 'qris') {
-            const embed = new EmbedBuilder().setColor(0x4F4580).setTitle('💳 Pembayaran QRIS VibeBlox')
-                .setDescription('Silakan scan QRIS di bawah ini untuk melakukan pembayaran.')
-                .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1500317889872269324/1777300289337-1.png?ex=6a1c40ab&is=6a1aef2b&hm=be36eb1b73fd7c0448b6e5b989cac3eb5a15bd6cc88caefec52c55704cb534b6&')
-                .setFooter({ text: 'VibeBlox Payment' }).setTimestamp();
-            return interaction.reply({ embeds: [embed] });
-        }
-        if (action === 'dana') {
-            const embed = new EmbedBuilder().setColor(0x108EE9).setTitle('💙 Pembayaran Dana VibeBlox')
-                .addFields({ name: '👤 Atas Nama', value: '**Muhammad Ikhsan Fadillah**' }, { name: '📱 Nomor Dana', value: '**08119931329**' }, { name: '💳 Platform', value: '**Dana**' })
-                .setFooter({ text: 'VibeBlox Payment' }).setTimestamp();
-            return interaction.reply({ embeds: [embed] });
-        }
-        if (action === 'gopay') {
-            const embed = new EmbedBuilder().setColor(0x00AED6).setTitle('💚 Pembayaran GoPay VibeBlox')
-                .addFields({ name: '👤 Atas Nama', value: '**Muhammad Ikhsan Fadillah**' }, { name: '📱 Nomor GoPay', value: '**08119931329**' }, { name: '💳 Platform', value: '**GoPay**' })
-                .setFooter({ text: 'VibeBlox Payment' }).setTimestamp();
-            return interaction.reply({ embeds: [embed] });
-        }
+
+        // --- DONE: mulai flow ephemeral ---
 
         // --- DONE: mulai flow ephemeral ---
         if (action === 'done') {
@@ -681,7 +707,7 @@ client.on('interactionCreate', async (interaction) => {
             return;
         }
 
-        // --- Konfirmasi: YAKIN ---
+// --- Konfirmasi: YAKIN ---
         if (customId.startsWith('invf_confirm_yes_')) {
             // Parse: invf_confirm_yes_{method}_{typeValue}_{msgId}
             const withoutPrefix = customId.replace('invf_confirm_yes_', '');
@@ -693,16 +719,28 @@ client.on('interactionCreate', async (interaction) => {
             const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
             const methodNames = { 'qris': 'QRIS', 'bca': 'BCA', 'dana': 'Dana', 'gopay': 'GoPay', 'lainnya': 'Lainnya' };
 
-            await interaction.update({ content: '⏳ Memproses...', embeds: [], components: [] });
+            // Mapping keterangan Vouch sesuai Tipe
+            const vouchDescriptions = {
+                'community': 'Robux Payout Instant',
+                'vilog': 'Robux Via Login',
+                'gamepass_after': 'Robux Gamepass After',
+                'gamepass_before': 'Robux Gamepass Before',
+                'gig': 'Robux Gift in-Game',
+                'robux_plus': 'Robux Via Send Username'
+            };
+
+            // SEGERA eksekusi update untuk menghindari Interaction Failed (Ram & CPU friendly)
+            await interaction.update({ content: '⏳ Memproses transaksi & generate vouch...', embeds: [], components: [] });
 
             try {
                 // Fetch invoice message to get data from embed
                 const invoiceMsg = await interaction.channel.messages.fetch(msgIdPart);
                 const invoiceEmbed = invoiceMsg.embeds[0];
 
-                // Parse userId and totalHarga from embed fields
                 let targetUserId = null;
                 let totalHarga = 0;
+                let amountRobux = 0;
+                let adminUserId = interaction.user.id; // Default ID Admin yang klik "Yakin"
 
                 if (invoiceEmbed && invoiceEmbed.fields) {
                     for (const field of invoiceEmbed.fields) {
@@ -710,20 +748,29 @@ client.on('interactionCreate', async (interaction) => {
                             const match = field.value.match(/<@(\d+)>/);
                             if (match) targetUserId = match[1];
                         }
+                        if (field.name.includes('Admin') && field.value.includes('<@')) {
+                            const match = field.value.match(/<@(\d+)>/);
+                            if (match) adminUserId = match[1];
+                        }
                         if (field.name.includes('Total Harga') || field.name.includes('Total Bayar')) {
                             const numMatch = field.value.replace(/[^\d]/g, '');
                             if (numMatch) totalHarga = parseInt(numMatch);
                         }
+                        // Tarik otomatis jumlah Robux
+                        if (field.name.includes('Jumlah Robux')) {
+                            const numMatch = field.value.replace(/[^\d]/g, '');
+                            if (numMatch) amountRobux = parseInt(numMatch);
+                        }
                     }
                 }
 
-                if (!targetUserId || !totalHarga) {
-                    await interaction.editReply({ content: '❌ Gagal membaca data invoice.' });
-                    await reEnableDone();
+                if (!targetUserId || !totalHarga || !amountRobux) {
+                    await interaction.editReply({ content: '❌ Gagal membaca data dari invoice.' });
+                    isUpdating.delete(`inv_done_${msgIdPart}`);
                     return;
                 }
 
-                // Database logic (same as /adduangmasuk)
+                // 1) EKSEKUSI DATABASE SECARA BERURUTAN (Aman untuk 0.25 CPU)
                 let userData = await User.findOne({ userId: targetUserId });
                 if (!userData) userData = new User({ userId: targetUserId });
                 userData.uangMasuk += totalHarga;
@@ -734,17 +781,15 @@ client.on('interactionCreate', async (interaction) => {
                 storeData.totalUangMasuk += totalHarga;
                 await storeData.save();
 
-                // Auto role update
                 const targetMember = await interaction.guild.members.fetch(targetUserId).catch(() => null);
                 await updateSpenderRoles(targetMember, userData);
                 scheduleLiveLeaderboardUpdate();
 
-                // Update invoice embed to green (done)
+                // 2) UBAH WARNA EMBED INVOICE JADI HIJAU (TANDA SELESAI)
                 const doneEmbed = EmbedBuilder.from(invoiceEmbed)
                     .setColor(0x57F287)
                     .setFooter({ text: '✅ Invoice Selesai • VibeBlox' });
 
-                // Disable all buttons
                 const disabledComponents = invoiceMsg.components.map(row => {
                     const newRow = ActionRowBuilder.from(row);
                     newRow.components.forEach(btn => btn.setDisabled(true));
@@ -753,11 +798,10 @@ client.on('interactionCreate', async (interaction) => {
 
                 await invoiceMsg.edit({ embeds: [doneEmbed], components: disabledComponents });
 
-                // Send history to #store-finance
+                // 3) KIRIM LOG KE STORE-FINANCE
                 const financeChannelId = '1489665490770067678';
                 const kategori = `${typeNames[typeValue] || typeValue} - ${methodNames[method] || method}`;
 
-                // Fetch username & display name
                 let pembeliDisplay = `<@${targetUserId}>`;
                 try {
                     const fetched = targetMember || await interaction.guild.members.fetch(targetUserId);
@@ -782,11 +826,40 @@ client.on('interactionCreate', async (interaction) => {
                     if (financeChannel) await financeChannel.send({ embeds: [historyEmbed] });
                 } catch (e) { console.error("Gagal kirim ke store-finance:", e.message); }
 
-                await interaction.editReply({ content: '✅ Invoice selesai! Pencatatan berhasil.' });
+                // 4) GENERATE & KIRIM PESAN AUTO-VOUCH (UI/UX Mobile Friendly)
+                const vouchDesc = vouchDescriptions[typeValue] || 'Robux';
+                const vouchTemplate = `+vouch robux <@${adminUserId}> ${amountRobux} ${vouchDesc}`;
+
+                // Pesan instruksi pertama + mention
+                await interaction.channel.send({
+                    content: `📱 **Pengguna HP:** Tekan dan tahan (long-press) kotak teks di bawah ini lalu pilih 'Copy Text'.\n💻 **Pengguna PC:** Klik ikon copy di pojok kanan atas kotak teks.\n\nSetelah di-copy, silakan paste ke channel https://discord.com/channels/1488782135887401104/1488903383963406507\n<@${targetUserId}>`
+                });
+
+                // Pesan kedua berisi Code Block (hanya text vouch murni agar mudah dicopy)
+                await interaction.channel.send({
+                    content: `\`\`\`\n${vouchTemplate}\n\`\`\``
+                });
+
+                // Hapus pesan ephemeral loading
+                await interaction.editReply({ content: '✅ Invoice selesai! Pencatatan dan Auto-Vouch berhasil diproses.' });
+
             } catch (err) {
                 console.error("Invoice confirm error:", err.message);
                 await interaction.editReply({ content: '❌ Terjadi error saat memproses invoice.' });
-                await reEnableDone();
+                try {
+                    // Coba hidupkan lagi tombol Done jika gagal di tengah jalan
+                    const invoiceMsg = await interaction.channel.messages.fetch(msgIdPart);
+                    const origComponents = invoiceMsg.components.map(row => {
+                        const newRow = ActionRowBuilder.from(row);
+                        newRow.components.forEach(btn => {
+                            if (btn.data.custom_id && btn.data.custom_id.startsWith('inv_done')) {
+                                btn.setDisabled(false).setLabel('✅ Done');
+                            }
+                        });
+                        return newRow;
+                    });
+                    await invoiceMsg.edit({ components: origComponents });
+                } catch(e) {}
             } finally {
                 isUpdating.delete(`inv_done_${msgIdPart}`);
             }
