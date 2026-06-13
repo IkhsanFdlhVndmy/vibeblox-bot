@@ -828,16 +828,16 @@ client.on('interactionCreate', async (interaction) => {
             
             // Dibuat menjadi 3 baris (2 tombol per baris) agar HP tidak menumpuk ke bawah
             const row1 = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setLabel('Robux Community').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894547852398602'),
-                new ButtonBuilder().setLabel('Robux Gamepass').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894587673247774')
+                new ButtonBuilder().setLabel('Community').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894547852398602'),
+                new ButtonBuilder().setLabel('Gamepass').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894587673247774')
             );
             const row2 = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setLabel('Robux Vilog').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894800735240202'),
-                new ButtonBuilder().setLabel('Robux Send Usn').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1490174072649416868')
+                new ButtonBuilder().setLabel('Vilog').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894800735240202'),
+                new ButtonBuilder().setLabel('Send Usn').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1490174072649416868')
             );
             const row3 = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setLabel('Gift In-Game').setEmoji(giftE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894888446660739'),
-                new ButtonBuilder().setLabel('Stock Update').setEmoji('📦').setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1490149401254166618')
+                new ButtonBuilder().setLabel('Stock').setEmoji('📦').setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1490149401254166618')
             );
             componentsRow = [row1, row2, row3];
         } else {
