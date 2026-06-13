@@ -829,7 +829,7 @@ client.on('interactionCreate', async (interaction) => {
             // Dibuat menjadi 3 baris (2 tombol per baris) agar HP tidak menumpuk ke bawah
             const row1 = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setLabel('Community').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894547852398602'),
-                new ButtonBuilder().setLabel('Gamepass').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894587673247774')
+                new ButtonBuilder().setLabel('Gempass').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894587673247774')
             );
             const row2 = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setLabel('Vilog').setEmoji(rbxE).setStyle(ButtonStyle.Link).setURL('https://discord.com/channels/1488782135887401104/1488894800735240202'),
