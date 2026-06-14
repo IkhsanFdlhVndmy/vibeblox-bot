@@ -833,16 +833,14 @@ client.on('interactionCreate', async (interaction) => {
 
                 const autoVouchEmbed = new EmbedBuilder()
                     .setColor(0x57F287)
-                    .setTitle('📝 Terimakasih Telah Berbelanja!')
-                    .setDescription(`Silahkan Kirim Teks Vouch dibawah ini Ke Channel <#1488903383963406507> ya!\n${separator}\n**📱 Pengguna HP:** Tekan dan tahan teks vouch di paling bawah. \n**💻 Pengguna PC:** Blok teks paling bawah lalu tekan **CTRL+C**.\n${separator}`)
-                    .addFields(
-                        // Field Name diisi teks agar Discord memberikan jarak/padding otomatis. 
-                        // Field Value dibiarkan 100% murni tanpa markdown agar saat dicopy bersih.
-                        { name: '**👇 SALIN TEKS VOUCH DI BAWAH INI:**', value: vouchTemplate, inline: false } 
-                    )
+                    .setTitle('📥 Bantu Vouch! ')
+                    .setDescription(`Silahkan Kirim Teks Vouch dibawah ini Ke Channel <#1488903383963406507> ya!\n${separator}\n**📱 Pengguna HP:** Tekan dan tahan teks vouch di paling bawah, Lalu pencet **Copy Text**. \n**💻 Pengguna PC:** Blok teks paling bawah lalu tekan **CTRL+C**.\n${separator}\n\n**👇 SALIN TEKS VOUCH DI BAWAH INI:**`);
 
-                // Mengirim 1 Embed utuh tanpa mention (tag) pembeli
+                // Mengirim Embed instruksi
                 await interaction.channel.send({ embeds: [autoVouchEmbed] });
+
+                // Mengirim Teks Vouch Murni sebagai chat terpisah (Bisa di-copy gampang di iOS/Android)
+                await interaction.channel.send({ content: vouchTemplate });
 
                 // Update pesan ephemeral admin
                 await interaction.editReply({ content: '✅ Invoice selesai! Pencatatan dan Auto-Vouch berhasil diproses.' });
