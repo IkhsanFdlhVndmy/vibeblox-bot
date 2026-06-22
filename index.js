@@ -1139,11 +1139,11 @@ client.on('interactionCreate', async (interaction) => {
         });
     }
 
-    // --- CEK ELIGIBLE (MULTI-GROUP & ANTI-SPAM LOCK) ---
+// --- CEK ELIGIBLE (MULTI-GROUP & ANTI-SPAM LOCK) ---
     if (command === 'cek-eligible') {
         // Sistem Antrean: Tolak jika bot sedang mengecek untuk user lain
         if (isCheckingEligible) {
-            return interaction.reply({ content: '⏳ Sistem sedang memproses pengecekan lain. Mohon antre dan coba beberapa detik lagi...', flags: MessageFlags.Ephemeral });
+            return interaction.reply({ content: '⏳ Sistem sedang memproses pengecekan lain. Mohon antri dan coba beberapa detik lagi...', flags: MessageFlags.Ephemeral });
         }
         
         isCheckingEligible = true; // Kunci sistem
@@ -1184,7 +1184,7 @@ client.on('interactionCreate', async (interaction) => {
             const embed = new EmbedBuilder()
                 .setColor(0x4F4580)
                 .setTitle(`✅ Eligibility Status`)
-                .setDescription(`👤 **Username:** \`${actualUsername}\``)
+                .setDescription(`👤 **Username:** \`${actualUsername}\`\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬`)
                 .setFooter({ text: 'Roblox Eligibility Checker' })
                 .setTimestamp();
             if (avatarUrl) embed.setThumbnail(avatarUrl);
@@ -1198,11 +1198,14 @@ client.on('interactionCreate', async (interaction) => {
             };
 
             // 4. Analisa masing-masing grup (Berurutan dengan delay)
-            for (const grp of targetGroups) {
+            for (let i = 0; i < targetGroups.length; i++) {
+                const grp = targetGroups[i];
+                let fieldContent = "";
+
                 if (!userGroups.includes(grp.id)) {
-                    embed.addFields({ name: `🏢 ${grp.name}`, value: `❌ **Belum Join Grup**\nSilakan join grup ini terlebih dahulu.`, inline: false });
+                    fieldContent = `❌ **Belum Join Grup**\nSilakan join terlebih dahulu.`;
                 } else {
-                    await sleep(1000); // Jeda 1 detik sebelum hit API Audit Log agar tidak di-Banned Roblox
+                    await sleep(1000); // Jeda 1 detik sebelum hit API Audit Log
                     try {
                         const auditRes = await axios.get(`https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=JoinGroup&userId=${userId}&limit=10`, {
                             headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
@@ -1218,19 +1221,25 @@ client.on('interactionCreate', async (interaction) => {
                             if (isElig) isAnyEligible = true;
 
                             const statusTxt = isElig ? '🟢 **ELIGIBLE**' : '🔴 **NOT ELIGIBLE (PENDING)**';
-                            embed.addFields({ 
-                                name: `🏢 ${grp.name}`, 
-                                value: `📅 **Join Date:**\n\`${formatWaktu(rawJoin)}\`\n🗓️ **Eligible Since:**\n\`${formatWaktu(eligibleDate)}\`\n📊 **Status:**\n${statusTxt}`, 
-                                inline: false 
-                            });
+                            
+                            // Susunan teks dengan 1x enter (lebih compact & rapi)
+                            fieldContent = `📅 **Join Date:**\n\`${formatWaktu(rawJoin)}\`\n🗓️ **Eligible Since:**\n\`${formatWaktu(eligibleDate)}\`\n📊 **Status:**\n${statusTxt}`;
                         } else {
                             // Case: Sudah gabung tapi log join lebih dari setahun lalu
                             isAnyEligible = true;
-                            embed.addFields({ name: `🏢 ${grp.name}`, value: `🟢 **ELIGIBLE**\n*(User tergabung di grup, data log lawas tertimbun)*`, inline: false });
+                            fieldContent = `🟢 **ELIGIBLE**\n*(User tergabung di grup, data log lawas tertimbun)*`;
                         }
                     } catch (e) {
-                        embed.addFields({ name: `🏢 ${grp.name}`, value: `⚠️ **Gagal Tarik Log**\nCek validitas Cookie / IP Address di server.`, inline: false });
+                        fieldContent = `⚠️ **Gagal Tarik Log**\nCek validitas Cookie / IP Address di server.`;
                     }
+                }
+
+                // Tambahkan field untuk grup saat ini
+                embed.addFields({ name: `🏢 ${grp.name}`, value: fieldContent, inline: false });
+
+                // Tambahkan garis pembatas JIKA bukan grup terakhir
+                if (i < targetGroups.length - 1) {
+                    embed.addFields({ name: '\u200B', value: '▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬', inline: false });
                 }
             }
 
