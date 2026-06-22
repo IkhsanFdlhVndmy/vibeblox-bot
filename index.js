@@ -1237,7 +1237,7 @@ client.on('interactionCreate', async (interaction) => {
 
                 // Trik menghilangkan space kosong: Masukkan garis tipis langsung ke bawah teks grup
                 if (i < targetGroups.length - 1) {
-                    fieldContent += `\n\n───────────────`;
+                    fieldContent += `\n───────────────`;
                 }
 
                 // Tambahkan field
