@@ -1177,8 +1177,8 @@ client.on('interactionCreate', async (interaction) => {
             const userGroups = groupsRes.data.data.map(g => g.group.id.toString());
 
             const targetGroups = [
-                { id: '1064667246', name: 'BEJIRLAH-Community' },
-                { id: '1108229986', name: 'Vandamoy' }
+                { id: '1064667246', name: 'Community 1' },
+                { id: '1108229986', name: 'Community 2' }
             ];
 
             const embed = new EmbedBuilder()
