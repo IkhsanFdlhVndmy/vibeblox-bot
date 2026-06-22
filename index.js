@@ -1,6 +1,7 @@
 require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Options, MessageFlags } = require('discord.js');
 const mongoose = require('mongoose');
+const axios = require('axios');
 const User = require('./models/User');
 const Store = require('./models/Store');
 const RobuxRate = require('./models/RobuxRate');
@@ -278,6 +279,14 @@ const slashCommands = [
                 ]
             }
         ]
+    },
+    //cek eligble
+    {
+        name: 'cek-eligible', 
+        description: 'Cek status antrean 14 hari di grup BEJIRLAH & Vandamoy',
+        options: [
+            { name: 'username', description: 'Username Roblox pembeli', type: 3, required: true }
+        ]
     }
 ];
 
@@ -437,6 +446,8 @@ client.on('messageCreate', async (message) => {
 // === EVENT: INTERAKSI SLASH COMMANDS & BUTTON ===
 const isUpdating = new Set();
 let linkCommunityActive = false;
+let isCheckingEligible = false;
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 client.on('interactionCreate', async (interaction) => {
     // ----- BUTTON LEADERBOARD PAGINATION -----
@@ -1126,6 +1137,114 @@ client.on('interactionCreate', async (interaction) => {
             content: '+vouch robux @axel 3000 Robux Payout Instant',
             flags: MessageFlags.Ephemeral
         });
+    }
+
+    // --- CEK ELIGIBLE (MULTI-GROUP & ANTI-SPAM LOCK) ---
+    if (command === 'cek-eligible') {
+        // Sistem Antrean: Tolak jika bot sedang mengecek untuk user lain
+        if (isCheckingEligible) {
+            return interaction.reply({ content: '⏳ Sistem sedang memproses pengecekan lain. Mohon antre dan coba beberapa detik lagi...', flags: MessageFlags.Ephemeral });
+        }
+        
+        isCheckingEligible = true; // Kunci sistem
+        await interaction.deferReply(); // Cegah Interaction Failed
+
+        try {
+            const targetUsername = interaction.options.getString('username');
+            
+            // 1. Dapatkan User ID Roblox
+            const userRes = await axios.post('https://users.roblox.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
+            if (!userRes.data.data.length) {
+                isCheckingEligible = false;
+                return interaction.editReply('❌ Username tidak ditemukan di Roblox.');
+            }
+            const userId = userRes.data.data[0].id;
+            const actualUsername = userRes.data.data[0].name;
+
+            await sleep(500); // Jeda untuk nafas CPU Server
+
+            // 2. Ambil Avatar
+            let avatarUrl = null;
+            try {
+                const avaRes = await axios.get(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`);
+                avatarUrl = avaRes.data.data[0].imageUrl;
+            } catch(e) {}
+
+            await sleep(500);
+
+            // 3. Cek User masuk grup mana saja via Public API
+            const groupsRes = await axios.get(`https://groups.roblox.com/v2/users/${userId}/groups/roles`);
+            const userGroups = groupsRes.data.data.map(g => g.group.id.toString());
+
+            const targetGroups = [
+                { id: '1064667246', name: 'BEJIRLAH-Community' },
+                { id: '1108229986', name: 'Vandamoy' }
+            ];
+
+            const embed = new EmbedBuilder()
+                .setColor(0x4F4580)
+                .setTitle(`✅ Eligibility Status`)
+                .setDescription(`👤 **Username:** \`${actualUsername}\``)
+                .setFooter({ text: 'Roblox Eligibility Checker' })
+                .setTimestamp();
+            if (avatarUrl) embed.setThumbnail(avatarUrl);
+
+            let isAnyEligible = false;
+
+            // Native JS Date Formatter (Sangat Hemat RAM, tanpa library Moment)
+            const formatWaktu = (isoString) => {
+                const d = new Date(isoString);
+                return d.toLocaleString('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Jakarta' }).replace(/\./g, ':') + ' WIB';
+            };
+
+            // 4. Analisa masing-masing grup (Berurutan dengan delay)
+            for (const grp of targetGroups) {
+                if (!userGroups.includes(grp.id)) {
+                    embed.addFields({ name: `🏢 ${grp.name}`, value: `❌ **Belum Join Grup**\nSilakan join grup ini terlebih dahulu.`, inline: false });
+                } else {
+                    await sleep(1000); // Jeda 1 detik sebelum hit API Audit Log agar tidak di-Banned Roblox
+                    try {
+                        const auditRes = await axios.get(`https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=JoinGroup&userId=${userId}&limit=10`, {
+                            headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
+                        });
+
+                        if (auditRes.data && auditRes.data.data && auditRes.data.data.length > 0) {
+                            const rawJoin = auditRes.data.data[0].created;
+                            const joinDate = new Date(rawJoin);
+                            const eligibleDate = new Date(joinDate.getTime() + (14 * 24 * 60 * 60 * 1000));
+                            const now = new Date();
+                            const isElig = now >= eligibleDate;
+
+                            if (isElig) isAnyEligible = true;
+
+                            const statusTxt = isElig ? '🟢 **ELIGIBLE**' : '🔴 **NOT ELIGIBLE (PENDING)**';
+                            embed.addFields({ 
+                                name: `🏢 ${grp.name}`, 
+                                value: `📅 **Join Date:**\n\`${formatWaktu(rawJoin)}\`\n🗓️ **Eligible Since:**\n\`${formatWaktu(eligibleDate)}\`\n📊 **Status:**\n${statusTxt}`, 
+                                inline: false 
+                            });
+                        } else {
+                            // Case: Sudah gabung tapi log join lebih dari setahun lalu
+                            isAnyEligible = true;
+                            embed.addFields({ name: `🏢 ${grp.name}`, value: `🟢 **ELIGIBLE**\n*(User tergabung di grup, data log lawas tertimbun)*`, inline: false });
+                        }
+                    } catch (e) {
+                        embed.addFields({ name: `🏢 ${grp.name}`, value: `⚠️ **Gagal Tarik Log**\nCek validitas Cookie / IP Address di server.`, inline: false });
+                    }
+                }
+            }
+
+            if (isAnyEligible) embed.setColor(0x57F287); // Ubah warna jadi Hijau jika min 1 eligible
+
+            await interaction.editReply({ embeds: [embed] });
+
+        } catch (error) {
+            console.error("Eligible Check Error:", error.message);
+            await interaction.editReply('❌ Gagal mengecek. Terjadi kesalahan pada API Roblox.');
+        } finally {
+            isCheckingEligible = false; // Selalu lepaskan kuncian saat selesai atau error
+        }
+        return;
     }
 
     // --- LINK COMMUNITY ---
