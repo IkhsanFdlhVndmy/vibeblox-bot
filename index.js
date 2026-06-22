@@ -1143,7 +1143,7 @@ client.on('interactionCreate', async (interaction) => {
     if (command === 'cek-eligible') {
         // Sistem Antrean: Tolak jika bot sedang mengecek untuk user lain
         if (isCheckingEligible) {
-            return interaction.reply({ content: '⏳ Sistem sedang memproses pengecekan lain. Mohon antri dan coba beberapa detik lagi...', flags: MessageFlags.Ephemeral });
+            return interaction.reply({ content: '⏳ Sistem sedang memproses pengecekan lain. Mohon antre dan coba beberapa detik lagi...', flags: MessageFlags.Ephemeral });
         }
         
         isCheckingEligible = true; // Kunci sistem
@@ -1184,7 +1184,8 @@ client.on('interactionCreate', async (interaction) => {
             const embed = new EmbedBuilder()
                 .setColor(0x4F4580)
                 .setTitle(`✅ Eligibility Status`)
-                .setDescription(`👤 **Username:** \`${actualUsername}\`\n▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬`)
+                // Menggunakan garis tipis yang lebih pendek agar tidak dobel di HP
+                .setDescription(`👤 **Username:** \`${actualUsername}\`\n───────────────`)
                 .setFooter({ text: 'Roblox Eligibility Checker' })
                 .setTimestamp();
             if (avatarUrl) embed.setThumbnail(avatarUrl);
@@ -1222,7 +1223,7 @@ client.on('interactionCreate', async (interaction) => {
 
                             const statusTxt = isElig ? '🟢 **ELIGIBLE**' : '🔴 **NOT ELIGIBLE (PENDING)**';
                             
-                            // Susunan teks dengan 1x enter (lebih compact & rapi)
+                            // Susunan teks dengan 1x enter
                             fieldContent = `📅 **Join Date:**\n\`${formatWaktu(rawJoin)}\`\n🗓️ **Eligible Since:**\n\`${formatWaktu(eligibleDate)}\`\n📊 **Status:**\n${statusTxt}`;
                         } else {
                             // Case: Sudah gabung tapi log join lebih dari setahun lalu
@@ -1234,13 +1235,13 @@ client.on('interactionCreate', async (interaction) => {
                     }
                 }
 
-                // Tambahkan field untuk grup saat ini
-                embed.addFields({ name: `🏢 ${grp.name}`, value: fieldContent, inline: false });
-
-                // Tambahkan garis pembatas JIKA bukan grup terakhir
+                // Trik menghilangkan space kosong: Masukkan garis tipis langsung ke bawah teks grup
                 if (i < targetGroups.length - 1) {
-                    embed.addFields({ name: '\u200B', value: '▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬', inline: false });
+                    fieldContent += `\n\n───────────────`;
                 }
+
+                // Tambahkan field
+                embed.addFields({ name: `🏢 ${grp.name}`, value: fieldContent, inline: false });
             }
 
             if (isAnyEligible) embed.setColor(0x57F287); // Ubah warna jadi Hijau jika min 1 eligible
