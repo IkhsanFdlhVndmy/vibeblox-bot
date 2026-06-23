@@ -1870,8 +1870,8 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // --- SECURITY FILTER UNTUK COMMAND KEUANGAN ---
-    const allowedChannel = '1489665490770067678';
-    if (interaction.channel.id !== allowedChannel) {
+    const allowedChannels = ['1489665490770067678', '1519075561396371647'];
+    if (!allowedChannels.includes(interaction.channel.id)) {
         return interaction.reply({ content: '❌ Command ini hanya bisa digunakan di channel Finance.', flags: MessageFlags.Ephemeral });
     }
 
