@@ -109,7 +109,7 @@ if (menuType === 'howtoorder') {
         m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
         
         embed.setTitle(`${ann} PRICE LIST VIA PAYOUT COMMUNITY (INSTANT)`)
-             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\n${priceList}`)
+             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/groups/654669898\n\n${priceList}`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102402657915081/Frame_57.png?ex=6a2dc892&is=6a2c7712&hm=59ff55fdb78d365538f8464c291d309c1be584876ee2ff194d350935245ee954&');
 
     } else if (menuType === 'gamepass_after') {
@@ -172,6 +172,13 @@ const slashCommands = [
         options: [
             { name: 'user', description: 'Pilih User', type: 6, required: true },
             { name: 'amount', description: 'Nominal Rupiah (contoh: 50.000)', type: 3, required: true },
+            { 
+                name: 'sumber', description: 'Pilih sumber uang masuk', type: 3, required: true,
+                choices: [
+                    { name: 'Store Utama', value: 'utama' },
+                    { name: 'Partner', value: 'partner' }
+                ]
+            },
             { name: 'keterangan', description: 'Keterangan/Kategori', type: 3, required: false }
         ]
     },
@@ -180,6 +187,13 @@ const slashCommands = [
         options: [
             { name: 'user', description: 'Pilih User', type: 6, required: true },
             { name: 'amount', description: 'Nominal Rupiah (contoh: 50.000)', type: 3, required: true },
+            { 
+                name: 'sumber', description: 'Pilih sumber yang akan dikurangi', type: 3, required: true,
+                choices: [
+                    { name: 'Store Utama', value: 'utama' },
+                    { name: 'Partner', value: 'partner' }
+                ]
+            },
             { name: 'keterangan', description: 'Keterangan/Kategori', type: 3, required: false }
         ]
     },
@@ -307,6 +321,19 @@ const slashCommands = [
         description: 'Cek status antrean 14 hari di grup BEJIRLAH & Vandamoy',
         options: [
             { name: 'username', description: 'Username Roblox pembeli', type: 3, required: true }
+        ]
+    },
+    // --- TAMBAHAN BARU: OMEN ---
+    {
+        name: 'omen', description: 'Tampilkan metode pembayaran Partner Omen',
+        options: [
+            {
+                name: 'metode', description: 'Pilih QRIS atau Bank', type: 3, required: true,
+                choices: [
+                    { name: 'QRIS', value: 'qris' },
+                    { name: 'Bank SeaBank', value: 'bank' }
+                ]
+            }
         ]
     }
 ];
@@ -984,13 +1011,17 @@ client.on('interactionCreate', async (interaction) => {
                 new ButtonBuilder().setCustomId(`pinvf_pay_bank_${typeValue}_${invoiceMsgId}`).setLabel('BANK').setStyle(ButtonStyle.Secondary)
             );
             
+            // Tambahan: Tombol Cancel
+            const cancelRow2 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId(`pinvf_cancel_${invoiceMsgId}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
+            );
+            
             const payEmbed = new EmbedBuilder().setColor(0x4F4580).setTitle('💳 Pilih Metode Pembayaran')
                 .setDescription(`Tipe: **${typeNames[typeValue] || typeValue}**\nPilih metode pembayaran:`);
 
-            await interaction.update({ embeds: [payEmbed], components: [payRow] });
+            await interaction.update({ embeds: [payEmbed], components: [payRow, cancelRow2] });
             return;
         }
-
         // Konfirmasi Akhir
         if (customId.startsWith('pinvf_pay_')) {
             const withoutPrefix = customId.replace('pinvf_pay_', '');
@@ -1086,11 +1117,19 @@ client.on('interactionCreate', async (interaction) => {
                 const vouchDesc = vouchDescriptions[typeValue] || 'Robux';
                 const vouchTemplate = `+vouch robux <@${interaction.user.id}> ${amountRobux} ${vouchDesc}`;
 
-                await interaction.channel.send({ content: `**👇 SALIN TEKS VOUCH DI BAWAH INI (Kirim ke channel Vouch):**` });
+                const separator = '──────────────────────────────';
+                const autoVouchEmbed = new EmbedBuilder()
+                    .setColor(0x57F287)
+                    .setTitle('📥 Bantu Vouch! ')
+                    .setDescription(`Silahkan Kirim Teks Vouch dibawah ini Ke Channel <#1488903383963406507> ya!\n${separator}\n**📱 Pengguna HP:** Tekan dan tahan teks vouch di paling bawah, Lalu pencet **Copy Text**. \n**💻 Pengguna PC:** Blok teks paling bawah lalu tekan **CTRL+C**.\n${separator}\n\n**👇 SALIN TEKS VOUCH DI BAWAH INI:**`);
+
+                // Mengirim Embed instruksi
+                await interaction.channel.send({ embeds: [autoVouchEmbed] });
+
+                // Mengirim Teks Vouch Murni sebagai chat terpisah (Bisa di-copy gampang di iOS/Android)
                 await interaction.channel.send({ content: vouchTemplate });
 
                 await interaction.editReply({ content: '✅ Transaksi Partner selesai!' });
-
             } catch (err) {
                 console.error("Partner Invoice error:", err);
                 await interaction.editReply({ content: '❌ Terjadi error sistem.' });
@@ -1343,6 +1382,39 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.editReply({ embeds: [gopayEmbed] });
     }
 
+    // --- OMEN PAYMENT (PARTNER) ---
+    if (command === 'omen') {
+        const allowedRolesOmen = ['1489612423521374309', '1489612221544665231', '1519076541055897670'];
+        const hasRoleOmen = interaction.member.roles.cache.some(role => allowedRolesOmen.includes(role.id));
+        if (!hasRoleOmen) {
+            return interaction.reply({ content: '❌ Sori, command ini hanya untuk Owner, Handler, atau Partner.', flags: MessageFlags.Ephemeral });
+        }
+
+        await interaction.deferReply();
+        const metode = interaction.options.getString('metode');
+        
+        const omenEmbed = new EmbedBuilder().setTimestamp();
+
+        if (metode === 'qris') {
+            omenEmbed.setColor(0xFFA500)
+                .setTitle('💳 Pembayaran QRIS Omen')
+                .setDescription('Silakan scan QRIS di bawah ini untuk melakukan pembayaran.')
+                .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1519107554628866222/1782216403987.png?ex=6a3c5aa8&is=6a3b0928&hm=ecb4cbd02fa9f76838f2df9726a5facb4b83dc2c204e67922991046266a1dcca&')
+                .setFooter({ text: 'Omen Partner Payment' });
+        } else if (metode === 'bank') {
+            omenEmbed.setColor(0xFFA500)
+                .setTitle('🏦 Transfer Bank SeaBank Omen')
+                .addFields(
+                    { name: '👤 Atas Nama', value: '**muhammad amin**', inline: false },
+                    { name: '🔢 Nomor Rekening', value: '**901606323148**', inline: false },
+                    { name: '🏦 Bank', value: '**SeaBank**', inline: false }
+                )
+                .setFooter({ text: 'Omen Partner Payment' });
+        }
+
+        return interaction.editReply({ embeds: [omenEmbed] });
+    }
+
     // --- VOUCH TEMPLATE (Ephemeral - hanya terlihat oleh pengguna) ---
     if (command === 'vouch') {
         const allowedRolesVouch = ['1489612423521374309', '1489612221544665231'];
@@ -1484,17 +1556,17 @@ client.on('interactionCreate', async (interaction) => {
 
         await interaction.deferReply();
 
-        await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy' });
+        await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/groups/654669898' });
         linkCommunityActive = false;
         return;
     }
 
     // --- ROBUX CALCULATOR ---
     if (command === 'robux') {
-        const allowedRolesRobux = ['1489612423521374309', '1489612221544665231'];
+        const allowedRolesRobux = ['1489612423521374309', '1489612221544665231, 1519076541055897670'];
         const hasRoleRobux = interaction.member.roles.cache.some(role => allowedRolesRobux.includes(role.id));
         if (!hasRoleRobux) {
-            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+            return interaction.reply({ content: '❌ Sori, cuma Owner, Handler, Partner yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
         }
 
         await interaction.deferReply();
@@ -1699,24 +1771,27 @@ client.on('interactionCreate', async (interaction) => {
             totalSeluruhPartner += p.totalUangMasuk;
             
             let namaPartner = "Unknown";
+            let displayPartner = "Unknown";
             try {
                 const fetched = await client.users.fetch(p.partnerId);
                 namaPartner = fetched.username;
+                displayPartner = fetched.displayName || fetched.username;
             } catch(e) {}
 
-            listText += `**${i+1}. @${namaPartner}**\nOmzet: Rp ${formatRupiah(p.totalUangMasuk)}\n\n`;
+            listText += `**${i+1}. ${displayPartner}** (@${namaPartner})\nTotal Pemasukan: **Rp ${formatRupiah(p.totalUangMasuk)}**\n\n`;
         }
 
         if (listText === '') listText = '_Belum ada data transaksi partner._';
 
         const summaryEmbed = new EmbedBuilder()
             .setColor(0xFFA500)
-            .setTitle('🤝 Laporan Keuangan Semua Partner')
-            .setDescription(`Berikut adalah akumulasi pendapatan yang dihasilkan melalui sistem Partner:\n\n${listText}`)
+            .setTitle('📊 Laporan Keuangan Partner Vibeblox')
             .addFields(
-                { name: '🟢 Total Keseluruhan Omzet Partner', value: `**Rp ${formatRupiah(totalSeluruhPartner)}**`, inline: false }
+                { name: '🟢 Total Pemasukan Keseluruhan', value: `**Rp ${formatRupiah(totalSeluruhPartner)}**`, inline: false },
+                { name: '\u200B', value: '───────────────────────', inline: false },
+                { name: '👥 Statistik Individu Partner', value: listText, inline: false }
             )
-            .setFooter({ text: 'Data Keuangan VibeBlox Partner' })
+            .setFooter({ text: 'Data Keuangan Partner VibeBlox' })
             .setTimestamp();
 
         return interaction.editReply({ embeds: [summaryEmbed] });
@@ -1833,9 +1908,9 @@ client.on('interactionCreate', async (interaction) => {
         // --- ADD / MIN UANG MASUK ---
         else if (command === 'adduangmasuk' || command === 'minuangmasuk') {
             const target = interaction.options.getUser('user');
-
             const rawAmount = interaction.options.getString('amount');
             const amount = parseAmount(rawAmount);
+            const sumber = interaction.options.getString('sumber'); // "utama" atau "partner"
             const kategori = interaction.options.getString('keterangan') || 'Tidak ada kategori';
 
             if (isNaN(amount) || amount <= 0) {
@@ -1847,13 +1922,22 @@ client.on('interactionCreate', async (interaction) => {
 
             let embed;
 
+            // Jika menambah uang
             if (command === 'adduangmasuk') {
                 userData.uangMasuk += amount;
-                storeData.totalUangMasuk += amount;
+
+                if (sumber === 'utama') {
+                    storeData.totalUangMasuk += amount;
+                } else if (sumber === 'partner') {
+                    let partnerData = await Partner.findOne({ partnerId: interaction.user.id });
+                    if (!partnerData) partnerData = new Partner({ partnerId: interaction.user.id });
+                    partnerData.totalUangMasuk += amount;
+                    await partnerData.save();
+                }
 
                 embed = new EmbedBuilder()
                     .setColor(0x57F287)
-                    .setTitle('✅ Uang Masuk Dicatat!')
+                    .setTitle(`✅ Uang Masuk Dicatat! (${sumber === 'utama' ? 'Store Utama' : 'Partner'})`)
                     .addFields(
                         { name: '👤 Pembeli', value: target.username, inline: true },
                         { name: '💰 Nominal', value: `**Rp ${formatRupiah(amount)}**`, inline: true },
@@ -1861,14 +1945,27 @@ client.on('interactionCreate', async (interaction) => {
                         { name: '📊 Total spent user', value: `**Rp ${formatRupiah(userData.uangMasuk)}**`, inline: false }
                     )
                     .setTimestamp();
-            } else {
-                const bisaDikurang = Math.min(userData.uangMasuk, amount);
+            } 
+            // Jika mengurangi/merevisi uang
+            else {
+                const bisaDikurangUser = Math.min(userData.uangMasuk, amount);
                 userData.uangMasuk = Math.max(0, userData.uangMasuk - amount);
-                storeData.totalUangMasuk = Math.max(0, storeData.totalUangMasuk - bisaDikurang);
+
+                if (sumber === 'utama') {
+                    const bisaDikurangStore = Math.min(storeData.totalUangMasuk, amount);
+                    storeData.totalUangMasuk = Math.max(0, storeData.totalUangMasuk - bisaDikurangStore);
+                } else if (sumber === 'partner') {
+                    let partnerData = await Partner.findOne({ partnerId: interaction.user.id });
+                    if (partnerData) {
+                        const bisaDikurangPartner = Math.min(partnerData.totalUangMasuk, amount);
+                        partnerData.totalUangMasuk = Math.max(0, partnerData.totalUangMasuk - bisaDikurangPartner);
+                        await partnerData.save();
+                    }
+                }
 
                 embed = new EmbedBuilder()
                     .setColor(0xFEE75C)
-                    .setTitle('📉 Revisi Uang Masuk')
+                    .setTitle(`📉 Revisi Uang Masuk (${sumber === 'utama' ? 'Store Utama' : 'Partner'})`)
                     .addFields(
                         { name: '👤 Pembeli', value: target.username, inline: true },
                         { name: '🔻 Dikurangi', value: `**Rp ${formatRupiah(amount)}**`, inline: true },
