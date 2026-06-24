@@ -1563,7 +1563,7 @@ client.on('interactionCreate', async (interaction) => {
 
     // --- ROBUX CALCULATOR ---
     if (command === 'robux') {
-        const allowedRolesRobux = ['1489612423521374309', '1489612221544665231, 1519076541055897670'];
+        const allowedRolesRobux = ['1489612423521374309', '1489612221544665231', '1519076541055897670'];
         const hasRoleRobux = interaction.member.roles.cache.some(role => allowedRolesRobux.includes(role.id));
         if (!hasRoleRobux) {
             return interaction.reply({ content: '❌ Sori, cuma Owner, Handler, Partner yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
