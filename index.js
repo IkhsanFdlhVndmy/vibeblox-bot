@@ -1466,33 +1466,29 @@ client.on('interactionCreate', async (interaction) => {
         });
     }
 
-    // --- FORM TEMPLATE UNTUK TICKET ---
+   // --- FORM TEMPLATE UNTUK TICKET ---
     if (command === 'form') {
         const allowedRolesForm = ['1489612423521374309', '1489612221544665231', '1519076541055897670']; // Owner, Handler, Partner
         const hasRoleForm = interaction.member.roles.cache.some(role => allowedRolesForm.includes(role.id));
         if (!hasRoleForm) {
             return interaction.reply({ content: '❌ Sori, command ini hanya untuk staf.', flags: MessageFlags.Ephemeral });
         }
-
-        // Defer reply karena kita akan mengirim 2 pesan sekaligus
-        await interaction.deferReply();
-
-        // 1. Pesan Pertama (Embed Instruksi)
+        
         const separator = '──────────────────────────────';
         const formEmbed = new EmbedBuilder()
             .setColor(0x4F4580)
-            .setTitle('🎫 Terimakasih Telah Membuka Ticket!')
-            .setDescription(`Silahkan baca penjelasan metode pengiriman Robux di bawah ini, lalu **isi form** yang telah disediakan.\n${separator}\n**🛒 METODE PENGIRIMAN:**\n• **Robux Via Community**: Instant, tanpa potongan, syarat wajib sudah Join Ketiga Community selama 14 hari.\n• **Robux Via Gamepass**: Sistem After Tax (terima bersih), pending 5 Hari.\n• **Robux Via Login**: Instant via login untuk top up, proses 5-15 menit.\n• **Robux Send Username**: Instant via Send Username Plus, tanpa pending.\n• **Gift In-Game**: Khusu Gift item/gamepass langsung di dalam Map.\n${separator}\n\n👇 **Silahkan isi dulu form dibawah:**`)
-            .setTimestamp();
+            .setTitle('🎫 Terimakasih Telah Membuka Ticket, Silahkan Isi Form!')
+            .setDescription(`\n${separator}\n\n**🛒 METODE PENGIRIMAN:**\n\n• **Robux Via Community**: Instant, tanpa potongan, syarat wajib sudah Join Ketiga Community selama 14 hari.\n\n• **Robux Via Gamepass**: Sistem After Tax (terima bersih), pending 5 Hari.\n\n• **Robux Via Login**: Instant via login untuk top up, proses 5-15 menit.\n\n• **Robux Send Username**: Instant via Send Username Plus, tanpa pending.\n\n• **Gift In-Game**: Khusus Gift item/gamepass langsung di dalam Map.\n\n${separator}\n\n👇 **Silahkan isi dulu form dibawah:**`);
 
-        await interaction.editReply({ embeds: [formEmbed] });
-
-        // 2. Pesan Kedua (Teks Murni/Template)
         const formTemplate = `Keperluan: Buy/Support/Middleman
 Robux Via: 
 Username Roblox: 
 Jumlah Robux: `;
 
+        // Mengirim Embed
+        await interaction.channel.send({ embeds: [formEmbed] });
+
+        // Mengirim Template dalam Code Block agar mudah di-copy dan tidak mengganggu visual
         await interaction.channel.send({ content: formTemplate });
         return;
     }
