@@ -1473,13 +1473,15 @@ client.on('interactionCreate', async (interaction) => {
         if (!hasRoleForm) {
             return interaction.reply({ content: '❌ Sori, command ini hanya untuk staf.', flags: MessageFlags.Ephemeral });
         }
+
+        // 1. Respon instan agar command tidak "Gagal" di mata Discord
+        await interaction.reply({ content: '✅ Form telah dikirim.', flags: MessageFlags.Ephemeral });
         
         const separator = '──────────────────────────────';
         const formEmbed = new EmbedBuilder()
             .setColor(0x4F4580)
-            .setTitle('🎫 Terimakasih Telah Membuka Ticket, Silahkan Isi Form!')
-            .setDescription(`\n${separator}\n\n**🛒 METODE PENGIRIMAN:**\n\n• **Robux Via Community**: Instant, tanpa potongan, syarat wajib sudah Join Ketiga Community selama 14 hari.\n\n• **Robux Via Gamepass**: Sistem After Tax (terima bersih), pending 5 Hari.\n\n• **Robux Via Login**: Instant via login untuk top up, proses 5-15 menit.\n\n• **Robux Send Username**: Instant via Send Username Plus, tanpa pending.\n\n• **Gift In-Game**: Khusus Gift item/gamepass langsung di dalam Map.\n\n${separator}\n\n👇 **Silahkan isi dulu form dibawah:**`);
-
+            .setTitle('🛒 PENJELASAN METODE PENGIRIMAN:')
+            .setDescription(`\n\n• **Robux Via Community**: Instant, tanpa potongan, syarat wajib sudah Join Ketiga Community selama 14 hari.\n• **Robux Via Gamepass**: Sistem After Tax (terima bersih), pending 5 Hari.\n• **Robux Via Login**: Instant via login untuk top up, proses 5-15 menit.\n• **Robux Send Username**: Instant via Send Username Plus, tanpa pending.\n• **Gift In-Game**: Khusus Gift item/gamepass langsung di dalam Map.\n\n${separator}\n\n👇 **SILAHKAN ISI FORM DIBAWAH:**`);
         const formTemplate = `Keperluan: Buy/Support/Middleman
 Robux Via: 
 Username Roblox: 
