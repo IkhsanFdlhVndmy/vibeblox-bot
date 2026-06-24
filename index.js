@@ -335,7 +335,7 @@ const slashCommands = [
                 ]
             }
         ]
-    }
+    },
     // --- TAMBAHAN BARU: FORM TICKET ---
     {
         name: 'form',
