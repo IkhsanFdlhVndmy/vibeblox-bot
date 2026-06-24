@@ -336,6 +336,11 @@ const slashCommands = [
             }
         ]
     }
+    // --- TAMBAHAN BARU: FORM TICKET ---
+    {
+        name: 'form',
+        description: 'Kirim template form untuk pembeli di ticket'
+    }
 ];
 
 client.once('ready', async () => {
@@ -1459,6 +1464,37 @@ client.on('interactionCreate', async (interaction) => {
             content: '+vouch robux @axel 3000 Robux Payout Instant',
             flags: MessageFlags.Ephemeral
         });
+    }
+
+    // --- FORM TEMPLATE UNTUK TICKET ---
+    if (command === 'form') {
+        const allowedRolesForm = ['1489612423521374309', '1489612221544665231', '1519076541055897670']; // Owner, Handler, Partner
+        const hasRoleForm = interaction.member.roles.cache.some(role => allowedRolesForm.includes(role.id));
+        if (!hasRoleForm) {
+            return interaction.reply({ content: '❌ Sori, command ini hanya untuk staf.', flags: MessageFlags.Ephemeral });
+        }
+
+        // Defer reply karena kita akan mengirim 2 pesan sekaligus
+        await interaction.deferReply();
+
+        // 1. Pesan Pertama (Embed Instruksi)
+        const separator = '──────────────────────────────';
+        const formEmbed = new EmbedBuilder()
+            .setColor(0x4F4580)
+            .setTitle('🎫 Terimakasih Telah Membuka Ticket!')
+            .setDescription(`Silahkan baca penjelasan metode pengiriman Robux di bawah ini, lalu **isi form** yang telah disediakan.\n${separator}\n**🛒 METODE PENGIRIMAN:**\n• **Robux Via Community**: Instant, tanpa potongan, syarat wajib sudah Join Ketiga Community selama 14 hari.\n• **Robux Via Gamepass**: Sistem After Tax (terima bersih), pending 5 Hari.\n• **Robux Via Login**: Instant via login untuk top up, proses 5-15 menit.\n• **Robux Send Username**: Instant via Send Username Plus, tanpa pending.\n• **Gift In-Game**: Khusu Gift item/gamepass langsung di dalam Map.\n${separator}\n\n👇 **Silahkan isi dulu form dibawah:**`)
+            .setTimestamp();
+
+        await interaction.editReply({ embeds: [formEmbed] });
+
+        // 2. Pesan Kedua (Teks Murni/Template)
+        const formTemplate = `Keperluan: Buy/Support/Middleman
+Robux Via: 
+Username Roblox: 
+Jumlah Robux: `;
+
+        await interaction.channel.send({ content: formTemplate });
+        return;
     }
 
 // --- CEK ELIGIBLE (MULTI-GROUP & ANTI-SPAM LOCK) ---
