@@ -399,8 +399,14 @@ async function generateLeaderboard(page) {
     const calculatedPages = Math.ceil(totalUsers / limit) || 1;
     const totalPages = Math.min(calculatedPages, 10);
 
+    // MENGHITUNG TOTAL SERVER (UTAMA + PARTNER)
     const storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' }).lean();
-    const totalAmountServer = storeData ? storeData.totalUangMasuk : 0;
+    const storeTotal = storeData ? storeData.totalUangMasuk : 0;
+    
+    const partnerData = await Partner.find({}).lean();
+    const partnerTotal = partnerData.reduce((acc, curr) => acc + (curr.totalUangMasuk || 0), 0);
+    
+    const totalAmountServer = storeTotal + partnerTotal;
 
     let listText = '';
 
@@ -995,8 +1001,30 @@ client.on('interactionCreate', async (interaction) => {
         const lastUnderscoreIdx = customId.lastIndexOf('_');
         const invoiceMsgId = customId.substring(lastUnderscoreIdx + 1);
 
+        // Helper: Menghidupkan kembali tombol utama partner invoice
+        const reEnableDonePartner = async () => {
+            isUpdating.delete(`pinv_done_${invoiceMsgId}`);
+            try {
+                const invoiceMsg = await interaction.channel.messages.fetch(invoiceMsgId);
+                const origComponents = invoiceMsg.components.map(row => {
+                    const newRow = ActionRowBuilder.from(row);
+                    newRow.components.forEach(btn => {
+                        if (btn.data.custom_id && btn.data.custom_id.startsWith('pinv_done')) {
+                            btn.setDisabled(false).setLabel('✅ Done');
+                        }
+                        if (btn.data.custom_id && btn.data.custom_id.startsWith('pinv_cancel')) {
+                            btn.setDisabled(false);
+                        }
+                    });
+                    return newRow;
+                });
+                await invoiceMsg.edit({ components: origComponents });
+            } catch (e) {}
+        };
+
         if (customId.startsWith('pinvf_cancel_')) {
             await interaction.update({ content: '❌ Proses dibatalkan.', embeds: [], components: [] });
+            await reEnableDonePartner(); // <--- MENGHIDUPKAN TOMBOL
             return;
         }
 
@@ -1022,6 +1050,7 @@ client.on('interactionCreate', async (interaction) => {
             await interaction.update({ embeds: [payEmbed], components: [payRow, cancelRow2] });
             return;
         }
+
         // Konfirmasi Akhir
         if (customId.startsWith('pinvf_pay_')) {
             const withoutPrefix = customId.replace('pinvf_pay_', '');
@@ -1041,6 +1070,7 @@ client.on('interactionCreate', async (interaction) => {
 
         if (customId.startsWith('pinvf_confirm_no_')) {
             await interaction.update({ content: '❌ Dibatalkan.', embeds: [], components: [] });
+            await reEnableDonePartner(); // <--- MENGHIDUPKAN TOMBOL
             return;
         }
 
@@ -1230,8 +1260,10 @@ client.on('interactionCreate', async (interaction) => {
 
     // --- RESTOCK COUNTDOWN ---
     if (command === 'restock') {
-        if (!interaction.member.roles.cache.has('1489612423521374309')) {
-            return interaction.reply({ content: '❌ Sori, command ini khusus Owner.', flags: MessageFlags.Ephemeral });
+        const allowedRolesRestock = ['1489612423521374309', '1489612221544665231', '1519076541055897670']; // Owner, Handler, Partner
+        const hasRoleRestock = interaction.member.roles.cache.some(role => allowedRolesRestock.includes(role.id));
+        if (!hasRoleRestock) {
+            return interaction.reply({ content: '❌ Sori, command ini khusus Owner, Handler, dan Partner.', flags: MessageFlags.Ephemeral });
         }
 
         // Defer dulu agar tidak "outdated" saat proses build embed
