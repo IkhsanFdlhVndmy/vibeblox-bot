@@ -1508,8 +1508,8 @@ Jumlah Robux: `;
         try {
             const targetUsername = interaction.options.getString('username');
             
-            // 1. Dapatkan User ID Roblox
-            const userRes = await axios.post('https://users.roblox.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
+            // 1. Dapatkan User ID Roblox (MENGGUNAKAN ROPROXY UNTUK MENGHINDARI RATE LIMIT SERVER)
+            const userRes = await axios.post('https://users.roproxy.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
             if (!userRes.data.data.length) {
                 isCheckingEligible = false;
                 return interaction.editReply('❌ Username tidak ditemukan di Roblox.');
@@ -1519,17 +1519,19 @@ Jumlah Robux: `;
 
             await sleep(500); // Jeda untuk nafas CPU Server
 
-            // 2. Ambil Avatar
+            // 2. Ambil Avatar (MENGGUNAKAN ROPROXY)
             let avatarUrl = null;
             try {
-                const avaRes = await axios.get(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`);
+                const avaRes = await axios.get(`https://thumbnails.roproxy.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`);
                 avatarUrl = avaRes.data.data[0].imageUrl;
-            } catch(e) {}
+            } catch(e) {
+                console.log("Gagal load avatar:", e.message); // Log internal saja kalau avatar gagal
+            }
 
             await sleep(500);
 
-            // 3. Cek User masuk grup mana saja via Public API
-            const groupsRes = await axios.get(`https://groups.roblox.com/v2/users/${userId}/groups/roles`);
+            // 3. Cek User masuk grup mana saja via Public API (MENGGUNAKAN ROPROXY)
+            const groupsRes = await axios.get(`https://groups.roproxy.com/v2/users/${userId}/groups/roles`);
             const userGroups = groupsRes.data.data.map(g => g.group.id.toString());
 
             const targetGroups = [
@@ -1564,6 +1566,7 @@ Jumlah Robux: `;
                 } else {
                     await sleep(1000); // Jeda 1 detik sebelum hit API Audit Log
                     try {
+                        // UNTUK COOKIE TETAP GUNAKAN ROBLOX ASLI DEMI KEAMANAN AKUN DUMMY!
                         const auditRes = await axios.get(`https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=JoinGroup&userId=${userId}&limit=10`, {
                             headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
                         });
@@ -1587,6 +1590,8 @@ Jumlah Robux: `;
                             fieldContent = `🟢 **ELIGIBLE**\n*(User tergabung di grup, data log lawas tertimbun)*`;
                         }
                     } catch (e) {
+                        // Memberikan log spesifik ke console agar tahu kenapa gagal
+                        console.error(`Gagal narik log grup ${grp.id}:`, e.response?.status || e.message);
                         fieldContent = `⚠️ **Gagal Tarik Log**\nCek validitas Cookie / IP Address di server.`;
                     }
                 }
@@ -1605,14 +1610,15 @@ Jumlah Robux: `;
             await interaction.editReply({ embeds: [embed] });
 
         } catch (error) {
-            console.error("Eligible Check Error:", error.message);
-            await interaction.editReply('❌ Gagal mengecek. Terjadi kesalahan pada API Roblox.');
+            // MENGELUARKAN LOG ERROR ASLI KE CONSOLE ALWAYSDATA
+            console.error("Eligible Check Error ASLI:", error.response?.data || error.message);
+            await interaction.editReply('❌ Gagal mengecek. Terjadi kesalahan pada API Publik Roblox (Mungkin Rate Limit).');
         } finally {
             isCheckingEligible = false; // Selalu lepaskan kuncian saat selesai atau error
         }
         return;
     }
-
+    
     // --- LINK COMMUNITY ---
     if (command === 'linkcommunity') {
         if (linkCommunityActive) {
