@@ -560,7 +560,7 @@ client.on('interactionCreate', async (interaction) => {
             .setColor(0x4F4580)
             .setTitle('🎫 VIBEBLOX - Ticket Order')
             .setThumbnail('https://cdn.discordapp.com/attachments/1500317839507062897/1515115963928940706/iconbot.png')
-            .setDescription(`Silakan pilih kategori tiket sesuai dengan layanan yang kamu butuhkan dengan memencet tombol di bawah.👇\n`)
+            .setDescription(`Silakan pilih kategori tiket dengan memencet tombol di bawah.👇\n`)
             // MENGGUNAKAN ADDFIELDS AGAR SPASI RAPIH DAN TIDAK MELEBAR
             .addFields(
                 { name: '💎 Robux Community', value: 'Top up robux cepat melalui sistem Payout Community.', inline: false },
