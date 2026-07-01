@@ -542,6 +542,10 @@ let linkCommunityActive = false;
 let isCheckingEligible = false;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// --- TAMBAHAN CACHE & COOLDOWN ---
+const userCooldowns = new Map();
+const eligibilityCache = new Map();
+
 client.on('interactionCreate', async (interaction) => {
 
 // =========================================================================
@@ -1937,43 +1941,86 @@ Jumlah Robux: `;
 
     
 
-// --- CEK ELIGIBLE (MULTI-GROUP & ANTI-SPAM LOCK) ---
+// --- CEK ELIGIBLE (ANTI-SPAM & CACHING MEMORY) ---
     if (command === 'cek-eligible') {
-        // Sistem Antrean: Tolak jika bot sedang mengecek untuk user lain
+        const targetUsername = interaction.options.getString('username').trim();
+        const cacheKey = targetUsername.toLowerCase();
+
+        // 1. SISTEM COOLDOWN USER (Mencegah pelanggan spam command)
+        const cooldownTime = 15000; // 30 detik jeda per-user
+        if (userCooldowns.has(interaction.user.id)) {
+            const expiration = userCooldowns.get(interaction.user.id) + cooldownTime;
+            if (Date.now() < expiration) {
+                const timeLeft = Math.round((expiration - Date.now()) / 1000);
+                return interaction.reply({ content: `⏳ Santai dulu bos! Tunggu **${timeLeft} detik** lagi untuk mengecek username lain agar bot tidak diblokir Roblox.`, flags: MessageFlags.Ephemeral });
+            }
+        }
+
+        // 2. SISTEM CACHE MEMORY (Cek apakah username ini sudah pernah dicek sejam terakhir)
+        if (eligibilityCache.has(cacheKey)) {
+            const cachedData = eligibilityCache.get(cacheKey);
+            // Jika cache masih berumur di bawah 1 jam (3600000 ms)
+            if (Date.now() - cachedData.timestamp < 3600000) {
+                // Set cooldown untuk user ini karena dia tetap memakai fitur
+                userCooldowns.set(interaction.user.id, Date.now());
+                
+                // Berikan embel-embel bahwa ini data cache agar transparan
+                const cachedEmbed = EmbedBuilder.from(cachedData.embed)
+                    .setFooter({ text: 'Roblox Eligibility Checker • (Data Cached)' });
+                
+                return interaction.reply({ embeds: [cachedEmbed] });
+            } else {
+                // Hapus cache usang untuk menghemat RAM
+                eligibilityCache.delete(cacheKey);
+            }
+        }
+
+        // 3. SISTEM ANTREAN GLOBAL (Menghindari tabrakan request API berbarengan)
         if (isCheckingEligible) {
-            return interaction.reply({ content: '⏳ Sistem sedang memproses pengecekan lain. Mohon antre dan coba beberapa detik lagi...', flags: MessageFlags.Ephemeral });
+            return interaction.reply({ content: '⏳ Sistem sedang memproses pengecekan milik antrean lain. Mohon tunggu beberapa detik dan coba lagi...', flags: MessageFlags.Ephemeral });
         }
         
-        isCheckingEligible = true; // Kunci sistem
-        await interaction.deferReply(); // Cegah Interaction Failed
+        isCheckingEligible = true;
+        await interaction.deferReply(); 
 
         try {
-            const targetUsername = interaction.options.getString('username');
-            
-            // 1. Dapatkan User ID Roblox (MENGGUNAKAN ROPROXY UNTUK MENGHINDARI RATE LIMIT SERVER)
-            const userRes = await axios.post('https://users.roproxy.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
+            // Dapatkan User ID Roblox (LANGSUNG KE API ASLI)
+            let userRes;
+            try {
+                userRes = await axios.post('https://users.roblox.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
+            } catch (err) {
+                console.log("API Asli Gagal (ID), mencoba RoProxy...");
+                userRes = await axios.post('https://users.roproxy.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
+            }
+
             if (!userRes.data.data.length) {
                 isCheckingEligible = false;
-                return interaction.editReply('❌ Username tidak ditemukan di Roblox.');
+                return interaction.editReply(`❌ Username **${targetUsername}** tidak ditemukan di Roblox. Pastikan penulisan benar.`);
             }
+            
             const userId = userRes.data.data[0].id;
             const actualUsername = userRes.data.data[0].name;
 
-            await sleep(500); // Jeda untuk nafas CPU Server
+            await sleep(500);
 
-            // 2. Ambil Avatar (MENGGUNAKAN ROPROXY)
+            // Ambil Avatar
             let avatarUrl = null;
             try {
-                const avaRes = await axios.get(`https://thumbnails.roproxy.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`);
+                const avaRes = await axios.get(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`);
                 avatarUrl = avaRes.data.data[0].imageUrl;
-            } catch(e) {
-                console.log("Gagal load avatar:", e.message); // Log internal saja kalau avatar gagal
-            }
+            } catch(e) {}
 
             await sleep(500);
 
-            // 3. Cek User masuk grup mana saja via Public API (MENGGUNAKAN ROPROXY)
-            const groupsRes = await axios.get(`https://groups.roproxy.com/v2/users/${userId}/groups/roles`);
+            // Cek Daftar Grup User
+            let groupsRes;
+            try {
+                groupsRes = await axios.get(`https://groups.roblox.com/v2/users/${userId}/groups/roles`);
+            } catch (err) {
+                 console.log("API Asli Gagal (Grup), mencoba RoProxy...");
+                 groupsRes = await axios.get(`https://groups.roproxy.com/v2/users/${userId}/groups/roles`);
+            }
+
             const userGroups = groupsRes.data.data.map(g => g.group.id.toString());
 
             const targetGroups = [
@@ -1984,7 +2031,6 @@ Jumlah Robux: `;
             const embed = new EmbedBuilder()
                 .setColor(0x4F4580)
                 .setTitle(`✅ Eligibility Status`)
-                // Menggunakan garis tipis yang lebih pendek agar tidak dobel di HP
                 .setDescription(`👤 **Username:** \`${actualUsername}\`\n───────────────`)
                 .setFooter({ text: 'Roblox Eligibility Checker' })
                 .setTimestamp();
@@ -1992,13 +2038,11 @@ Jumlah Robux: `;
 
             let isAnyEligible = false;
 
-            // Native JS Date Formatter (Sangat Hemat RAM, tanpa library Moment)
             const formatWaktu = (isoString) => {
                 const d = new Date(isoString);
                 return d.toLocaleString('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Jakarta' }).replace(/\./g, ':') + ' WIB';
             };
 
-            // 4. Analisa masing-masing grup (Berurutan dengan delay)
             for (let i = 0; i < targetGroups.length; i++) {
                 const grp = targetGroups[i];
                 let fieldContent = "";
@@ -2006,9 +2050,8 @@ Jumlah Robux: `;
                 if (!userGroups.includes(grp.id)) {
                     fieldContent = `❌ **Belum Join Grup**\nSilakan join terlebih dahulu.`;
                 } else {
-                    await sleep(1000); // Jeda 1 detik sebelum hit API Audit Log
+                    await sleep(1000); 
                     try {
-                        // UNTUK COOKIE TETAP GUNAKAN ROBLOX ASLI DEMI KEAMANAN AKUN DUMMY!
                         const auditRes = await axios.get(`https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=JoinGroup&userId=${userId}&limit=10`, {
                             headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
                         });
@@ -2023,40 +2066,42 @@ Jumlah Robux: `;
                             if (isElig) isAnyEligible = true;
 
                             const statusTxt = isElig ? '🟢 **ELIGIBLE**' : '🔴 **NOT ELIGIBLE (PENDING)**';
-                            
-                            // Susunan teks dengan 1x enter
                             fieldContent = `📅 **Join Date:**\n\`${formatWaktu(rawJoin)}\`\n🗓️ **Eligible Since:**\n\`${formatWaktu(eligibleDate)}\`\n📊 **Status:**\n${statusTxt}`;
                         } else {
-                            // Case: Sudah gabung tapi log join lebih dari setahun lalu
                             isAnyEligible = true;
-                            fieldContent = `🟢 **ELIGIBLE**\n*(User tergabung di grup, data log lawas tertimbun)*`;
+                            fieldContent = `🟢 **ELIGIBLE**\n*(User sudah bergabung > 14 hari)*`;
                         }
                     } catch (e) {
-                        // Memberikan log spesifik ke console agar tahu kenapa gagal
                         console.error(`Gagal narik log grup ${grp.id}:`, e.response?.status || e.message);
-                        fieldContent = `⚠️ **Gagal Tarik Log**\nCek validitas Cookie / IP Address di server.`;
+                        fieldContent = `⚠️ **User ada di dalam grup**\n*(Gagal mengecek tanggal pasti karena limitasi API, admin dapat mengecek manual di menu Payout Roblox).*`;
                     }
                 }
 
-                // Trik menghilangkan space kosong: Masukkan garis tipis langsung ke bawah teks grup
                 if (i < targetGroups.length - 1) {
                     fieldContent += `\n───────────────`;
                 }
 
-                // Tambahkan field
                 embed.addFields({ name: `🏢 ${grp.name}`, value: fieldContent, inline: false });
             }
 
-            if (isAnyEligible) embed.setColor(0x57F287); // Ubah warna jadi Hijau jika min 1 eligible
+            if (isAnyEligible) embed.setColor(0x57F287); 
+
+            // ==========================================
+            // SIMPAN HASIL KE DALAM CACHE & SET COOLDOWN
+            // ==========================================
+            eligibilityCache.set(cacheKey, {
+                embed: embed.toJSON(), // Simpan format raw JSON embednya
+                timestamp: Date.now()
+            });
+            userCooldowns.set(interaction.user.id, Date.now());
 
             await interaction.editReply({ embeds: [embed] });
 
         } catch (error) {
-            // MENGELUARKAN LOG ERROR ASLI KE CONSOLE ALWAYSDATA
             console.error("Eligible Check Error ASLI:", error.response?.data || error.message);
-            await interaction.editReply('❌ Gagal mengecek. Terjadi kesalahan pada API Publik Roblox (Mungkin Rate Limit).');
+            await interaction.editReply('❌ Terjadi gangguan komunikasi dengan server Roblox saat ini. Bot sedang tidak bisa memverifikasi data. Silakan coba lagi nanti atau periksa manual.');
         } finally {
-            isCheckingEligible = false; // Selalu lepaskan kuncian saat selesai atau error
+            isCheckingEligible = false; 
         }
         return;
     }
