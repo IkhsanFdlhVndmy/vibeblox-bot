@@ -1947,7 +1947,7 @@ Jumlah Robux: `;
         const cacheKey = targetUsername.toLowerCase();
 
         // 1. SISTEM COOLDOWN USER (Mencegah pelanggan spam command)
-        const cooldownTime = 15000; // 30 detik jeda per-user
+        const cooldownTime = 20000; // 30 detik jeda per-user
         if (userCooldowns.has(interaction.user.id)) {
             const expiration = userCooldowns.get(interaction.user.id) + cooldownTime;
             if (Date.now() < expiration) {
