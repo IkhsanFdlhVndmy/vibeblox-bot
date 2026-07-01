@@ -617,18 +617,29 @@ client.on('interactionCreate', async (interaction) => {
         return { embeds: [embedTicket], components };
     };
 
-    // --- SLASH COMMAND: /ticket ---
+// --- SLASH COMMAND: /ticket ---
     if (interaction.isChatInputCommand() && interaction.commandName === 'ticket') {
         if (!interaction.member.permissions.has('Administrator')) {
             return interaction.reply({ content: '❌ Hanya admin yang dapat membuat panel tiket.', flags: MessageFlags.Ephemeral });
         }
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const panelData = await renderTicketPanel();
-        await interaction.channel.send(panelData);
-        return interaction.editReply('✅ Panel tiket berhasil dikirim.');
+        
+        // Simpan output kiriman bot ke dalam variabel sentPanel
+        const sentPanel = await interaction.channel.send(panelData);
+
+        // Catat ID ke Database agar bisa Real-Time Update
+        let config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
+        if (!config) config = new TicketConfig();
+        
+        config.panelChannelId = interaction.channel.id;
+        config.panelMessageId = sentPanel.id;
+        await config.save();
+
+        return interaction.editReply('✅ Panel tiket berhasil dikirim dan disinkronisasi!');
     }
 
-    // --- SLASH COMMAND: /buttonticket ---
+// --- SLASH COMMAND: /buttonticket ---
     if (interaction.isChatInputCommand() && interaction.commandName === 'buttonticket') {
         const allowedRolesBtn = ['1489612423521374309', '1489612221544665231'];
         if (!interaction.member.roles.cache.some(r => allowedRolesBtn.includes(r.id))) {
@@ -642,20 +653,34 @@ client.on('interactionCreate', async (interaction) => {
         let config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
         if (!config) config = new TicketConfig();
         
+        // Update status di database
         config.buttonStates.set(tipe, status);
         await config.save();
 
-        // Cari pesan panel tiket dan update otomatis (Fetch 10 pesan terakhir)
-        const msgs = await interaction.channel.messages.fetch({ limit: 10 });
-        const panelMsg = msgs.find(m => m.embeds[0] && m.embeds[0].title === '🎫 VIBEBLOX TICKET CENTER');
-        
-        if (panelMsg) {
-            const panelData = await renderTicketPanel();
-            await panelMsg.edit(panelData);
-            return interaction.editReply(`✅ Button **${tipe}** berhasil di-${status ? 'Enable' : 'Disable'}!`);
+        let updateMsg = '';
+
+        // REAL-TIME UPDATE LOGIC
+        if (config.panelChannelId && config.panelMessageId) {
+            try {
+                // Fetch channel dan pesan langsung menggunakan ID (Aman & Ringan)
+                const channel = await client.channels.fetch(config.panelChannelId);
+                if (channel) {
+                    const panelMsg = await channel.messages.fetch(config.panelMessageId);
+                    if (panelMsg) {
+                        const panelData = await renderTicketPanel();
+                        await panelMsg.edit(panelData);
+                        updateMsg = `✅ Button **${tipe}** berhasil di-${status ? 'Enable' : 'Disable'} dan Panel ter-update realtime!`;
+                    }
+                }
+            } catch (e) {
+                console.error("Gagal update panel tiket realtime:", e.message);
+                updateMsg = `✅ Button **${tipe}** di-${status ? 'Enable' : 'Disable'} (Data tersimpan, tapi pesan panel lama sudah terhapus di Discord. Silakan gunakan /ticket ulang).`;
+            }
         } else {
-            return interaction.editReply(`✅ Data tersimpan, tapi pesan panel tidak ditemukan di channel ini. Silakan buat ulang /ticket.`);
+            updateMsg = `✅ Button **${tipe}** di-${status ? 'Enable' : 'Disable'} (Belum ada panel tiket aktif yang didaftarkan. Silakan jalankan /ticket).`;
         }
+
+        return interaction.editReply(updateMsg);
     }
 
     // --- BUTTON PANEL TICKET -> MODAL ---
