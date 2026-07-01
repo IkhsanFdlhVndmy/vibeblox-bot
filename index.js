@@ -560,7 +560,7 @@ client.on('interactionCreate', async (interaction) => {
             .setColor(0x4F4580)
             .setTitle('🎫 VIBEBLOX - Ticket Order')
             .setThumbnail('https://cdn.discordapp.com/attachments/1500317839507062897/1515115963928940706/iconbot.png') // Menambahkan logo kecil di kanan atas seperti PrimeBlox
-            .setDescription(`${separator}\n\n💎 **Robux Community**\nTop up robux cepat melalui sistem Payout Community.\n\n🏷️ **Robux Send Plus**\nRobux masuk secara instant tanpa pending via Roblox Plus.\n\n💳 **Robux Vilog**\nTop up Robux instant melalui metode login akun (100% Aman).\n\n💰 **Robux Gamepass**\nSistem After Tax (Terima Bersih). Robux cair setelah 5 Hari.\n\n🎁 **Gift In-Game**\nGift semua item atau gamepass di semua map Roblox.\n\n👑 **Limited Item**\nPembelian item Limited Roblox.\n\n💼 **Middleman**\nJasa perantara (Rekber) aman untuk segala transaksi.\n\n${separator}`)
+            .setDescription(`\n\n💎 **Robux Community**\nTop up robux cepat melalui sistem Payout Community.\n🏷️ **Robux Send Plus**\nRobux masuk secara instant tanpa pending via Roblox Plus.\n💳 **Robux Vilog**\nTop up Robux instant melalui metode login akun (100% Aman).\n💰 **Robux Gamepass**\nSistem After Tax (Terima Bersih). Robux cair setelah 5 Hari.\n🎁 **Gift In-Game**\nGift semua item atau gamepass di semua map Roblox.\n👑 **Limited Item**\nPembelian item Limited Roblox.\n💼 **Middleman**\nJasa perantara (Rekber) aman untuk segala transaksi.\n`)
             .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1521628896938819805/server_banner.png?ex=6a4586d7&is=6a443557&hm=77ec74c8c32de11eae99a2b8baf14fc2b02da44c73b7581f36e478b0ff04be20&')
             .setFooter({ text: 'Made by VibeBlox' });
 
