@@ -1,11 +1,13 @@
 require('dotenv').config();
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Options, MessageFlags } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Options, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } = require('discord.js');
 const mongoose = require('mongoose');
 const axios = require('axios');
 const User = require('./models/User');
 const Store = require('./models/Store');
 const RobuxRate = require('./models/RobuxRate');
 const Partner = require('./models/Partner'); // <--- TAMBAHKAN INI
+const TicketConfig = require('./models/TicketConfig'); // <--- TAMBAHAN TICKET
+const Ticket = require('./models/Ticket');             // <--- TAMBAHAN TICKET
 
 const client = new Client({
     intents: [
@@ -315,6 +317,38 @@ const slashCommands = [
             }
         ]
     },
+
+    // --- TAMBAHAN TICKET SYSTEM ---
+    {
+        name: 'ticket',
+        description: 'Post panel Embed Ticket System VibeBlox'
+    },
+    {
+        name: 'buttonticket',
+        description: 'Enable/Disable tombol metode pada Ticket Panel',
+        options: [
+            {
+                name: 'tipe', description: 'Pilih tipe via', type: 3, required: true,
+                choices: [
+                    { name: 'Community', value: 'community' },
+                    { name: 'Send Plus', value: 'robux_plus' },
+                    { name: 'Vilog', value: 'vilog' },
+                    { name: 'Gamepass', value: 'gamepass' },
+                    { name: 'Gift In-Game', value: 'gig' },
+                    { name: 'Limited Item', value: 'limited' },
+                    { name: 'Middleman', value: 'mm' }
+                ]
+            },
+            {
+                name: 'status', description: 'Enable atau Disable?', type: 3, required: true,
+                choices: [
+                    { name: 'Enable', value: 'enable' },
+                    { name: 'Disable', value: 'disable' }
+                ]
+            }
+        ]
+    },
+    
     //cek eligble
     {
         name: 'cek-eligible', 
@@ -509,6 +543,368 @@ let isCheckingEligible = false;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 client.on('interactionCreate', async (interaction) => {
+
+    // =========================================================================
+    // === TICKET SYSTEM - AI OPTIMIZED FOR ALWAYSDATA ===
+    // =========================================================================
+
+    // Fungsi Render Panel Ticket
+    const renderTicketPanel = async (channel) => {
+        let config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
+        if (!config) config = new TicketConfig();
+
+        const embedTicket = new EmbedBuilder()
+            .setColor(0x4F4580)
+            .setTitle('🎫 VIBEBLOX TICKET CENTER')
+            .setDescription('Silakan pilih kategori tiket sesuai dengan layanan yang kamu butuhkan dengan memencet tombol di bawah.\n\n🛒 **Buy Robux:** *Community, Send Plus, Vilog, Gamepass*\n🎁 **Buy Item:** *Gift In-Game, Limited Item*\n💼 **Jasa Perantara:** *Middleman*\n\n*Pilih sesuai kebutuhanmu agar admin bisa memproses dengan cepat!*')
+            .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1521628896938819805/server_banner.png?ex=6a4586d7&is=6a443557&hm=77ec74c8c32de11eae99a2b8baf14fc2b02da44c73b7581f36e478b0ff04be20&')
+            .setFooter({ text: 'VibeBlox Smart Ticketing' });
+
+        const allButtons = [
+            { id: 'community', btn: new ButtonBuilder().setCustomId('tc_community').setLabel('💎 Robux Community').setStyle(ButtonStyle.Primary) },
+            { id: 'robux_plus', btn: new ButtonBuilder().setCustomId('tc_robux_plus').setLabel('🏷️ Robux Send Plus').setStyle(ButtonStyle.Secondary) },
+            { id: 'vilog', btn: new ButtonBuilder().setCustomId('tc_vilog').setLabel('💳 Robux Vilog').setStyle(ButtonStyle.Primary) },
+            { id: 'gamepass', btn: new ButtonBuilder().setCustomId('tc_gamepass').setLabel('💰 Robux Gamepass').setStyle(ButtonStyle.Secondary) },
+            { id: 'gig', btn: new ButtonBuilder().setCustomId('tc_gig').setLabel('🎁 Gift In-Game').setStyle(ButtonStyle.Success) },
+            { id: 'limited', btn: new ButtonBuilder().setCustomId('tc_limited').setLabel('👑 Limited Item').setStyle(ButtonStyle.Success) },
+            { id: 'mm', btn: new ButtonBuilder().setCustomId('tc_mm').setLabel('💼 Middleman').setStyle(ButtonStyle.Danger) }
+        ];
+
+        // Pisahkan tombol enable dan disable untuk disorting
+        const enabledButtons = [];
+        const disabledButtons = [];
+
+        for (const b of allButtons) {
+            const isEnabled = config.buttonStates.get(b.id) !== false; // Default true
+            if (isEnabled) {
+                enabledButtons.push(b.btn.setDisabled(false));
+            } else {
+                disabledButtons.push(b.btn.setDisabled(true));
+            }
+        }
+
+        const sortedButtons = [...enabledButtons, ...disabledButtons];
+        const components = [];
+        // Max 5 buttons per ActionRow
+        for (let i = 0; i < sortedButtons.length; i += 5) {
+            components.push(new ActionRowBuilder().addComponents(sortedButtons.slice(i, i + 5)));
+        }
+
+        return { embeds: [embedTicket], components };
+    };
+
+    // --- SLASH COMMAND: /ticket ---
+    if (interaction.isChatInputCommand() && interaction.commandName === 'ticket') {
+        if (!interaction.member.permissions.has('Administrator')) {
+            return interaction.reply({ content: '❌ Hanya admin yang dapat membuat panel tiket.', flags: MessageFlags.Ephemeral });
+        }
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const panelData = await renderTicketPanel();
+        await interaction.channel.send(panelData);
+        return interaction.editReply('✅ Panel tiket berhasil dikirim.');
+    }
+
+    // --- SLASH COMMAND: /buttonticket ---
+    if (interaction.isChatInputCommand() && interaction.commandName === 'buttonticket') {
+        const allowedRolesBtn = ['1489612423521374309', '1489612221544665231'];
+        if (!interaction.member.roles.cache.some(r => allowedRolesBtn.includes(r.id))) {
+            return interaction.reply({ content: '❌ Akses ditolak.', flags: MessageFlags.Ephemeral });
+        }
+        
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const tipe = interaction.options.getString('tipe');
+        const status = interaction.options.getString('status') === 'enable';
+
+        let config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
+        if (!config) config = new TicketConfig();
+        
+        config.buttonStates.set(tipe, status);
+        await config.save();
+
+        // Cari pesan panel tiket dan update otomatis (Fetch 10 pesan terakhir)
+        const msgs = await interaction.channel.messages.fetch({ limit: 10 });
+        const panelMsg = msgs.find(m => m.embeds[0] && m.embeds[0].title === '🎫 VIBEBLOX TICKET CENTER');
+        
+        if (panelMsg) {
+            const panelData = await renderTicketPanel();
+            await panelMsg.edit(panelData);
+            return interaction.editReply(`✅ Button **${tipe}** berhasil di-${status ? 'Enable' : 'Disable'}!`);
+        } else {
+            return interaction.editReply(`✅ Data tersimpan, tapi pesan panel tidak ditemukan di channel ini. Silakan buat ulang /ticket.`);
+        }
+    }
+
+    // --- BUTTON PANEL TICKET -> MODAL ---
+    if (interaction.isButton() && interaction.customId.startsWith('tc_')) {
+        const type = interaction.customId.replace('tc_', '');
+        
+        const modal = new ModalBuilder().setCustomId(`tm_${type}`).setTitle('Formulir Pemesanan');
+
+        const userRoblox = new TextInputBuilder().setCustomId('user_roblox').setLabel('Username Roblox').setStyle(TextInputStyle.Short).setRequired(true);
+        const jmlRobux = new TextInputBuilder().setCustomId('jml_robux').setLabel('Jumlah Robux (Contoh: 1000)').setStyle(TextInputStyle.Short).setRequired(true);
+
+        if (['community', 'robux_plus', 'vilog'].includes(type)) {
+            modal.addComponents(new ActionRowBuilder().addComponents(userRoblox), new ActionRowBuilder().addComponents(jmlRobux));
+        } else if (type === 'gamepass') {
+            modal.addComponents(new ActionRowBuilder().addComponents(jmlRobux));
+        } else if (type === 'gig') {
+            const namaMap = new TextInputBuilder().setCustomId('nama_map').setLabel('Nama Map').setStyle(TextInputStyle.Short).setRequired(true);
+            const namaItem = new TextInputBuilder().setCustomId('nama_item').setLabel('Nama Item').setStyle(TextInputStyle.Short).setRequired(true);
+            modal.addComponents(new ActionRowBuilder().addComponents(userRoblox), new ActionRowBuilder().addComponents(namaMap), new ActionRowBuilder().addComponents(namaItem), new ActionRowBuilder().addComponents(jmlRobux));
+        } else if (type === 'limited') {
+            const namaLimited = new TextInputBuilder().setCustomId('nama_limited').setLabel('Nama Limited Item').setStyle(TextInputStyle.Short).setRequired(true);
+            const tumbal = new TextInputBuilder().setCustomId('tumbal').setLabel('Sudah ada item tumbal? (Sudah/Belum)').setStyle(TextInputStyle.Short).setRequired(true);
+            modal.addComponents(new ActionRowBuilder().addComponents(userRoblox), new ActionRowBuilder().addComponents(namaLimited), new ActionRowBuilder().addComponents(tumbal));
+        } else if (type === 'mm') {
+            const mmPembeli = new TextInputBuilder().setCustomId('mm_pembeli').setLabel('Username Discord Pembeli').setStyle(TextInputStyle.Short).setRequired(true);
+            const mmPenjual = new TextInputBuilder().setCustomId('mm_penjual').setLabel('Username Discord Penjual').setStyle(TextInputStyle.Short).setRequired(true);
+            const mmUang = new TextInputBuilder().setCustomId('mm_uang').setLabel('Jumlah Transaksi (Rp / Robux)').setStyle(TextInputStyle.Short).setRequired(true);
+            modal.addComponents(new ActionRowBuilder().addComponents(mmPembeli), new ActionRowBuilder().addComponents(mmPenjual), new ActionRowBuilder().addComponents(mmUang));
+        }
+
+        // Tampilkan modal SECARA INSTAN agar tidak Interaction Failed
+        return await interaction.showModal(modal);
+    }
+
+    // --- SUBMIT MODAL -> CREATE TICKET CHANNEL ---
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('tm_')) {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // Balas aman dulu
+        
+        const type = interaction.customId.replace('tm_', '');
+        const categoryId = '1488785950011166790'; // Kategori Tiket
+        const roleOwner = '1489612423521374309';
+        const roleHandler = '1489612221544665231';
+        const rolePartner = '1519076541055897670';
+
+        let config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
+        if (!config) config = new TicketConfig();
+        
+        config.ticketCounter += 1;
+        await config.save();
+
+        const channelName = `ticket-${config.ticketCounter}`;
+
+        try {
+            // Setup Permission
+            const permissionOverwrites = [
+                { id: interaction.guild.id, deny: ['ViewChannel'] }, // @everyone hide
+                { id: interaction.user.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] },
+                { id: roleOwner, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] },
+                { id: roleHandler, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] },
+                { id: rolePartner, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] }
+            ];
+
+            // Analisis Ekstra Untuk Middleman (Pencarian User Super Ringan)
+            let mmPings = '';
+            if (type === 'mm') {
+                const qPembeli = interaction.fields.getTextInputValue('mm_pembeli');
+                const qPenjual = interaction.fields.getTextInputValue('mm_penjual');
+                
+                // Gunakan query search bawaan Discord.js yang ramah RAM
+                const srchPembeli = await interaction.guild.members.fetch({ query: qPembeli, limit: 1 }).catch(()=>null);
+                const srchPenjual = await interaction.guild.members.fetch({ query: qPenjual, limit: 1 }).catch(()=>null);
+
+                if (srchPembeli && srchPembeli.first()) {
+                    permissionOverwrites.push({ id: srchPembeli.first().id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] });
+                    mmPings += `<@${srchPembeli.first().id}> `;
+                }
+                if (srchPenjual && srchPenjual.first()) {
+                    permissionOverwrites.push({ id: srchPenjual.first().id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] });
+                    mmPings += `<@${srchPenjual.first().id}> `;
+                }
+            }
+
+            // Buat Channel
+            const ticketChannel = await interaction.guild.channels.create({
+                name: channelName,
+                type: 0, // Text Channel
+                parent: categoryId,
+                permissionOverwrites: permissionOverwrites
+            });
+
+            // Simpan ke DB
+            await Ticket.create({
+                channelId: ticketChannel.id,
+                creatorId: interaction.user.id,
+                ticketType: type
+            });
+
+            // Susun Embed Tiket
+            const typeLabels = {
+                'community': '💎 Robux Community (Instant, Non-Tax)',
+                'robux_plus': '🏷️ Robux Send Plus (Instant Username)',
+                'vilog': '💳 Robux Vilog (Via Login)',
+                'gamepass': '💰 Robux Gamepass (After Tax 5 Hari)',
+                'gig': '🎁 Gift In-Game (Via Map)',
+                'limited': '👑 Limited Item',
+                'mm': '💼 Middleman Jasa Perantara'
+            };
+
+            const ticketEmbed = new EmbedBuilder()
+                .setColor(0x4F4580)
+                .setTitle(`🎫 Order Tiket: ${typeLabels[type]}`)
+                .setDescription(`Halo <@${interaction.user.id}>! Terima kasih telah membuka tiket. Silakan tunggu staf kami untuk merespons pesanan Anda.\n\n**Data Pemesanan:**`)
+                .setThumbnail(interaction.user.displayAvatarURL());
+
+            // Masukkan data form ke Embed
+            if (['community', 'robux_plus', 'vilog'].includes(type)) {
+                ticketEmbed.addFields(
+                    { name: '👤 Username Roblox', value: `\`${interaction.fields.getTextInputValue('user_roblox')}\``, inline: true },
+                    { name: '💰 Jumlah Robux', value: `**${interaction.fields.getTextInputValue('jml_robux')} R$**`, inline: true }
+                );
+            } else if (type === 'gamepass') {
+                ticketEmbed.addFields({ name: '💰 Jumlah Robux', value: `**${interaction.fields.getTextInputValue('jml_robux')} R$**`, inline: true });
+            } else if (type === 'gig') {
+                ticketEmbed.addFields(
+                    { name: '👤 Username Roblox', value: `\`${interaction.fields.getTextInputValue('user_roblox')}\``, inline: true },
+                    { name: '💰 Jumlah Robux', value: `**${interaction.fields.getTextInputValue('jml_robux')} R$**`, inline: true },
+                    { name: '🗺️ Nama Map', value: interaction.fields.getTextInputValue('nama_map'), inline: false },
+                    { name: '🎁 Nama Item', value: interaction.fields.getTextInputValue('nama_item'), inline: false }
+                );
+            } else if (type === 'limited') {
+                ticketEmbed.addFields(
+                    { name: '👤 Username Roblox', value: `\`${interaction.fields.getTextInputValue('user_roblox')}\``, inline: true },
+                    { name: '👑 Nama Limited', value: interaction.fields.getTextInputValue('nama_limited'), inline: true },
+                    { name: '♻️ Status Tumbal', value: interaction.fields.getTextInputValue('tumbal'), inline: false }
+                );
+            } else if (type === 'mm') {
+                ticketEmbed.addFields(
+                    { name: '🛒 Username Pembeli', value: interaction.fields.getTextInputValue('mm_pembeli'), inline: true },
+                    { name: '🏪 Username Penjual', value: interaction.fields.getTextInputValue('mm_penjual'), inline: true },
+                    { name: '💵 Jumlah Transaksi', value: `**${interaction.fields.getTextInputValue('mm_uang')}**`, inline: false }
+                );
+            }
+
+            const actionRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('ta_claim').setLabel('🎯 Claim Ticket').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('ta_close').setLabel('🔒 Close Ticket').setStyle(ButtonStyle.Danger)
+            );
+
+            const msgContent = type === 'mm' && mmPings !== '' ? `Memanggil para pihak: ${mmPings}` : `<@${interaction.user.id}>`;
+            await ticketChannel.send({ content: msgContent, embeds: [ticketEmbed], components: [actionRow] });
+
+            return interaction.editReply(`✅ Tiket berhasil dibuat! Silakan menuju ${ticketChannel}`);
+
+        } catch (e) {
+            console.error(e);
+            return interaction.editReply('❌ Gagal membuat tiket karena error sistem/permission Discord.');
+        }
+    }
+
+    // --- TICKET ACTION BUTTONS (CLAIM / CLOSE / UNCLAIM) ---
+    if (interaction.isButton() && interaction.customId.startsWith('ta_')) {
+        const action = interaction.customId;
+        const ticketData = await Ticket.findOne({ channelId: interaction.channel.id });
+
+        if (!ticketData) return interaction.reply({ content: '❌ Data tiket tidak ditemukan di sistem.', flags: MessageFlags.Ephemeral });
+
+        const isStaff = interaction.member.roles.cache.some(r => ['1489612423521374309', '1489612221544665231', '1519076541055897670'].includes(r.id));
+        
+        // CLAIM TICKET
+        if (action === 'ta_claim') {
+            if (!isStaff) return interaction.reply({ content: '❌ Hanya staf yang bisa meng-claim tiket ini.', flags: MessageFlags.Ephemeral });
+            if (ticketData.claimedBy) return interaction.reply({ content: `❌ Tiket ini sudah diklaim oleh <@${ticketData.claimedBy}>!`, flags: MessageFlags.Ephemeral });
+
+            await interaction.deferUpdate();
+            
+            ticketData.claimedBy = interaction.user.id;
+            await ticketData.save();
+
+            const oldEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
+            oldEmbed.setColor(0x57F287) // Hijau
+                    .addFields({ name: '🎯 Status Tiket', value: `Diklaim oleh: <@${interaction.user.id}>\nPada: <t:${Math.floor(Date.now() / 1000)}:f>`, inline: false });
+
+            const newRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('ta_unclaim').setLabel('🔄 Unclaim').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('ta_close').setLabel('🔒 Close Ticket').setStyle(ButtonStyle.Danger)
+            );
+
+            await interaction.message.edit({ embeds: [oldEmbed], components: [newRow] });
+            await interaction.followUp({ content: `✅ Tiket telah berhasil kamu *claim*, <@${interaction.user.id}>!`, flags: MessageFlags.Ephemeral });
+        }
+
+        // UNCLAIM TICKET
+        if (action === 'ta_unclaim') {
+            if (ticketData.claimedBy !== interaction.user.id && !interaction.member.permissions.has('Administrator')) {
+                return interaction.reply({ content: '❌ Kamu tidak bisa melakukan unclaim tiket yang bukan milikmu.', flags: MessageFlags.Ephemeral });
+            }
+
+            await interaction.deferUpdate();
+
+            ticketData.claimedBy = null;
+            await ticketData.save();
+
+            const oldEmbed = EmbedBuilder.from(interaction.message.embeds[0]);
+            // Hapus field terakhir (Status claim)
+            oldEmbed.data.fields.pop();
+            oldEmbed.setColor(0x4F4580);
+
+            const originalRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('ta_claim').setLabel('🎯 Claim Ticket').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('ta_close').setLabel('🔒 Close Ticket').setStyle(ButtonStyle.Danger)
+            );
+
+            await interaction.message.edit({ embeds: [oldEmbed], components: [originalRow] });
+            await interaction.channel.send({ content: `🔄 <@${interaction.user.id}> melepaskan claim dari tiket ini. Admin lain kini dapat melakukan claim.` });
+        }
+
+        // CLOSE TICKET (Generate ringan, gak pakai library HTML)
+        if (action === 'ta_close') {
+            if (!isStaff) return interaction.reply({ content: '❌ Hanya staf yang bisa menutup tiket.', flags: MessageFlags.Ephemeral });
+
+            // Mencegah klik beruntun
+            const msgId = interaction.message.id;
+            if (isUpdating.has(`tc_close_${msgId}`)) return interaction.reply({ content: '⏳ Tiket sedang ditutup...', flags: MessageFlags.Ephemeral });
+            isUpdating.add(`tc_close_${msgId}`);
+
+            await interaction.reply({ content: '🔒 Menyiapkan data dan menutup tiket... Channel akan terhapus sebentar lagi.' });
+
+            try {
+                // 1. Buat Text Transcript Hemat RAM (Max 100 pesan)
+                const msgs = await interaction.channel.messages.fetch({ limit: 100 });
+                const transcriptData = msgs.reverse().map(m => `[${m.createdAt.toLocaleString('id-ID')}] ${m.author.tag}: ${m.content ? m.content : '[Ada Embed/Attachment/Sticker]'}`).join('\n');
+                
+                const buffer = Buffer.from(transcriptData, 'utf-8');
+                const fileAttachment = new AttachmentBuilder(buffer, { name: `${interaction.channel.name}-transcript.txt` });
+
+                // 2. Kirim Embed ke Log Channel
+                const logChannelId = '1490236117293862962';
+                const logChannel = await interaction.guild.channels.fetch(logChannelId).catch(() => null);
+
+                if (logChannel) {
+                    const durasiInMs = Date.now() - ticketData.createdAt.getTime();
+                    const durasiJam = Math.floor(durasiInMs / 3600000);
+                    const durasiMenit = Math.floor((durasiInMs % 3600000) / 60000);
+
+                    const claimText = ticketData.claimedBy ? `<@${ticketData.claimedBy}>` : '*Tidak ada yang claim*';
+
+                    const logEmbed = new EmbedBuilder()
+                        .setColor(0xED4245)
+                        .setTitle(`📑 Transcript: ${interaction.channel.name}`)
+                        .addFields(
+                            { name: '👤 Pembuat Tiket', value: `<@${ticketData.creatorId}>`, inline: true },
+                            { name: '🛠️ Ditangani Oleh', value: claimText, inline: true },
+                            { name: '⏱️ Durasi Tiket', value: `${durasiJam} Jam, ${durasiMenit} Menit`, inline: false },
+                            { name: '📜 Tipe Via', value: `**${ticketData.ticketType.toUpperCase()}**`, inline: false }
+                        )
+                        .setFooter({ text: 'VibeBlox Auto-Transcript' })
+                        .setTimestamp();
+
+                    await logChannel.send({ embeds: [logEmbed], files: [fileAttachment] });
+                }
+
+                // 3. Hapus DB dan Channel
+                await Ticket.deleteOne({ channelId: interaction.channel.id });
+                await interaction.channel.delete();
+            } catch (err) {
+                console.error("Gagal saat close tiket:", err);
+            } finally {
+                isUpdating.delete(`tc_close_${msgId}`);
+            }
+        }
+    }
+
+    
     // ----- BUTTON LEADERBOARD PAGINATION -----
     if (interaction.isButton() && (interaction.customId.startsWith('lb_prev_') || interaction.customId.startsWith('lb_next_'))) {
         // Anti-spam: kalau masih proses, ignore
@@ -789,7 +1185,6 @@ client.on('interactionCreate', async (interaction) => {
             const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
             const methodNames = { 'qris': 'QRIS', 'bca': 'BCA', 'dana': 'Dana', 'gopay': 'GoPay', 'lainnya': 'Lainnya' };
 
-            // Mapping keterangan Vouch sesuai Tipe
             const vouchDescriptions = {
                 'community': 'Robux Payout Instant',
                 'vilog': 'Robux Via Login',
@@ -799,18 +1194,16 @@ client.on('interactionCreate', async (interaction) => {
                 'robux_plus': 'Robux Via Send Username'
             };
 
-            // SEGERA eksekusi update untuk menghindari Interaction Failed (Ram & CPU friendly)
             await interaction.update({ content: '⏳ Memproses transaksi & generate vouch...', embeds: [], components: [] });
 
             try {
-                // Fetch invoice message to get data from embed
                 const invoiceMsg = await interaction.channel.messages.fetch(msgIdPart);
                 const invoiceEmbed = invoiceMsg.embeds[0];
 
                 let targetUserId = null;
                 let totalHarga = 0;
                 let amountRobux = 0;
-                let adminUserId = interaction.user.id; // Default ID Admin yang klik "Yakin"
+                let adminUserId = interaction.user.id; 
 
                 if (invoiceEmbed && invoiceEmbed.fields) {
                     for (const field of invoiceEmbed.fields) {
@@ -826,7 +1219,6 @@ client.on('interactionCreate', async (interaction) => {
                             const numMatch = field.value.replace(/[^\d]/g, '');
                             if (numMatch) totalHarga = parseInt(numMatch);
                         }
-                        // Tarik otomatis jumlah Robux
                         if (field.name.includes('Jumlah Robux')) {
                             const numMatch = field.value.replace(/[^\d]/g, '');
                             if (numMatch) amountRobux = parseInt(numMatch);
@@ -840,7 +1232,7 @@ client.on('interactionCreate', async (interaction) => {
                     return;
                 }
 
-                // 1) EKSEKUSI DATABASE SECARA BERURUTAN (Aman untuk 0.25 CPU)
+                // EKSEKUSI DATABASE
                 let userData = await User.findOne({ userId: targetUserId });
                 if (!userData) userData = new User({ userId: targetUserId });
                 userData.uangMasuk += totalHarga;
@@ -855,7 +1247,7 @@ client.on('interactionCreate', async (interaction) => {
                 await updateSpenderRoles(targetMember, userData);
                 scheduleLiveLeaderboardUpdate();
 
-                // 2) UBAH WARNA EMBED INVOICE JADI HIJAU (TANDA SELESAI)
+                // UBAH WARNA EMBED
                 const doneEmbed = EmbedBuilder.from(invoiceEmbed)
                     .setColor(0x57F287)
                     .setFooter({ text: '✅ Invoice Selesai • VibeBlox' });
@@ -868,17 +1260,11 @@ client.on('interactionCreate', async (interaction) => {
 
                 await invoiceMsg.edit({ embeds: [doneEmbed], components: disabledComponents });
 
-                // 3) KIRIM LOG KE STORE-FINANCE
+                // LOG STORE FINANCE
                 const financeChannelId = '1489665490770067678';
                 const kategori = `${typeNames[typeValue] || typeValue} - ${methodNames[method] || method}`;
-
                 let pembeliDisplay = `<@${targetUserId}>`;
-                try {
-                    const fetched = targetMember || await interaction.guild.members.fetch(targetUserId);
-                    if (fetched) {
-                        pembeliDisplay = `<@${targetUserId}>\n(${fetched.displayName} • @${fetched.user.username})`;
-                    }
-                } catch (e) {}
+                if (targetMember) pembeliDisplay = `<@${targetUserId}>\n(${targetMember.displayName} • @${targetMember.user.username})`;
 
                 const historyEmbed = new EmbedBuilder()
                     .setColor(0x57F287)
@@ -896,7 +1282,7 @@ client.on('interactionCreate', async (interaction) => {
                     if (financeChannel) await financeChannel.send({ embeds: [historyEmbed] });
                 } catch (e) { console.error("Gagal kirim ke store-finance:", e.message); }
 
-               // 4) GENERATE & KIRIM PESAN AUTO-VOUCH (UI/UX Mobile Friendly Menggunakan Embed)
+                // GENERATE AUTO VOUCH
                 const separator = '──────────────────────────────';
                 const vouchDesc = vouchDescriptions[typeValue] || 'Robux';
                 const vouchTemplate = `+vouch robux <@${adminUserId}> ${amountRobux} ${vouchDesc}`;
@@ -906,20 +1292,21 @@ client.on('interactionCreate', async (interaction) => {
                     .setTitle('📥 Bantu Vouch! ')
                     .setDescription(`Silahkan Kirim Teks Vouch dibawah ini Ke Channel <#1488903383963406507> ya!\n${separator}\n**📱 Pengguna HP:** Tekan dan tahan teks vouch di paling bawah, Lalu pencet **Copy Text**. \n**💻 Pengguna PC:** Blok teks paling bawah lalu tekan **CTRL+C**.\n${separator}\n\n**👇 SALIN TEKS VOUCH DI BAWAH INI:**`);
 
-                // Mengirim Embed instruksi
                 await interaction.channel.send({ embeds: [autoVouchEmbed] });
-
-                // Mengirim Teks Vouch Murni sebagai chat terpisah (Bisa di-copy gampang di iOS/Android)
                 await interaction.channel.send({ content: vouchTemplate });
 
-                // Update pesan ephemeral admin
                 await interaction.editReply({ content: '✅ Invoice selesai! Pencatatan dan Auto-Vouch berhasil diproses.' });
+
+                // [UBAH NAMA CHANNEL JADI -DONE]
+                // Dijalankan terakhir secara async tanpa await blocking
+                if (!interaction.channel.name.endsWith('-done')) {
+                    interaction.channel.setName(`${interaction.channel.name}-done`).catch(e => console.log("Abaikan: Rate limit rename (Tambah done)"));
+                }
 
             } catch (err) {
                 console.error("Invoice confirm error:", err.message);
                 await interaction.editReply({ content: '❌ Terjadi error saat memproses invoice.' });
                 try {
-                    // Coba hidupkan lagi tombol Done jika gagal di tengah jalan
                     const invoiceMsg = await interaction.channel.messages.fetch(msgIdPart);
                     const origComponents = invoiceMsg.components.map(row => {
                         const newRow = ActionRowBuilder.from(row);
@@ -1079,7 +1466,7 @@ client.on('interactionCreate', async (interaction) => {
             return;
         }
 
-        // EKSEKUSI DATABASE & LOG (YAKIN)
+// EKSEKUSI DATABASE & LOG (YAKIN)
         if (customId.startsWith('pinvf_confirm_yes_')) {
             const withoutPrefix = customId.replace('pinvf_confirm_yes_', '');
             const beforeMsgId = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
@@ -1104,19 +1491,18 @@ client.on('interactionCreate', async (interaction) => {
 
                 if (!targetUserId || !totalHarga) return await interaction.editReply({ content: '❌ Gagal baca invoice.' });
 
-                // 1. UPDATE USER SPENDING (Keuntungan VibeBlox Utama)
+                // 1. UPDATE USER SPENDING
                 let userData = await User.findOne({ userId: targetUserId });
                 if (!userData) userData = new User({ userId: targetUserId });
                 userData.uangMasuk += totalHarga;
                 await userData.save();
 
-                // 2. UPDATE KEUANGAN KHUSUS PARTNER (Tidak masuk ke Store utama)
+                // 2. UPDATE KEUANGAN PARTNER
                 let partnerData = await Partner.findOne({ partnerId: interaction.user.id });
                 if (!partnerData) partnerData = new Partner({ partnerId: interaction.user.id });
                 partnerData.totalUangMasuk += totalHarga;
                 await partnerData.save();
 
-                // Auto role & Leaderboard update
                 const targetMember = await interaction.guild.members.fetch(targetUserId).catch(() => null);
                 await updateSpenderRoles(targetMember, userData);
                 scheduleLiveLeaderboardUpdate();
@@ -1125,7 +1511,7 @@ client.on('interactionCreate', async (interaction) => {
                 const doneEmbed = EmbedBuilder.from(invoiceEmbed).setColor(0x57F287).setFooter({ text: '✅ Partner Invoice Selesai' });
                 await invoiceMsg.edit({ embeds: [doneEmbed], components: [] });
 
-                // 4. KIRIM LOG KE PARTNER-FINANCE (Channel Khusus)
+                // 4. KIRIM LOG PARTNER
                 const partnerFinanceId = '1519075561396371647';
                 let pembeliDisplay = `<@${targetUserId}>`;
                 if (targetMember) pembeliDisplay += `\n(${targetMember.displayName})`;
@@ -1158,16 +1544,21 @@ client.on('interactionCreate', async (interaction) => {
                     .setTitle('📥 Bantu Vouch! ')
                     .setDescription(`Silahkan Kirim Teks Vouch dibawah ini Ke Channel <#1488903383963406507> ya!\n${separator}\n**📱 Pengguna HP:** Tekan dan tahan teks vouch di paling bawah, Lalu pencet **Copy Text**. \n**💻 Pengguna PC:** Blok teks paling bawah lalu tekan **CTRL+C**.\n${separator}\n\n**👇 SALIN TEKS VOUCH DI BAWAH INI:**`);
 
-                // Mengirim Embed instruksi
                 await interaction.channel.send({ embeds: [autoVouchEmbed] });
-
-                // Mengirim Teks Vouch Murni sebagai chat terpisah (Bisa di-copy gampang di iOS/Android)
                 await interaction.channel.send({ content: vouchTemplate });
 
                 await interaction.editReply({ content: '✅ Transaksi Partner selesai!' });
+
+                // [UBAH NAMA CHANNEL JADI -DONE]
+                if (!interaction.channel.name.endsWith('-done')) {
+                    interaction.channel.setName(`${interaction.channel.name}-done`).catch(e => console.log("Abaikan: Rate limit rename (Tambah done)"));
+                }
+
             } catch (err) {
                 console.error("Partner Invoice error:", err);
                 await interaction.editReply({ content: '❌ Terjadi error sistem.' });
+            } finally {
+                isUpdating.delete(`pinv_done_${invoiceMsgId}`);
             }
             return;
         }
@@ -1495,6 +1886,8 @@ Jumlah Robux: `;
         return;
     }
 
+    
+
 // --- CEK ELIGIBLE (MULTI-GROUP & ANTI-SPAM LOCK) ---
     if (command === 'cek-eligible') {
         // Sistem Antrean: Tolak jika bot sedang mengecek untuk user lain
@@ -1633,7 +2026,7 @@ Jumlah Robux: `;
         return;
     }
 
-    // --- ROBUX CALCULATOR ---
+// --- ROBUX CALCULATOR ---
     if (command === 'robux') {
         const allowedRolesRobux = ['1489612423521374309', '1489612221544665231', '1519076541055897670'];
         const hasRoleRobux = interaction.member.roles.cache.some(role => allowedRolesRobux.includes(role.id));
@@ -1650,7 +2043,6 @@ Jumlah Robux: `;
             return interaction.editReply({ content: '❌ Jumlah Robux harus lebih dari 0!' });
         }
 
-        // Ambil rate dari database
         const rateData = await RobuxRate.findOne({ type }).lean();
         if (!rateData) {
             return interaction.editReply({ content: '❌ Rate untuk tipe ini belum diatur. Hubungi admin.' });
@@ -1669,7 +2061,6 @@ Jumlah Robux: `;
         let detailCalc = '';
 
         if (type === 'vilog') {
-            // Vilog: kelipatan 500 robux
             if (amount % 500 !== 0) {
                 return interaction.editReply({ content: '❌ Untuk tipe **Vilog**, jumlah Robux harus kelipatan **500**!\n*(Contoh: 500, 1000, 1500, 2000, ...)*' });
             }
@@ -1681,7 +2072,6 @@ Jumlah Robux: `;
             }
             detailCalc = `${kelipatan}x Rp ${formatRupiah(rateData.rate)} (per 500 Robux)\n= ${parts.join(' + ')}`;
         } else {
-            // Type lainnya: rate * amount
             totalHarga = rateData.rate * amount;
             detailCalc = `Rp ${formatRupiah(rateData.rate)} × ${formatRupiah(amount)} Robux`;
         }
@@ -1702,8 +2092,7 @@ Jumlah Robux: `;
         return interaction.editReply({ embeds: [robuxEmbed] });
     }
 
-    // --- HARGA ROBUX (UPDATE RATE) ---
-// --- HARGA ROBUX (UPDATE RATE & AUTO SYNC MENU) ---
+    // --- HARGA ROBUX (UPDATE RATE & AUTO SYNC MENU) ---
     if (command === 'hargarobux') {
         const allowedRolesHarga = ['1489612423521374309', '1489612221544665231'];
         const hasRoleHarga = interaction.member.roles.cache.some(role => allowedRolesHarga.includes(role.id));
@@ -1728,7 +2117,6 @@ Jumlah Robux: `;
 
         if (storeData && storeData.menuMessages && storeData.menuMessages.length > 0) {
             const validMessages = [];
-            // Looping tanpa Promise.all agar RAM 256MB Alwaysdata tetap stabil
             for (const menu of storeData.menuMessages) {
                 if (menu.type === type) {
                     try {
@@ -1739,16 +2127,15 @@ Jumlah Robux: `;
                         await msg.edit({ embeds: [newEmbed] });
                         
                         updatedCount++;
-                        validMessages.push(menu); // Simpan yang berhasil diedit
+                        validMessages.push(menu); 
                     } catch (e) {
-                        // Jika pesan dihapus manual di Discord, abaikan dan jangan dimasukkan ke array valid (Auto Clean-up)
+                        // Abaikan jika pesan dihapus manual di Discord
                     }
                 } else {
-                    validMessages.push(menu); // Simpan menu tipe lain
+                    validMessages.push(menu); 
                 }
             }
             
-            // Perbarui array di database agar tidak menumpuk error message
             storeData.menuMessages = validMessages;
             storeData.markModified('menuMessages');
             await storeData.save();
@@ -1759,66 +2146,6 @@ Jumlah Robux: `;
         const updateEmbed = new EmbedBuilder().setColor(0x57F287).setTitle('✅ Rate Harga Robux Diperbarui!').addFields({ name: '📦 Tipe', value: `**${typeNames[type]}**`, inline: true }, { name: '💱 Perubahan Rate', value: rateDescription, inline: false }, { name: '🔄 Live Menu Sync', value: `Berhasil mengupdate **${updatedCount}** post menu di server.`, inline: false }).setFooter({ text: 'VibeBlox Rate Manager' }).setTimestamp();
         
         return interaction.editReply({ embeds: [updateEmbed] });
-    }
-
-    // ==================================================
-    // --- COMMAND: PARTNER INVOICE ---
-    // ==================================================
-    if (command === 'partnerinvoice') {
-        const rolePartnerId = '1519076541055897670';
-        if (!interaction.member.roles.cache.has(rolePartnerId)) {
-            return interaction.reply({ content: '❌ Sori, cuma role Partner yang bisa bikin invoice ini.', flags: MessageFlags.Ephemeral });
-        }
-
-        await interaction.deferReply();
-
-        const target = interaction.options.getUser('user');
-        const type = interaction.options.getString('type');
-        const amount = interaction.options.getInteger('amount');
-
-        if (amount <= 0) return interaction.editReply({ content: '❌ Jumlah Robux harus lebih dari 0!' });
-
-        const rateData = await RobuxRate.findOne({ type }).lean();
-        if (!rateData) return interaction.editReply({ content: '❌ Rate belum diatur.' });
-
-        const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
-
-        let totalHarga = 0; let detailCalc = '';
-        if (type === 'vilog') {
-            if (amount % 500 !== 0) return interaction.editReply({ content: '❌ Vilog harus kelipatan 500!' });
-            const kelipatan = amount / 500;
-            totalHarga = kelipatan * rateData.rate;
-            detailCalc = `${kelipatan}x Rp ${formatRupiah(rateData.rate)}`;
-        } else {
-            totalHarga = rateData.rate * amount;
-            detailCalc = `Rp ${formatRupiah(rateData.rate)} × ${formatRupiah(amount)} R$`;
-        }
-
-        const invoiceEmbed = new EmbedBuilder()
-            .setColor(0xFFA500) // Warna Orange membedakan dengan invoice utama
-            .setTitle('🧾 Partner Invoice VibeBlox')
-            .addFields(
-                { name: '👤 Pembeli', value: `<@${target.id}>`, inline: true },
-                { name: '🧑‍💼 Partner', value: `<@${interaction.user.id}>`, inline: true },
-                { name: '📦 Tipe', value: `**${typeNames[type]}**`, inline: true },
-                { name: '<:robux:1497884445494087752> Jumlah Robux', value: `**${formatRupiah(amount)} R$**`, inline: true },
-                { name: '📝 Perhitungan', value: detailCalc, inline: false },
-                { name: '💰 Total Bayar', value: `**Rp ${formatRupiah(totalHarga)}**`, inline: false }
-            )
-            .setFooter({ text: '⏳ Menunggu Konfirmasi Partner' })
-            .setTimestamp();
-
-        const sentReply = await interaction.editReply({ embeds: [invoiceEmbed], components: [] });
-        const msgId = sentReply.id;
-
-        // Hanya ada 2 Button
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`pinv_cancel_${msgId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId(`pinv_done_${msgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
-        );
-
-        await interaction.editReply({ embeds: [invoiceEmbed], components: [row] });
-        return;
     }
 
     // ==================================================
@@ -1868,13 +2195,26 @@ Jumlah Robux: `;
 
         return interaction.editReply({ embeds: [summaryEmbed] });
     }
-    
-    // --- INVOICE ---
+
+    // ==================================================
+    // --- COMMAND: INVOICE (UTAMA) ---
+    // ==================================================
     if (command === 'invoice') {
         const allowedRolesInvoice = ['1489612423521374309', '1489612221544665231'];
         const hasRoleInvoice = interaction.member.roles.cache.some(role => allowedRolesInvoice.includes(role.id));
         if (!hasRoleInvoice) {
             return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        // [VALIDASI TICKET CATEGORY & RENAME LOGIC]
+        const ticketCategoryId = '1488785950011166790';
+        if (interaction.channel.parentId !== ticketCategoryId) {
+            return interaction.reply({ content: '❌ Perintah invoice hanya bisa digunakan di dalam channel Ticket!', flags: MessageFlags.Ephemeral });
+        }
+
+        if (interaction.channel.name.endsWith('-done')) {
+            const newName = interaction.channel.name.replace('-done', '');
+            interaction.channel.setName(newName).catch(err => console.log('Abaikan: Rate limit rename (Hapus done)'));
         }
 
         await interaction.deferReply();
@@ -1925,7 +2265,6 @@ Jumlah Robux: `;
         const sentReply = await interaction.editReply({ embeds: [invoiceEmbed], components: [] });
         const invoiceMsgId = sentReply.id;
 
-        // Add buttons with message ID reference
         const row1 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`inv_cancel_${invoiceMsgId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId(`inv_bca_${invoiceMsgId}`).setLabel('BCA').setStyle(ButtonStyle.Secondary),
@@ -1941,7 +2280,79 @@ Jumlah Robux: `;
         return;
     }
 
+    // ==================================================
+    // --- COMMAND: PARTNER INVOICE ---
+    // ==================================================
+    if (command === 'partnerinvoice') {
+        const rolePartnerId = '1519076541055897670';
+        if (!interaction.member.roles.cache.has(rolePartnerId)) {
+            return interaction.reply({ content: '❌ Sori, cuma role Partner yang bisa bikin invoice ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        // [VALIDASI TICKET CATEGORY & RENAME LOGIC]
+        const ticketCategoryId = '1488785950011166790';
+        if (interaction.channel.parentId !== ticketCategoryId) {
+            return interaction.reply({ content: '❌ Perintah invoice hanya bisa digunakan di dalam channel Ticket!', flags: MessageFlags.Ephemeral });
+        }
+
+        if (interaction.channel.name.endsWith('-done')) {
+            const newName = interaction.channel.name.replace('-done', '');
+            interaction.channel.setName(newName).catch(err => console.log('Abaikan: Rate limit rename (Hapus done)'));
+        }
+
+        await interaction.deferReply();
+
+        const target = interaction.options.getUser('user');
+        const type = interaction.options.getString('type');
+        const amount = interaction.options.getInteger('amount');
+
+        if (amount <= 0) return interaction.editReply({ content: '❌ Jumlah Robux harus lebih dari 0!' });
+
+        const rateData = await RobuxRate.findOne({ type }).lean();
+        if (!rateData) return interaction.editReply({ content: '❌ Rate belum diatur.' });
+
+        const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
+
+        let totalHarga = 0; let detailCalc = '';
+        if (type === 'vilog') {
+            if (amount % 500 !== 0) return interaction.editReply({ content: '❌ Vilog harus kelipatan 500!' });
+            const kelipatan = amount / 500;
+            totalHarga = kelipatan * rateData.rate;
+            detailCalc = `${kelipatan}x Rp ${formatRupiah(rateData.rate)}`;
+        } else {
+            totalHarga = rateData.rate * amount;
+            detailCalc = `Rp ${formatRupiah(rateData.rate)} × ${formatRupiah(amount)} R$`;
+        }
+
+        const invoiceEmbed = new EmbedBuilder()
+            .setColor(0xFFA500) 
+            .setTitle('🧾 Partner Invoice VibeBlox')
+            .addFields(
+                { name: '👤 Pembeli', value: `<@${target.id}>`, inline: true },
+                { name: '🧑‍💼 Partner', value: `<@${interaction.user.id}>`, inline: true },
+                { name: '📦 Tipe', value: `**${typeNames[type]}**`, inline: true },
+                { name: '<:robux:1497884445494087752> Jumlah Robux', value: `**${formatRupiah(amount)} R$**`, inline: true },
+                { name: '📝 Perhitungan', value: detailCalc, inline: false },
+                { name: '💰 Total Bayar', value: `**Rp ${formatRupiah(totalHarga)}**`, inline: false }
+            )
+            .setFooter({ text: '⏳ Menunggu Konfirmasi Partner' })
+            .setTimestamp();
+
+        const sentReply = await interaction.editReply({ embeds: [invoiceEmbed], components: [] });
+        const msgId = sentReply.id;
+
+        const row = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`pinv_cancel_${msgId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger),
+            new ButtonBuilder().setCustomId(`pinv_done_${msgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
+        );
+
+        await interaction.editReply({ embeds: [invoiceEmbed], components: [row] });
+        return;
+    }
+
+    // ==================================================
     // --- SECURITY FILTER UNTUK COMMAND KEUANGAN ---
+    // ==================================================
     const allowedChannels = ['1489665490770067678', '1519075561396371647'];
     if (!allowedChannels.includes(interaction.channel.id)) {
         return interaction.reply({ content: '❌ Command ini hanya bisa digunakan di channel Finance.', flags: MessageFlags.Ephemeral });
@@ -1982,7 +2393,7 @@ Jumlah Robux: `;
             const target = interaction.options.getUser('user');
             const rawAmount = interaction.options.getString('amount');
             const amount = parseAmount(rawAmount);
-            const sumber = interaction.options.getString('sumber'); // "utama" atau "partner"
+            const sumber = interaction.options.getString('sumber'); 
             const kategori = interaction.options.getString('keterangan') || 'Tidak ada kategori';
 
             if (isNaN(amount) || amount <= 0) {
@@ -1994,7 +2405,6 @@ Jumlah Robux: `;
 
             let embed;
 
-            // Jika menambah uang
             if (command === 'adduangmasuk') {
                 userData.uangMasuk += amount;
 
@@ -2018,7 +2428,6 @@ Jumlah Robux: `;
                     )
                     .setTimestamp();
             } 
-            // Jika mengurangi/merevisi uang
             else {
                 const bisaDikurangUser = Math.min(userData.uangMasuk, amount);
                 userData.uangMasuk = Math.max(0, userData.uangMasuk - amount);
@@ -2058,7 +2467,6 @@ Jumlah Robux: `;
 
         // --- ADD / MIN UANG KELUAR ---
         else if (command === 'adduangkeluar' || command === 'minuangkeluar') {
-
             const rawAmount = interaction.options.getString('amount');
             const amount = parseAmount(rawAmount);
             const keterangan = interaction.options.getString('keterangan') || 'Restock / Modal Toko';
