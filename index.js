@@ -586,7 +586,7 @@ client.on('interactionCreate', async (interaction) => {
             const btn = new ButtonBuilder()
                 .setCustomId(`tc_${b.id}`)
                 .setLabel(b.label)
-                .setStyle(isEnabled ? ButtonStyle.Success : ButtonStyle.primary)
+                .setStyle(isEnabled ? ButtonStyle.Success : ButtonStyle.Primary)
                 .setDisabled(!isEnabled);
 
             if (isEnabled) {
