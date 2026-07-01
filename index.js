@@ -544,7 +544,7 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 client.on('interactionCreate', async (interaction) => {
 
-    // =========================================================================
+// =========================================================================
     // === TICKET SYSTEM - AI OPTIMIZED FOR ALWAYSDATA ===
     // =========================================================================
 
@@ -559,12 +559,22 @@ client.on('interactionCreate', async (interaction) => {
         const embedTicket = new EmbedBuilder()
             .setColor(0x4F4580)
             .setTitle('🎫 VIBEBLOX - Ticket Order')
-            .setThumbnail('https://cdn.discordapp.com/attachments/1500317839507062897/1515115963928940706/iconbot.png') // Menambahkan logo kecil di kanan atas seperti PrimeBlox
-            .setDescription(`\n\n💎 **Robux Community**\nTop up robux cepat melalui sistem Payout Community.\n🏷️ **Robux Send Plus**\nRobux masuk secara instant tanpa pending via Roblox Plus.\n💳 **Robux Vilog**\nTop up Robux instant melalui metode login akun (100% Aman).\n💰 **Robux Gamepass**\nSistem After Tax (Terima Bersih). Robux cair setelah 5 Hari.\n🎁 **Gift In-Game**\nGift semua item atau gamepass di semua map Roblox.\n👑 **Limited Item**\nPembelian item Limited Roblox.\n💼 **Middleman**\nJasa perantara (Rekber) aman untuk segala transaksi.\n`)
+            .setThumbnail('https://cdn.discordapp.com/attachments/1500317839507062897/1515115963928940706/iconbot.png')
+            .setDescription(`Silakan pilih kategori tiket sesuai dengan layanan yang kamu butuhkan dengan memencet tombol di bawah.👇\n`)
+            // MENGGUNAKAN ADDFIELDS AGAR SPASI RAPIH DAN TIDAK MELEBAR
+            .addFields(
+                { name: '💎 Robux Community', value: 'Top up robux cepat melalui sistem Payout Community.', inline: false },
+                { name: '🏷️ Robux Send Plus', value: 'Robux masuk secara instant tanpa pending via Roblox Plus.', inline: false },
+                { name: '💳 Robux Vilog', value: 'Top up Robux instant melalui metode login akun (100% Aman).', inline: false },
+                { name: '💰 Robux Gamepass', value: 'Sistem After Tax (Terima Bersih). Robux cair setelah 5 Hari.', inline: false },
+                { name: '🎁 Gift In-Game', value: 'Gift semua item atau gamepass di semua map Roblox.', inline: false },
+                { name: '👑 Limited Item', value: 'Pembelian item Limited Roblox.', inline: false },
+                { name: '💼 Middleman', value: 'Jasa perantara (Rekber) aman untuk segala transaksi.', inline: false }
+            )
             .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1521628896938819805/server_banner.png?ex=6a4586d7&is=6a443557&hm=77ec74c8c32de11eae99a2b8baf14fc2b02da44c73b7581f36e478b0ff04be20&')
             .setFooter({ text: 'Made by VibeBlox' });
 
-        // Array tombol dinamis, tanpa style bawaan karena akan dilooping
+        // Array tombol dinamis
         const allButtons = [
             { id: 'community', label: '💎 Robux Community' },
             { id: 'robux_plus', label: '🏷️ Robux Send' },
