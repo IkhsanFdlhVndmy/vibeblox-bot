@@ -553,39 +553,53 @@ client.on('interactionCreate', async (interaction) => {
         let config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
         if (!config) config = new TicketConfig();
 
+        // Trik Garis Panjang agar Embed memiliki lebar (width) yang konsisten di PC, Tablet & Mobile
+        const separator = '──────────────────────────────────────────';
+
         const embedTicket = new EmbedBuilder()
             .setColor(0x4F4580)
-            .setTitle('🎫 VIBEBLOX TICKET CENTER')
-            .setDescription('Silakan pilih kategori tiket sesuai dengan layanan yang kamu butuhkan dengan memencet tombol di bawah.\n\n🛒 **Buy Robux:** *Community, Send Plus, Vilog, Gamepass*\n🎁 **Buy Item:** *Gift In-Game, Limited Item*\n💼 **Jasa Perantara:** *Middleman*\n\n*Pilih sesuai kebutuhanmu agar admin bisa memproses dengan cepat!*')
+            .setTitle('🎫 VIBEBLOX - Ticket Order')
+            .setThumbnail('https://cdn.discordapp.com/attachments/1500317839507062897/1515115963928940706/iconbot.png') // Menambahkan logo kecil di kanan atas seperti PrimeBlox
+            .setDescription(`${separator}\n\n💎 **Robux Community**\nTop up robux cepat melalui sistem Payout Community.\n\n🏷️ **Robux Send Plus**\nRobux masuk secara instant tanpa pending via Roblox Plus.\n\n💳 **Robux Vilog**\nTop up Robux instant melalui metode login akun (100% Aman).\n\n💰 **Robux Gamepass**\nSistem After Tax (Terima Bersih). Robux cair setelah 5 Hari.\n\n🎁 **Gift In-Game**\nGift semua item atau gamepass di semua map Roblox.\n\n👑 **Limited Item**\nPembelian item Limited Roblox.\n\n💼 **Middleman**\nJasa perantara (Rekber) aman untuk segala transaksi.\n\n${separator}`)
             .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1521628896938819805/server_banner.png?ex=6a4586d7&is=6a443557&hm=77ec74c8c32de11eae99a2b8baf14fc2b02da44c73b7581f36e478b0ff04be20&')
-            .setFooter({ text: 'VibeBlox Smart Ticketing' });
+            .setFooter({ text: 'Made by VibeBlox' });
 
+        // Array tombol dinamis, tanpa style bawaan karena akan dilooping
         const allButtons = [
-            { id: 'community', btn: new ButtonBuilder().setCustomId('tc_community').setLabel('💎 Robux Community').setStyle(ButtonStyle.Primary) },
-            { id: 'robux_plus', btn: new ButtonBuilder().setCustomId('tc_robux_plus').setLabel('🏷️ Robux Send Plus').setStyle(ButtonStyle.Secondary) },
-            { id: 'vilog', btn: new ButtonBuilder().setCustomId('tc_vilog').setLabel('💳 Robux Vilog').setStyle(ButtonStyle.Primary) },
-            { id: 'gamepass', btn: new ButtonBuilder().setCustomId('tc_gamepass').setLabel('💰 Robux Gamepass').setStyle(ButtonStyle.Secondary) },
-            { id: 'gig', btn: new ButtonBuilder().setCustomId('tc_gig').setLabel('🎁 Gift In-Game').setStyle(ButtonStyle.Success) },
-            { id: 'limited', btn: new ButtonBuilder().setCustomId('tc_limited').setLabel('👑 Limited Item').setStyle(ButtonStyle.Success) },
-            { id: 'mm', btn: new ButtonBuilder().setCustomId('tc_mm').setLabel('💼 Middleman').setStyle(ButtonStyle.Danger) }
+            { id: 'community', label: '💎 Robux Community' },
+            { id: 'robux_plus', label: '🏷️ Robux Send Plus' },
+            { id: 'vilog', label: '💳 Robux Vilog' },
+            { id: 'gamepass', label: '💰 Robux Gamepass' },
+            { id: 'gig', label: '🎁 Gift In-Game' },
+            { id: 'limited', label: '👑 Limited Item' },
+            { id: 'mm', label: '💼 Middleman' }
         ];
 
-        // Pisahkan tombol enable dan disable untuk disorting
+        // Pisahkan tombol enable dan disable untuk disorting (Kiri Aktif, Kanan Mati)
         const enabledButtons = [];
         const disabledButtons = [];
 
         for (const b of allButtons) {
             const isEnabled = config.buttonStates.get(b.id) !== false; // Default true
+
+            // Set Warna Dinamis: Hijau (Success) jika Aktif, Merah (Danger) jika Mati
+            const btn = new ButtonBuilder()
+                .setCustomId(`tc_${b.id}`)
+                .setLabel(b.label)
+                .setStyle(isEnabled ? ButtonStyle.Success : ButtonStyle.primary)
+                .setDisabled(!isEnabled);
+
             if (isEnabled) {
-                enabledButtons.push(b.btn.setDisabled(false));
+                enabledButtons.push(btn);
             } else {
-                disabledButtons.push(b.btn.setDisabled(true));
+                disabledButtons.push(btn);
             }
         }
 
         const sortedButtons = [...enabledButtons, ...disabledButtons];
         const components = [];
-        // Max 5 buttons per ActionRow
+        
+        // Memecah menjadi max 5 tombol per baris (Aturan batas Discord)
         for (let i = 0; i < sortedButtons.length; i += 5) {
             components.push(new ActionRowBuilder().addComponents(sortedButtons.slice(i, i + 5)));
         }
@@ -731,13 +745,13 @@ client.on('interactionCreate', async (interaction) => {
 
             // Susun Embed Tiket
             const typeLabels = {
-                'community': '💎 Robux Community (Instant, Non-Tax)',
-                'robux_plus': '🏷️ Robux Send Plus (Instant Username)',
-                'vilog': '💳 Robux Vilog (Via Login)',
-                'gamepass': '💰 Robux Gamepass (After Tax 5 Hari)',
-                'gig': '🎁 Gift In-Game (Via Map)',
+                'community': '💎 Robux Community',
+                'robux_plus': '🏷️ Robux Send Plus',
+                'vilog': '💳 Robux Vilog',
+                'gamepass': '💰 Robux Gamepass',
+                'gig': '🎁 Gift In-Game',
                 'limited': '👑 Limited Item',
-                'mm': '💼 Middleman Jasa Perantara'
+                'mm': '💼 Middleman'
             };
 
             const ticketEmbed = new EmbedBuilder()
