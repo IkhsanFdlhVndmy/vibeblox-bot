@@ -567,7 +567,7 @@ client.on('interactionCreate', async (interaction) => {
         // Array tombol dinamis, tanpa style bawaan karena akan dilooping
         const allButtons = [
             { id: 'community', label: '💎 Robux Community' },
-            { id: 'robux_plus', label: '🏷️ Robux Send Plus' },
+            { id: 'robux_plus', label: '🏷️ Robux Send' },
             { id: 'vilog', label: '💳 Robux Vilog' },
             { id: 'gamepass', label: '💰 Robux Gamepass' },
             { id: 'gig', label: '🎁 Gift In-Game' },
