@@ -731,6 +731,10 @@ client.on('interactionCreate', async (interaction) => {
         let activeCategoryId = primaryCategoryId;
         try {
             const primaryCat = await interaction.guild.channels.fetch(primaryCategoryId);
+
+            // Kita fetch juga kategori cadangan agar bot mengenali ID tersebut
+            await interaction.guild.channels.fetch(backupCategoryId);
+            
             // Jika kategori utama sudah mencapai 50 channel, oper ke kategori cadangan
             if (primaryCat && primaryCat.children.cache.size >= 50) {
                 activeCategoryId = backupCategoryId;
@@ -784,7 +788,7 @@ client.on('interactionCreate', async (interaction) => {
             const ticketChannel = await interaction.guild.channels.create({
                 name: channelName,
                 type: 0, // Text Channel
-                parent: categoryId,
+                parent: activeCategoryId,
                 permissionOverwrites: permissionOverwrites
             });
 
