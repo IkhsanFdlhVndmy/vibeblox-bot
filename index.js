@@ -380,9 +380,16 @@ const slashCommands = [
 client.once('ready', async () => {
     console.log(`✅ Bot ${client.user.tag} Online!`);
 
-    // Tambahkan di dalam client.once('ready', async () => { ... })
-    const cat = await client.channels.fetch('1488785950011166790'); // ID kategori utama
-    if (cat) await cat.fetchChildren(); // Memaksa bot memuat semua channel di kategori tersebut ke cache
+    try {
+        // Memuat SELURUH channel di server ke dalam cache saat bot online
+        // Ini menggantikan fetchChildren yang error, dan jauh lebih aman.
+        for (const guild of client.guilds.cache.values()) {
+            await guild.channels.fetch().catch(() => {});
+        }
+        console.log('✅ Seluruh data Channel berhasil dimuat ke Cache!');
+    } catch (e) {
+        console.error('❌ Gagal memuat Cache Channel:', e);
+    }
     
     try {
         await client.application.commands.set(slashCommands);
