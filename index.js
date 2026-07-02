@@ -765,11 +765,12 @@ client.on('interactionCreate', async (interaction) => {
         const roleHandler = '1489612221544665231';
         const rolePartner = '1519076541055897670';
 
-        let config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
-        if (!config) config = new TicketConfig();
-        
-        config.ticketCounter += 1;
-        await config.save();
+        // Sistem Antrean Otomatis & Cepat (Atomic Update)
+        const config = await TicketConfig.findOneAndUpdate(
+            { configId: 'VIBEBLOX_TICKET' },
+            { $inc: { ticketCounter: 1 } },
+            { new: true, upsert: true }
+        );
 
         const channelName = `ticket-${config.ticketCounter}`;
 
