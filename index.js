@@ -380,6 +380,10 @@ const slashCommands = [
 client.once('ready', async () => {
     console.log(`✅ Bot ${client.user.tag} Online!`);
 
+    // Tambahkan di dalam client.once('ready', async () => { ... })
+    const cat = await client.channels.fetch('1488785950011166790'); // ID kategori utama
+    if (cat) await cat.fetchChildren(); // Memaksa bot memuat semua channel di kategori tersebut ke cache
+    
     try {
         await client.application.commands.set(slashCommands);
         console.log('✅ Slash Commands berhasil didaftarkan!');
@@ -730,17 +734,25 @@ client.on('interactionCreate', async (interaction) => {
 
         let activeCategoryId = primaryCategoryId;
         try {
-            const primaryCat = await interaction.guild.channels.fetch(primaryCategoryId);
+            // Cek dari cache dulu
+            let primaryCat = interaction.guild.channels.cache.get(primaryCategoryId);
 
-            // Kita fetch juga kategori cadangan agar bot mengenali ID tersebut
-            await interaction.guild.channels.fetch(backupCategoryId);
-            
-            // Jika kategori utama sudah mencapai 50 channel, oper ke kategori cadangan
+            // Jika tidak ada di cache, coba ambil (fetch) sekali
+            if (!primaryCat) {
+                primaryCat = await interaction.guild.channels.fetch(primaryCategoryId).catch(err => {
+                    console.error("DEBUG: Gagal fetch primary category:", err.message);
+                    return null;
+                });
+            }
+
+            // Cek jumlah channel
             if (primaryCat && primaryCat.children.cache.size >= 50) {
                 activeCategoryId = backupCategoryId;
+            } else if (!primaryCat) {
+                console.warn("DEBUG: Kategori utama tidak ditemukan!");
             }
-        } catch (e) {
-            console.log("Gagal cek limit kategori.");
+        } catch (err) {
+            console.error("DEBUG: Error tidak terduga pada logika kategori:", err);
         }
         const roleOwner = '1489612423521374309';
         const roleHandler = '1489612221544665231';
