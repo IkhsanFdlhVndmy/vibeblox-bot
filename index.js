@@ -358,17 +358,8 @@ const slashCommands = [
         ]
     },
     // --- TAMBAHAN BARU: OMEN ---
-    {
-        name: 'omen', description: 'Tampilkan metode pembayaran Partner Omen',
-        options: [
-            {
-                name: 'metode', description: 'Pilih QRIS atau Bank', type: 3, required: true,
-                choices: [
-                    { name: 'QRIS', value: 'qris' },
-                    { name: 'Bank SeaBank', value: 'bank' }
-                ]
-            }
-        ]
+    { 
+        name: 'omen', description: 'Tampilkan metode pembayaran Partner Omen' 
     },
     // --- TAMBAHAN BARU: FORM TICKET ---
     {
@@ -403,35 +394,63 @@ client.once('ready', async () => {
 async function updateSpenderRoles(member, userData) {
     if (!member || !userData) return;
 
+    // Daftar ID Role
     const roleClient = '1489610714988417145';
     const roleElite = '1489611849245786347';
     const rolePrime = '1490140596298580048';
+    const roleBeast = '1523587564504875058';       // 10 Juta+
+    const roleSovereign = '1523588030630203502';   // 25 Juta+
+    const roleImmortal = '1523588314303697006';    // 50 Juta+
+
     const spentUang = userData.uangMasuk;
     const isAnon = userData.isAnonymous;
 
     try {
+        // 1. Role Client (> 0)
         if (spentUang > 0 && !member.roles.cache.has(roleClient)) {
             await member.roles.add(roleClient);
         } else if (spentUang <= 0 && member.roles.cache.has(roleClient)) {
             await member.roles.remove(roleClient);
         }
 
+        // 2. Role Elite (>= 1 Juta)
         if (spentUang >= 1000000 && !isAnon && !member.roles.cache.has(roleElite)) {
             await member.roles.add(roleElite);
         } else if ((spentUang < 1000000 || isAnon) && member.roles.cache.has(roleElite)) {
             await member.roles.remove(roleElite);
         }
 
+        // 3. Role Prime (>= 5 Juta)
         if (spentUang >= 5000000 && !isAnon && !member.roles.cache.has(rolePrime)) {
             await member.roles.add(rolePrime);
         } else if ((spentUang < 5000000 || isAnon) && member.roles.cache.has(rolePrime)) {
             await member.roles.remove(rolePrime);
         }
+
+        // 4. Role Vibe Beast (>= 10 Juta)
+        if (spentUang >= 10000000 && !isAnon && !member.roles.cache.has(roleBeast)) {
+            await member.roles.add(roleBeast);
+        } else if ((spentUang < 10000000 || isAnon) && member.roles.cache.has(roleBeast)) {
+            await member.roles.remove(roleBeast);
+        }
+
+        // 5. Role Vibe Sovereign (>= 25 Juta)
+        if (spentUang >= 25000000 && !isAnon && !member.roles.cache.has(roleSovereign)) {
+            await member.roles.add(roleSovereign);
+        } else if ((spentUang < 25000000 || isAnon) && member.roles.cache.has(roleSovereign)) {
+            await member.roles.remove(roleSovereign);
+        }
+
+        // 6. Role Vibe Immortal (>= 50 Juta)
+        if (spentUang >= 50000000 && !isAnon && !member.roles.cache.has(roleImmortal)) {
+            await member.roles.add(roleImmortal);
+        } else if ((spentUang < 50000000 || isAnon) && member.roles.cache.has(roleImmortal)) {
+            await member.roles.remove(roleImmortal);
+        }
     } catch (err) {
         console.error("Gagal update role:", err.message);
     }
 }
-
 // =============================================================
 // === FUNGSI GENERATE LEADERBOARD =============================
 // =============================================================
@@ -1909,30 +1928,17 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         await interaction.deferReply();
-        const metode = interaction.options.getString('metode');
         
-        const omenEmbed = new EmbedBuilder().setTimestamp();
-
-        if (metode === 'qris') {
-            omenEmbed.setColor(0xFFA500)
-                .setTitle('💳 Pembayaran QRIS Omen')
-                .setDescription('Silakan scan QRIS di bawah ini untuk melakukan pembayaran.')
-                .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1519107554628866222/1782216403987.png?ex=6a3c5aa8&is=6a3b0928&hm=ecb4cbd02fa9f76838f2df9726a5facb4b83dc2c204e67922991046266a1dcca&')
-                .setFooter({ text: 'Omen Partner Payment' });
-        } else if (metode === 'bank') {
-            omenEmbed.setColor(0xFFA500)
-                .setTitle('🏦 Transfer Bank SeaBank Omen')
-                .addFields(
-                    { name: '👤 Atas Nama', value: '**muhammad amin**', inline: false },
-                    { name: '🔢 Nomor Rekening', value: '**901606323148**', inline: false },
-                    { name: '🏦 Bank', value: '**SeaBank**', inline: false }
-                )
-                .setFooter({ text: 'Omen Partner Payment' });
-        }
+        const omenEmbed = new EmbedBuilder()
+            .setColor(0xFFA500)
+            .setTitle('💳 Pembayaran QRIS Omen')
+            .setDescription('Silakan scan QRIS di bawah ini untuk melakukan pembayaran.')
+            .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1519107554628866222/1782216403987.png?ex=6a3c5aa8&is=6a3b0928&hm=ecb4cbd02fa9f76838f2df9726a5facb4b83dc2c204e67922991046266a1dcca&')
+            .setFooter({ text: 'Omen Partner Payment' })
+            .setTimestamp();
 
         return interaction.editReply({ embeds: [omenEmbed] });
     }
-
     // --- VOUCH TEMPLATE (Ephemeral - hanya terlihat oleh pengguna) ---
     if (command === 'vouch') {
         const allowedRolesVouch = ['1489612423521374309', '1489612221544665231'];
