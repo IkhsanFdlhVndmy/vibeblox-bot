@@ -1064,33 +1064,26 @@ client.on('interactionCreate', async (interaction) => {
         
         const parts = interaction.customId.split('_');
         const action = parts[1]; // cancel, bca, qris, dana, gopay, done
-        const invoiceMsgId = parts[2];
+        const invoiceMsgId = parts[parts.length - 1]; // Ambil ID dari array terakhir
 
-        // --- HANYA ADMIN/HANDLER YANG BISA CANCEL & DONE ---
         if ((action === 'cancel' || action === 'done') && !hasRoleInv) {
             return interaction.reply({ content: '❌ Hanya Owner dan Handler yang bisa menekan tombol ini.', flags: MessageFlags.Ephemeral });
         }
 
-        // --- CANCEL: hapus pesan invoice ---
         if (action === 'cancel') {
             await interaction.deferUpdate();
             try { await interaction.message.delete(); } catch (e) {}
             return;
         }
 
-        // --- PAYMENT BUTTONS (SEMUA ORANG BISA KLIK, LALU DISABLE TOMBOLNYA ANTI SPAM) ---
         if (['bca', 'qris', 'dana', 'gopay'].includes(action)) {
-            // Cek apakah tombol ini udah di-handle (Anti-spam/Interaction Failed Guard)
             if (isUpdating.has(interaction.message.id)) {
                 return interaction.reply({ content: '⏳ Mohon tunggu, metode sedang dimuat...', flags: MessageFlags.Ephemeral });
             }
             isUpdating.add(interaction.message.id);
-
-            // 1) Segera berikan response deferUpdate() agar API Discord tidak timeout (menghindari interaction failed)
             await interaction.deferUpdate();
 
             try {
-                // 2) Tampilkan embed metode pembayarannya di bawah invoice
                 const embedPay = new EmbedBuilder().setTimestamp();
                 if (action === 'bca') {
                     embedPay.setColor(0x003D79).setTitle('🏦 Transfer Bank BCA VibeBlox').addFields({ name: '👤 Atas Nama', value: '**Angel Vinny Vincentia Pelawi**' }, { name: '🔢 No. Rekening', value: '**8205363625**' }, { name: '🏦 Bank', value: '**BCA**' }).setFooter({ text: 'VibeBlox Payment' });
@@ -1104,11 +1097,9 @@ client.on('interactionCreate', async (interaction) => {
 
                 await interaction.followUp({ embeds: [embedPay] });
 
-                // 3) Edit pesan utama (Invoice) untuk men-disable tombol yang baru saja dipencet
                 const newComponents = interaction.message.components.map(row => {
                     const newRow = ActionRowBuilder.from(row);
                     newRow.components.forEach(btn => {
-                        // Jika custom ID tombol sama dengan yang baru saja dipencet, matikan tombolnya
                         if (btn.data.custom_id === interaction.customId) {
                             btn.setDisabled(true);
                         }
@@ -1120,17 +1111,16 @@ client.on('interactionCreate', async (interaction) => {
             } catch (err) {
                 console.error("Payment button error:", err);
             } finally {
-                // Lepas lock anti-spam setelah selesai proses
                 isUpdating.delete(interaction.message.id);
             }
             return;
         }
 
-        // --- DONE: mulai flow ephemeral ---
-
-        // --- DONE: mulai flow ephemeral ---
+        // --- DONE: LANGSUNG KE METODE PEMBAYARAN ---
         if (action === 'done') {
             const msgId = interaction.message.id;
+            const typeValue = parts.slice(2, -1).join('_'); // Mengambil tipe yang disisipkan dari command awal
+            
             if (isUpdating.has(`inv_done_${msgId}`)) {
                 return interaction.reply({ content: '⏳ Proses Done sedang berlangsung...', flags: MessageFlags.Ephemeral });
             }
@@ -1149,23 +1139,24 @@ client.on('interactionCreate', async (interaction) => {
                 });
                 await interaction.update({ components: currentComponents });
 
-                // Step 1: Pilih Tipe Transaksi (ephemeral)
-                const typeRow = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`invf_type_community_${msgId}`).setLabel('Community').setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId(`invf_type_gamepass_before_${msgId}`).setLabel('GP Before').setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId(`invf_type_gamepass_after_${msgId}`).setLabel('GP After').setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId(`invf_type_gig_${msgId}`).setLabel('GIG').setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId(`invf_type_vilog_${msgId}`).setLabel('Vilog').setStyle(ButtonStyle.Primary)
+                // Step 1: Langsung Pilih Metode Pembayaran (ephemeral)
+                const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
+
+                const payRow = new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId(`invf_pay_qris_${typeValue}_${msgId}`).setLabel('QRIS').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`invf_pay_bca_${typeValue}_${msgId}`).setLabel('BCA').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`invf_pay_dana_${typeValue}_${msgId}`).setLabel('Dana').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`invf_pay_gopay_${typeValue}_${msgId}`).setLabel('GoPay').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId(`invf_pay_lainnya_${typeValue}_${msgId}`).setLabel('Lainnya').setStyle(ButtonStyle.Secondary)
                 );
-                const typeRow2 = new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId(`invf_type_robux_plus_${msgId}`).setLabel('Robux Plus').setStyle(ButtonStyle.Primary)
-                );
-                const cancelRow = new ActionRowBuilder().addComponents(
+                const cancelRow2 = new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId(`invf_cancel_${msgId}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
                 );
 
-                const typeEmbed = new EmbedBuilder().setColor(0x4F4580).setTitle('📋 Pilih Tipe Transaksi').setDescription('Pilih salah satu tipe di bawah:');
-                await interaction.followUp({ embeds: [typeEmbed], components: [typeRow, typeRow2, cancelRow], flags: MessageFlags.Ephemeral });
+                const payEmbed = new EmbedBuilder().setColor(0x4F4580).setTitle('💳 Pilih Metode Pembayaran')
+                    .setDescription(`Tipe: **${typeNames[typeValue] || typeValue}**\nPilih metode pembayaran:`);
+
+                await interaction.followUp({ embeds: [payEmbed], components: [payRow, cancelRow2], flags: MessageFlags.Ephemeral });
             } catch (err) {
                 console.error("Invoice Done error:", err.message);
                 isUpdating.delete(`inv_done_${msgId}`);
@@ -1219,42 +1210,14 @@ client.on('interactionCreate', async (interaction) => {
         };
 
         // --- CANCEL at any step ---
-        if (customId.startsWith('invf_cancel_')) {
+        if (customId.startsWith('invf_cancel_') || customId.startsWith('invf_confirm_no_')) {
             await interaction.update({ content: '❌ Proses dibatalkan.', embeds: [], components: [] });
             await reEnableDone();
             return;
         }
 
-        // --- Step 1 result: Tipe Transaksi dipilih ---
-        if (customId.startsWith('invf_type_')) {
-            // Parse type from customId: invf_type_{typeName}_{msgId}
-            const withoutPrefix = customId.replace('invf_type_', '');
-            const typeValue = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
-
-            const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
-
-            // Step 2: Pilih Metode Pembayaran
-            const payRow = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`invf_pay_qris_${typeValue}_${invoiceMsgId}`).setLabel('QRIS').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId(`invf_pay_bca_${typeValue}_${invoiceMsgId}`).setLabel('BCA').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId(`invf_pay_dana_${typeValue}_${invoiceMsgId}`).setLabel('Dana').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId(`invf_pay_gopay_${typeValue}_${invoiceMsgId}`).setLabel('GoPay').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId(`invf_pay_lainnya_${typeValue}_${invoiceMsgId}`).setLabel('Lainnya').setStyle(ButtonStyle.Secondary)
-            );
-            const cancelRow2 = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`invf_cancel_${invoiceMsgId}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
-            );
-
-            const payEmbed = new EmbedBuilder().setColor(0x4F4580).setTitle('💳 Pilih Metode Pembayaran')
-                .setDescription(`Tipe: **${typeNames[typeValue] || typeValue}**\nPilih metode pembayaran:`);
-
-            await interaction.update({ embeds: [payEmbed], components: [payRow, cancelRow2] });
-            return;
-        }
-
         // --- Step 2 result: Metode Pembayaran dipilih → Konfirmasi ---
         if (customId.startsWith('invf_pay_')) {
-            // Parse: invf_pay_{method}_{typeValue}_{msgId}
             const withoutPrefix = customId.replace('invf_pay_', '');
             const segmentBeforeMsgId = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
             const method = segmentBeforeMsgId.substring(0, segmentBeforeMsgId.indexOf('_'));
@@ -1275,16 +1238,8 @@ client.on('interactionCreate', async (interaction) => {
             return;
         }
 
-        // --- Konfirmasi: TIDAK ---
-        if (customId.startsWith('invf_confirm_no_')) {
-            await interaction.update({ content: '❌ Proses dibatalkan.', embeds: [], components: [] });
-            await reEnableDone();
-            return;
-        }
-
-// --- Konfirmasi: YAKIN ---
+        // --- Konfirmasi: YAKIN ---
         if (customId.startsWith('invf_confirm_yes_')) {
-            // Parse: invf_confirm_yes_{method}_{typeValue}_{msgId}
             const withoutPrefix = customId.replace('invf_confirm_yes_', '');
             const msgIdPart = invoiceMsgId;
             const beforeMsgId = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
@@ -1391,7 +1346,7 @@ client.on('interactionCreate', async (interaction) => {
                     if (financeChannel) await financeChannel.send({ embeds: [historyEmbed] });
                 } catch (e) { console.error("Gagal kirim ke store-finance:", e.message); }
 
-                // GENERATE AUTO VOUCH
+                // GENERATE AUTO VOUCH (MENGGUNAKAN TIPE DARI COMMAND AWAL)
                 const separator = '──────────────────────────────';
                 const vouchDesc = vouchDescriptions[typeValue] || 'Robux';
                 const vouchTemplate = `+vouch robux <@${adminUserId}> ${amountRobux} ${vouchDesc}`;
@@ -1407,7 +1362,6 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.editReply({ content: '✅ Invoice selesai! Pencatatan dan Auto-Vouch berhasil diproses.' });
 
                 // [UBAH NAMA CHANNEL JADI -DONE]
-                // Dijalankan terakhir secara async tanpa await blocking
                 if (!interaction.channel.name.endsWith('-done')) {
                     interaction.channel.setName(`${interaction.channel.name}-done`).catch(e => console.log("Abaikan: Rate limit rename (Tambah done)"));
                 }
@@ -1433,7 +1387,6 @@ client.on('interactionCreate', async (interaction) => {
             }
             return;
         }
-
         return;
     }
 
@@ -1452,7 +1405,7 @@ client.on('interactionCreate', async (interaction) => {
         if (customId.startsWith('pinv_')) {
             const parts = customId.split('_');
             const action = parts[1]; // cancel atau done
-            const invoiceMsgId = parts[2];
+            const invoiceMsgId = parts[parts.length - 1];
 
             if (action === 'cancel') {
                 await interaction.deferUpdate();
@@ -1460,7 +1413,10 @@ client.on('interactionCreate', async (interaction) => {
                 return;
             }
 
+            // --- DONE: LANGSUNG KE KONFIRMASI YAKIN/TIDAK ---
             if (action === 'done') {
+                const typeValue = parts.slice(2, -1).join('_'); // Mengambil tipe yang disisipkan dari command awal
+
                 if (isUpdating.has(`pinv_done_${invoiceMsgId}`)) {
                     return interaction.reply({ content: '⏳ Proses sedang berlangsung...', flags: MessageFlags.Ephemeral });
                 }
@@ -1475,20 +1431,16 @@ client.on('interactionCreate', async (interaction) => {
                     });
                     await interaction.update({ components: currentComponents });
 
-                    // Pilih Tipe Transaksi
-                    const typeRow = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`pinvf_type_community_${invoiceMsgId}`).setLabel('Community').setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder().setCustomId(`pinvf_type_gamepass_after_${invoiceMsgId}`).setLabel('GP After').setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder().setCustomId(`pinvf_type_gig_${invoiceMsgId}`).setLabel('GIG').setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder().setCustomId(`pinvf_type_vilog_${invoiceMsgId}`).setLabel('Vilog').setStyle(ButtonStyle.Primary),
-                        new ButtonBuilder().setCustomId(`pinvf_type_robux_plus_${invoiceMsgId}`).setLabel('Robux Plus').setStyle(ButtonStyle.Primary)
-                    );
-                    const cancelRow = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId(`pinvf_cancel_${invoiceMsgId}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
+                    // Langsung tampilkan Konfirmasi Yakin/Tidak (Bypass Pemilihan Tipe & Metode)
+                    const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
+                    
+                    const confirmRow = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId(`pinvf_confirm_yes_${typeValue}_${invoiceMsgId}`).setLabel('✅ Yakin').setStyle(ButtonStyle.Success),
+                        new ButtonBuilder().setCustomId(`pinvf_cancel_${invoiceMsgId}`).setLabel('❌ Batal').setStyle(ButtonStyle.Danger)
                     );
 
-                    const typeEmbed = new EmbedBuilder().setColor(0x4F4580).setTitle('📋 Pilih Tipe Transaksi (Partner)').setDescription('Pilih salah satu tipe di bawah:');
-                    await interaction.followUp({ embeds: [typeEmbed], components: [typeRow, cancelRow], flags: MessageFlags.Ephemeral });
+                    const confirmEmbed = new EmbedBuilder().setColor(0xFEE75C).setTitle('⚠️ Konfirmasi Partner').setDescription(`Tipe Transaksi: **${typeNames[typeValue] || typeValue}**\n\nYakin selesaikan invoice ini?`);
+                    await interaction.followUp({ embeds: [confirmEmbed], components: [confirmRow], flags: MessageFlags.Ephemeral });
                 } catch (err) {
                     console.error("Partner Invoice Done error:", err);
                 } finally {
@@ -1523,65 +1475,17 @@ client.on('interactionCreate', async (interaction) => {
             } catch (e) {}
         };
 
-        if (customId.startsWith('pinvf_cancel_')) {
+        if (customId.startsWith('pinvf_cancel_') || customId.startsWith('pinvf_confirm_no_')) {
             await interaction.update({ content: '❌ Proses dibatalkan.', embeds: [], components: [] });
             await reEnableDonePartner(); // <--- MENGHIDUPKAN TOMBOL
             return;
         }
 
-        // Pilih Metode Pembayaran (Hanya QRIS & BANK)
-        if (customId.startsWith('pinvf_type_')) {
-            const withoutPrefix = customId.replace('pinvf_type_', '');
-            const typeValue = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
-            const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
-
-            const payRow = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`pinvf_pay_qris_${typeValue}_${invoiceMsgId}`).setLabel('QRIS').setStyle(ButtonStyle.Secondary),
-                new ButtonBuilder().setCustomId(`pinvf_pay_bank_${typeValue}_${invoiceMsgId}`).setLabel('BANK').setStyle(ButtonStyle.Secondary)
-            );
-            
-            // Tambahan: Tombol Cancel
-            const cancelRow2 = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`pinvf_cancel_${invoiceMsgId}`).setLabel('Cancel').setStyle(ButtonStyle.Danger)
-            );
-            
-            const payEmbed = new EmbedBuilder().setColor(0x4F4580).setTitle('💳 Pilih Metode Pembayaran')
-                .setDescription(`Tipe: **${typeNames[typeValue] || typeValue}**\nPilih metode pembayaran:`);
-
-            await interaction.update({ embeds: [payEmbed], components: [payRow, cancelRow2] });
-            return;
-        }
-
-        // Konfirmasi Akhir
-        if (customId.startsWith('pinvf_pay_')) {
-            const withoutPrefix = customId.replace('pinvf_pay_', '');
-            const segmentBeforeMsgId = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
-            const method = segmentBeforeMsgId.substring(0, segmentBeforeMsgId.indexOf('_'));
-            const typeValue = segmentBeforeMsgId.substring(segmentBeforeMsgId.indexOf('_') + 1);
-
-            const confirmRow = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId(`pinvf_confirm_yes_${method}_${typeValue}_${invoiceMsgId}`).setLabel('✅ Yakin').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId(`pinvf_confirm_no_${invoiceMsgId}`).setLabel('❌ Tidak').setStyle(ButtonStyle.Danger)
-            );
-
-            const confirmEmbed = new EmbedBuilder().setColor(0xFEE75C).setTitle('⚠️ Konfirmasi Partner').setDescription(`Yakin selesaikan invoice ini?`);
-            await interaction.update({ embeds: [confirmEmbed], components: [confirmRow] });
-            return;
-        }
-
-        if (customId.startsWith('pinvf_confirm_no_')) {
-            await interaction.update({ content: '❌ Dibatalkan.', embeds: [], components: [] });
-            await reEnableDonePartner(); // <--- MENGHIDUPKAN TOMBOL
-            return;
-        }
-
-// EKSEKUSI DATABASE & LOG (YAKIN)
+        // EKSEKUSI DATABASE & LOG (YAKIN)
         if (customId.startsWith('pinvf_confirm_yes_')) {
-            const withoutPrefix = customId.replace('pinvf_confirm_yes_', '');
-            const beforeMsgId = withoutPrefix.substring(0, withoutPrefix.lastIndexOf('_'));
-            const method = beforeMsgId.substring(0, beforeMsgId.indexOf('_'));
-            const typeValue = beforeMsgId.substring(beforeMsgId.indexOf('_') + 1);
-
+            const parts = customId.split('_');
+            const typeValue = parts.slice(3, -1).join('_');
+            
             await interaction.update({ content: '⏳ Memproses transaksi Partner...', embeds: [], components: [] });
 
             try {
@@ -1624,6 +1528,8 @@ client.on('interactionCreate', async (interaction) => {
                 const partnerFinanceId = '1519075561396371647';
                 let pembeliDisplay = `<@${targetUserId}>`;
                 if (targetMember) pembeliDisplay += `\n(${targetMember.displayName})`;
+                
+                const typeNames = { 'community': 'Community', 'gamepass_after': 'Gamepass After', 'gamepass_before': 'Gamepass Before', 'gig': 'GIG', 'vilog': 'Vilog', 'robux_plus': 'Robux Plus' };
 
                 const historyEmbed = new EmbedBuilder()
                     .setColor(0x57F287)
@@ -1632,7 +1538,7 @@ client.on('interactionCreate', async (interaction) => {
                         { name: '🧑‍💼 Partner', value: `<@${interaction.user.id}>\n(${interaction.user.displayName} • @${interaction.user.username})`, inline: true },
                         { name: '👤 Pembeli', value: pembeliDisplay, inline: true },
                         { name: '💰 Nominal', value: `**Rp ${formatRupiah(totalHarga)}**`, inline: true },
-                        { name: '🛒 Kategori', value: `${typeValue.toUpperCase()} - ${method.toUpperCase()}`, inline: true },
+                        { name: '🛒 Kategori', value: `${typeNames[typeValue] || typeValue.toUpperCase()}`, inline: true }, // HANYA TIPE TRANSAKSI
                         { name: '📊 Total Spent Pembeli', value: `**Rp ${formatRupiah(userData.uangMasuk)}**`, inline: false }
                     )
                     .setTimestamp();
@@ -1643,7 +1549,7 @@ client.on('interactionCreate', async (interaction) => {
                 } catch (e) { console.error("Gagal kirim log partner:", e.message); }
 
                 // 5. AUTO VOUCH
-                const vouchDescriptions = { 'community': 'Robux Payout Instant', 'vilog': 'Robux Via Login', 'gamepass_after': 'Robux Gamepass After', 'gig': 'Robux Gift in-Game', 'robux_plus': 'Robux Via Send Username' };
+                const vouchDescriptions = { 'community': 'Robux Payout Instant', 'vilog': 'Robux Via Login', 'gamepass_after': 'Robux Gamepass After', 'gamepass_before': 'Robux Gamepass Before', 'gig': 'Robux Gift in-Game', 'robux_plus': 'Robux Via Send Username' };
                 const vouchDesc = vouchDescriptions[typeValue] || 'Robux';
                 const vouchTemplate = `+vouch robux <@${interaction.user.id}> ${amountRobux} ${vouchDesc}`;
 
@@ -1671,7 +1577,6 @@ client.on('interactionCreate', async (interaction) => {
             }
             return;
         }
-        return;
     }
     
     if (!interaction.isChatInputCommand()) return;
@@ -2431,7 +2336,7 @@ Jumlah Robux: `;
         const sentReply = await interaction.editReply({ embeds: [invoiceEmbed], components: [] });
         const invoiceMsgId = sentReply.id;
 
-        const row1 = new ActionRowBuilder().addComponents(
+       const row1 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`inv_cancel_${invoiceMsgId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId(`inv_bca_${invoiceMsgId}`).setLabel('BCA').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`inv_qris_${invoiceMsgId}`).setLabel('QRIS').setStyle(ButtonStyle.Secondary),
@@ -2439,7 +2344,7 @@ Jumlah Robux: `;
             new ButtonBuilder().setCustomId(`inv_gopay_${invoiceMsgId}`).setLabel('GOPAY').setStyle(ButtonStyle.Secondary)
         );
         const row2 = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`inv_done_${invoiceMsgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
+            new ButtonBuilder().setCustomId(`inv_done_${type}_${invoiceMsgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
         );
 
         await interaction.editReply({ embeds: [invoiceEmbed], components: [row1, row2] });
@@ -2509,7 +2414,7 @@ Jumlah Robux: `;
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`pinv_cancel_${msgId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId(`pinv_done_${msgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
+            new ButtonBuilder().setCustomId(`pinv_done_${type}_${msgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
         );
 
         await interaction.editReply({ embeds: [invoiceEmbed], components: [row] });
