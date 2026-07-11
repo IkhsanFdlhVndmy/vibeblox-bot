@@ -739,8 +739,8 @@ client.on('interactionCreate', async (interaction) => {
             const tumbal = new TextInputBuilder().setCustomId('tumbal').setLabel('Sudah ada item tumbal? (Sudah/Belum)').setStyle(TextInputStyle.Short).setRequired(true);
             modal.addComponents(new ActionRowBuilder().addComponents(userRoblox), new ActionRowBuilder().addComponents(namaLimited), new ActionRowBuilder().addComponents(tumbal));
         } else if (type === 'mm') {
-            const mmPembeli = new TextInputBuilder().setCustomId('mm_pembeli').setLabel('Username Discord Pembeli(Cth: axel / @axel)').setStyle(TextInputStyle.Short).setRequired(true);
-            const mmPenjual = new TextInputBuilder().setCustomId('mm_penjual').setLabel('Username Discord Penjual(Cth: axel / @axel)').setStyle(TextInputStyle.Short).setRequired(true);
+            const mmPembeli = new TextInputBuilder().setCustomId('mm_pembeli').setLabel('Username Discord Pembeli (Cth: axel123)').setStyle(TextInputStyle.Short).setRequired(true);
+            const mmPenjual = new TextInputBuilder().setCustomId('mm_penjual').setLabel('Username Discord Penjual (Cth: axel321)').setStyle(TextInputStyle.Short).setRequired(true);
             const mmUang = new TextInputBuilder().setCustomId('mm_uang').setLabel('Jumlah Transaksi (Rp / Robux)').setStyle(TextInputStyle.Short).setRequired(true);
             modal.addComponents(new ActionRowBuilder().addComponents(mmPembeli), new ActionRowBuilder().addComponents(mmPenjual), new ActionRowBuilder().addComponents(mmUang));
         }
