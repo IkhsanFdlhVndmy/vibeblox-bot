@@ -739,8 +739,8 @@ client.on('interactionCreate', async (interaction) => {
             const tumbal = new TextInputBuilder().setCustomId('tumbal').setLabel('Sudah ada item tumbal? (Sudah/Belum)').setStyle(TextInputStyle.Short).setRequired(true);
             modal.addComponents(new ActionRowBuilder().addComponents(userRoblox), new ActionRowBuilder().addComponents(namaLimited), new ActionRowBuilder().addComponents(tumbal));
         } else if (type === 'mm') {
-            const mmPembeli = new TextInputBuilder().setCustomId('mm_pembeli').setLabel('Username Discord Pembeli').setStyle(TextInputStyle.Short).setRequired(true);
-            const mmPenjual = new TextInputBuilder().setCustomId('mm_penjual').setLabel('Username Discord Penjual').setStyle(TextInputStyle.Short).setRequired(true);
+            const mmPembeli = new TextInputBuilder().setCustomId('mm_pembeli').setLabel('Username/@display Discord Pembeli (Cth: axel123 / @axel)').setStyle(TextInputStyle.Short).setRequired(true);
+            const mmPenjual = new TextInputBuilder().setCustomId('mm_penjual').setLabel('Username/@display Discord Penjual (Cth: Yuamaze123 / @Yuamaze)').setStyle(TextInputStyle.Short).setRequired(true);
             const mmUang = new TextInputBuilder().setCustomId('mm_uang').setLabel('Jumlah Transaksi (Rp / Robux)').setStyle(TextInputStyle.Short).setRequired(true);
             modal.addComponents(new ActionRowBuilder().addComponents(mmPembeli), new ActionRowBuilder().addComponents(mmPenjual), new ActionRowBuilder().addComponents(mmUang));
         }
@@ -749,21 +749,81 @@ client.on('interactionCreate', async (interaction) => {
         return await interaction.showModal(modal);
     }
 
-    // --- SUBMIT MODAL -> CREATE TICKET CHANNEL ---
+   // --- SUBMIT MODAL -> CREATE TICKET CHANNEL ---
     if (interaction.isModalSubmit() && interaction.customId.startsWith('tm_')) {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // Balas aman dulu
         
         const type = interaction.customId.replace('tm_', '');
+
+        // =====================================================================
+        // === VALIDASI PINTAR MIDDLEMAN (SEBELUM MEMBUAT TIKET) ===
+        // =====================================================================
+        let foundPembeli = null;
+        let foundPenjual = null;
+        let qPembeli = '';
+        let qPenjual = '';
+        let mmUang = '';
+
+        if (type === 'mm') {
+            qPembeli = interaction.fields.getTextInputValue('mm_pembeli').trim();
+            qPenjual = interaction.fields.getTextInputValue('mm_penjual').trim();
+            mmUang = interaction.fields.getTextInputValue('mm_uang');
+
+           // Fungsi pencarian Hybrid (ID/Ping -> Exact Username -> Exact Display Name -> Tebakan Discord)
+            const findMember = async (query) => {
+                const q = query.trim().toLowerCase();
+                
+                // 1. Ekstrak angka jika input berupa ID atau Ping (<@123456>)
+                const extractedId = query.replace(/[^\d]/g, ''); 
+                if (extractedId.length >= 17 && extractedId.length <= 19) {
+                    const member = await interaction.guild.members.fetch(extractedId).catch(() => null);
+                    if (member) return member;
+                }
+
+                // 2. Jika input berupa teks biasa, lakukan pencarian pintar
+                try {
+                    // Tarik maksimal 5 member yang mirip (sangat ringan untuk server)
+                    const searchResults = await interaction.guild.members.fetch({ query: query, limit: 5 });
+                    if (searchResults.size === 0) return null;
+
+                    // Prioritas A: Cocokkan dengan Username asli (Unik, tidak ada spasi)
+                    let exactUsername = searchResults.find(m => m.user.username.toLowerCase() === q);
+                    if (exactUsername) return exactUsername;
+
+                    // Prioritas B: Cocokkan dengan Display Name
+                    let exactDisplayName = searchResults.find(m => m.displayName.toLowerCase() === q);
+                    if (exactDisplayName) return exactDisplayName;
+
+                    // Prioritas C: Jika pelanggan typo sedikit, ambil hasil tebakan teratas dari Discord
+                    return searchResults.first();
+                } catch (e) {
+                    return null;
+                }
+            };
+
+            // Cari kedua user di server
+            foundPembeli = await findMember(qPembeli);
+            foundPenjual = await findMember(qPenjual);
+
+            // Jika salah satu atau keduanya TIDAK DITEMUKAN, batalkan pembuatan tiket!
+            if (!foundPembeli || !foundPenjual) {
+                let errorMsg = '❌ **Pembuatan Tiket Middleman Dibatalkan!**\n';
+                if (!foundPembeli) errorMsg += `- User Pembeli (\`${qPembeli}\`) tidak ditemukan di server.\n`;
+                if (!foundPenjual) errorMsg += `- User Penjual (\`${qPenjual}\`) tidak ditemukan di server.\n`;
+                errorMsg += '\n💡 *Tips: Masukkan Username asli (bukan Display Name) atau gunakan **User ID Discord** (angka) agar 100% akurat.*';
+                
+                return interaction.editReply({ content: errorMsg });
+            }
+        }
+        // =====================================================================
+
         // --- LOGIKA OVERFLOW CATEGORY TICKET ---
         const primaryCategoryId = '1488785950011166790'; // Kategori Utama
-        const backupCategoryId = '1522155806475419788'; // BUAT KATEGORI BARU & TARUH ID-NYA DISINI
+        const backupCategoryId = '1522155806475419788'; // Kategori Backup
 
         let activeCategoryId = primaryCategoryId;
         try {
-            // Cek dari cache dulu
             let primaryCat = interaction.guild.channels.cache.get(primaryCategoryId);
-
-            // Jika tidak ada di cache, coba ambil (fetch) sekali
             if (!primaryCat) {
                 primaryCat = await interaction.guild.channels.fetch(primaryCategoryId).catch(err => {
                     console.error("DEBUG: Gagal fetch primary category:", err.message);
@@ -771,7 +831,6 @@ client.on('interactionCreate', async (interaction) => {
                 });
             }
 
-            // Cek jumlah channel
             if (primaryCat && primaryCat.children.cache.size >= 50) {
                 activeCategoryId = backupCategoryId;
             } else if (!primaryCat) {
@@ -780,6 +839,7 @@ client.on('interactionCreate', async (interaction) => {
         } catch (err) {
             console.error("DEBUG: Error tidak terduga pada logika kategori:", err);
         }
+
         const roleOwner = '1489612423521374309';
         const roleHandler = '1489612221544665231';
         const rolePartner = '1519076541055897670';
@@ -803,24 +863,12 @@ client.on('interactionCreate', async (interaction) => {
                 { id: rolePartner, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] }
             ];
 
-            // Analisis Ekstra Untuk Middleman (Pencarian User Super Ringan)
+            // Masukkan User Middleman (Karena sudah divalidasi, pasti berhasil masuk)
             let mmPings = '';
             if (type === 'mm') {
-                const qPembeli = interaction.fields.getTextInputValue('mm_pembeli');
-                const qPenjual = interaction.fields.getTextInputValue('mm_penjual');
-                
-                // Gunakan query search bawaan Discord.js yang ramah RAM
-                const srchPembeli = await interaction.guild.members.fetch({ query: qPembeli, limit: 1 }).catch(()=>null);
-                const srchPenjual = await interaction.guild.members.fetch({ query: qPenjual, limit: 1 }).catch(()=>null);
-
-                if (srchPembeli && srchPembeli.first()) {
-                    permissionOverwrites.push({ id: srchPembeli.first().id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] });
-                    mmPings += `<@${srchPembeli.first().id}> `;
-                }
-                if (srchPenjual && srchPenjual.first()) {
-                    permissionOverwrites.push({ id: srchPenjual.first().id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] });
-                    mmPings += `<@${srchPenjual.first().id}> `;
-                }
+                permissionOverwrites.push({ id: foundPembeli.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] });
+                permissionOverwrites.push({ id: foundPenjual.id, allow: ['ViewChannel', 'SendMessages', 'ReadMessageHistory'] });
+                mmPings += `<@${foundPembeli.id}> <@${foundPenjual.id}>`;
             }
 
             // Buat Channel
@@ -878,9 +926,9 @@ client.on('interactionCreate', async (interaction) => {
                 );
             } else if (type === 'mm') {
                 ticketEmbed.addFields(
-                    { name: '🛒 Username Pembeli', value: interaction.fields.getTextInputValue('mm_pembeli'), inline: true },
-                    { name: '🏪 Username Penjual', value: interaction.fields.getTextInputValue('mm_penjual'), inline: true },
-                    { name: '💵 Jumlah Transaksi', value: `**${interaction.fields.getTextInputValue('mm_uang')}**`, inline: false }
+                    { name: '🛒 Pembeli', value: `<@${foundPembeli.id}>`, inline: true },
+                    { name: '🏪 Penjual', value: `<@${foundPenjual.id}>`, inline: true },
+                    { name: '💵 Jumlah Transaksi', value: `**${mmUang}**`, inline: false }
                 );
             }
 
