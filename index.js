@@ -801,9 +801,15 @@ client.on('interactionCreate', async (interaction) => {
                 }
             };
 
-            // Cari kedua user di server
-            foundPembeli = await findMember(qPembeli);
-            foundPenjual = await findMember(qPenjual);
+            // Cari kedua user di server (dibungkus try/catch agar TIDAK CRASH seluruh bot
+            // kalau Discord API gagal/timeout, misalnya karena Server Members Intent belum aktif)
+            try {
+                foundPembeli = await findMember(qPembeli);
+                foundPenjual = await findMember(qPenjual);
+            } catch (err) {
+                console.error('Gagal mencari member untuk tiket MM:', err);
+                return interaction.editReply({ content: '❌ Gagal memvalidasi Pembeli/Penjual (error saat mencari member di server). Coba lagi atau gunakan User ID Discord.' });
+            }
 
             // Jika salah satu atau keduanya TIDAK DITEMUKAN, batalkan pembuatan tiket!
             if (!foundPembeli || !foundPenjual) {
@@ -2663,6 +2669,16 @@ Jumlah Robux: `;
             return interaction.reply({ content: '❌ Waduh, database-nya lagi ngambek nih.', flags: MessageFlags.Ephemeral });
         }
     }
+});
+
+// === GLOBAL ERROR HANDLER ===
+// Mencegah SATU error kecil (misal gagal fetch member) mematikan SELURUH bot.
+// Tanpa ini, sejak Node.js v15+, unhandled promise rejection = proses mati total.
+process.on('unhandledRejection', (reason) => {
+    console.error('Unhandled Rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
 });
 
 client.login(process.env.TOKEN);
