@@ -357,6 +357,14 @@ const slashCommands = [
             { name: 'username', description: 'Username Roblox pembeli', type: 3, required: true }
         ]
     },
+    // --- TAMBAHAN BARU: CEK TRANSAKSI (OWNER/HANDLER ONLY) ---
+    {
+        name: 'cek-transaksi',
+        description: 'Cek total Robux payout ke username tertentu (5/10/30 hari)',
+        options: [
+            { name: 'username', description: 'Username Roblox penerima payout', type: 3, required: true }
+        ]
+    },
     // --- TAMBAHAN BARU: OMEN ---
     { 
         name: 'omen', description: 'Tampilkan metode pembayaran Partner Omen' 
@@ -570,6 +578,8 @@ client.on('messageCreate', async (message) => {
 const isUpdating = new Set();
 let linkCommunityActive = false;
 let isCheckingEligible = false;
+let isCheckingTransaksi = false;
+const transaksiCache = new Map();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 // --- TAMBAHAN CACHE & COOLDOWN ---
@@ -2141,6 +2151,181 @@ Jumlah Robux: `;
         }
         return;
     }
+
+    // --- CEK TRANSAKSI PAYOUT (OWNER/HANDLER ONLY) ---
+    if (command === 'cek-transaksi') {
+
+        // 1. GATE AKSES: hanya role Owner & Handler yang boleh pakai
+        const allowedRolesTransaksi = ['1489612423521374309', '1489612221544665231']; // Owner, Handler
+        if (!interaction.member.roles.cache.some(r => allowedRolesTransaksi.includes(r.id))) {
+            return interaction.reply({ content: '❌ Command ini khusus Owner/Handler.', flags: MessageFlags.Ephemeral });
+        }
+
+        const targetUsername = interaction.options.getString('username').trim();
+        const cacheKey = `tx_${targetUsername.toLowerCase()}`;
+        const txCooldownKey = `tx_${interaction.user.id}`;
+
+        // 2. COOLDOWN per-user (terpisah dari cooldown /cek-eligible, lebih panjang karena command sensitif)
+        const txCooldownTime = 45000; // 45 detik
+        if (userCooldowns.has(txCooldownKey)) {
+            const expiration = userCooldowns.get(txCooldownKey) + txCooldownTime;
+            if (Date.now() < expiration) {
+                const timeLeft = Math.round((expiration - Date.now()) / 1000);
+                return interaction.reply({ content: `⏳ Tunggu **${timeLeft} detik** lagi sebelum cek transaksi lagi.`, flags: MessageFlags.Ephemeral });
+            }
+        }
+
+        // 3. CACHE 15 menit — kurangi beban akun dummy kalau username yang sama dicek berulang
+        if (transaksiCache.has(cacheKey)) {
+            const cached = transaksiCache.get(cacheKey);
+            if (Date.now() - cached.timestamp < 900000) { // 15 menit
+                userCooldowns.set(txCooldownKey, Date.now());
+                const cachedEmbed = EmbedBuilder.from(cached.embed).setFooter({ text: 'Roblox Transaction Checker • (Data Cached)' });
+                return interaction.reply({ embeds: [cachedEmbed], flags: MessageFlags.Ephemeral });
+            } else {
+                transaksiCache.delete(cacheKey);
+            }
+        }
+
+        // 4. ANTREAN GLOBAL — pakai lock BERSAMA dengan /cek-eligible supaya akun dummy TIDAK PERNAH
+        //    dipakai 2 request bersamaan (biar tidak dianggap pola "hacker API" oleh Roblox)
+        if (isCheckingEligible || isCheckingTransaksi) {
+            return interaction.reply({ content: '⏳ Sistem sedang memproses pengecekan lain. Mohon antre beberapa detik...', flags: MessageFlags.Ephemeral });
+        }
+
+        isCheckingTransaksi = true;
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        try {
+            // Dapatkan User ID Roblox (pola sama seperti /cek-eligible)
+            let userRes;
+            try {
+                userRes = await axios.post('https://users.roblox.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
+            } catch (err) {
+                userRes = await axios.post('https://users.roproxy.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
+            }
+
+            if (!userRes.data.data.length) {
+                return interaction.editReply(`❌ Username **${targetUsername}** tidak ditemukan di Roblox.`);
+            }
+
+            const userId = userRes.data.data[0].id;
+            const actualUsername = userRes.data.data[0].name;
+
+            await sleep(500);
+
+            let avatarUrl = null;
+            try {
+                const avaRes = await axios.get(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`);
+                avatarUrl = avaRes.data.data[0].imageUrl;
+            } catch (e) {}
+
+            const targetGroups = [
+                { id: '1064667246', name: 'Community 1 (BEJIRLAH)' },
+                { id: '1108229986', name: 'Community 2 (Vandamoy)' }
+            ];
+            const periods = [5, 10, 30]; // hari
+            const now = Date.now();
+            const cutoffOldest = now - (30 * 24 * 60 * 60 * 1000); // batas 30 hari ke belakang
+
+            const embed = new EmbedBuilder()
+                .setTitle('🧾 Transaksi Robux Checker')
+                .addFields({ name: '👤 Username', value: `\`${actualUsername}\``, inline: false })
+                .setColor(0x5865F2)
+                .setFooter({ text: `Diminta oleh ${interaction.user.tag} • Roblox Transaction Checker` })
+                .setTimestamp();
+            if (avatarUrl) embed.setThumbnail(avatarUrl);
+
+            let grandTotal = 0;
+
+            for (const grp of targetGroups) {
+                await sleep(500); // jeda antar-grup (disamakan gaya /cek-eligible)
+
+                const totals = { 5: 0, 10: 0, 30: 0 };
+                let fetchFailed = false;
+                let reachedPageLimit = false;
+
+                try {
+                    let cursor = '';
+                    let page = 0;
+                    // Rem darurat aja, BUKAN batas normal — kondisi berhenti utama tetap cutoffOldest (30 hari) di bawah.
+                    // 40 halaman = maks 4000 entri, cukup untuk grup yang payout puluhan kali/hari.
+                    const maxPages = 40;
+
+                    while (page < maxPages) {
+
+                    while (page < maxPages) {
+                        const url = `https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=AdjustCurrencyAmounts&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
+                        const auditRes = await axios.get(url, {
+                            headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
+                        });
+
+                        const entries = auditRes.data?.data || [];
+                        if (entries.length === 0) break;
+
+                        let stop = false;
+                        for (const entry of entries) {
+                            const createdTime = new Date(entry.created).getTime();
+                            if (createdTime < cutoffOldest) { stop = true; break; }
+
+                            // ⚠️ CEK LAGI field ini pas testing pertama — struktur description
+                            // bisa beda tergantung versi API. Lihat panduan debug di bawah.
+                            const desc = entry.description || {};
+                            const targetId = desc.TargetId || desc.targetId || desc.RecipientId || desc.recipientId;
+                            const amount = desc.Amount ?? desc.amount ?? desc.NewValue ?? desc.newValue ?? 0;
+
+                            if (String(targetId) === String(userId)) {
+                                const ageDays = (now - createdTime) / (1000 * 60 * 60 * 24);
+                                for (const p of periods) {
+                                    if (ageDays <= p) totals[p] += Number(amount) || 0;
+                                }
+                            }
+                        }
+
+                        if (stop) break;
+                        cursor = auditRes.data?.nextPageCursor;
+                        if (!cursor) break;
+
+                        page++;
+                        if (page >= maxPages) reachedPageLimit = true; // habis "jatah" halaman sebelum nyampe 30 hari
+                        await sleep(350); // jeda antar-halaman (dipangkas, GET/baca log jauh lebih aman dari write action)
+                    }
+                } catch (e) {
+                    console.error(`Gagal ambil audit log payout ${grp.name}:`, e.response?.data || e.message);
+                    fetchFailed = true;
+                }
+
+                if (fetchFailed) {
+                    embed.addFields({ name: `🏢 ${grp.name}`, value: '⚠️ Gagal mengambil data (cek console log bot).', inline: false });
+                } else {
+                    grandTotal += totals[30];
+                    const warning = reachedPageLimit ? '\n⚠️ *Data mungkin belum lengkap (log terlalu banyak, terpotong di halaman ke-60).*' : '';
+                    embed.addFields({
+                        name: `🏢 ${grp.name}`,
+                        value: `📅 **5 Hari:** \`${totals[5].toLocaleString('id-ID')} Robux\`\n📅 **10 Hari:** \`${totals[10].toLocaleString('id-ID')} Robux\`\n📅 **30 Hari:** \`${totals[30].toLocaleString('id-ID')} Robux\`${warning}`,
+                        inline: false
+                    });
+                }
+            }
+
+            embed.addFields({ name: '📊 Total Keseluruhan (30 Hari)', value: `\`${grandTotal.toLocaleString('id-ID')} Robux\``, inline: false });
+
+            transaksiCache.set(cacheKey, { embed: embed.toJSON(), timestamp: Date.now() });
+            userCooldowns.set(txCooldownKey, Date.now());
+
+            await interaction.editReply({ embeds: [embed] });
+
+        } catch (error) {
+            console.error("Transaksi Check Error:", error.response?.data || error.message);
+            await interaction.editReply('❌ Terjadi gangguan komunikasi dengan server Roblox saat ini. Coba beberapa saat lagi.');
+        } finally {
+            isCheckingTransaksi = false;
+        }
+        return;
+    }
+
+    // --- LINK COMMUNITY ---
+    if (command === 'linkcommunity') {
     
     // --- LINK COMMUNITY ---
     if (command === 'linkcommunity') {
