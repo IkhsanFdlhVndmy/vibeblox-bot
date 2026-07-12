@@ -2304,7 +2304,7 @@ Jumlah Robux: `;
                 } else {
                     const totalGrp = totals.p1_3 + totals.p4_6 + totals.p7_10; // total 10 hari khusus grup ini
                     grandTotal += totalGrp;
-                    const warning = reachedPageLimit ? '\n⚠️ *Data mungkin belum lengkap (log terlalu banyak, terpotong di halaman ke-15).*' : '';
+                    const warning = reachedPageLimit ? '\n⚠️ *Data mungkin belum lengkap (log terlalu banyak, terpotong di halaman ke-40).*' : '';
                     embed.addFields({
                         name: `🏢 ${grp.name}`,
                         value: `📅 **1-3 Hari:** \`${totals.p1_3.toLocaleString('id-ID')} Robux\`\n📅 **4-6 Hari:** \`${totals.p4_6.toLocaleString('id-ID')} Robux\`\n📅 **7-10 Hari:** \`${totals.p7_10.toLocaleString('id-ID')} Robux\`\n📊 **Total (10 Hari):** \`${totalGrp.toLocaleString('id-ID')} Robux\`${warning}`,
