@@ -2181,7 +2181,7 @@ Jumlah Robux: `;
             if (Date.now() - cached.timestamp < 900000) { // 15 menit
                 userCooldowns.set(txCooldownKey, Date.now());
                 const cachedEmbed = EmbedBuilder.from(cached.embed).setFooter({ text: 'Roblox Transaction Checker • (Data Cached)' });
-                return interaction.reply({ embeds: [cachedEmbed], flags: MessageFlags.Ephemeral });
+                return interaction.reply({ embeds: [cachedEmbed] });
             } else {
                 transaksiCache.delete(cacheKey);
             }
@@ -2194,7 +2194,7 @@ Jumlah Robux: `;
         }
 
         isCheckingTransaksi = true;
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        await interaction.deferReply(); // publik, samakan gaya /cek-eligible
 
         try {
             // Dapatkan User ID Roblox (pola sama seperti /cek-eligible)
@@ -2259,10 +2259,16 @@ Jumlah Robux: `;
                         });
 
                         const entries = auditRes.data?.data || [];
-                        console.log(`[DEBUG cek-transaksi] Grup ${grp.name} halaman ${page}: dapat ${entries.length} entri.`);
-                        if (entries.length > 0) {
-                            console.log(`[DEBUG cek-transaksi] Contoh entri pertama:`, JSON.stringify(entries[0], null, 2));
+                        // 🔍 DEBUG SEMENTARA — dikirim langsung ke Discord, tidak perlu buka log hosting
+                        if (page === 0 && grp === targetGroups[0]) {
+                            if (entries.length > 0) {
+                                const rawSample = JSON.stringify(entries[0], null, 2).slice(0, 1800);
+                                await interaction.followUp({ content: `🔍 **DEBUG** — contoh 1 entri mentah dari Roblox (${grp.name}):\n\`\`\`json\n${rawSample}\n\`\`\``, flags: MessageFlags.Ephemeral }).catch(() => {});
+                            } else {
+                                await interaction.followUp({ content: `🔍 **DEBUG** — actionType=AdjustCurrencyAmounts kembalikan **0 entri** di ${grp.name}. Kemungkinan besar actionType-nya salah.`, flags: MessageFlags.Ephemeral }).catch(() => {});
+                            }
                         }
+
                         if (entries.length === 0) break;
 
                         let stop = false;
