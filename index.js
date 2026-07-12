@@ -2253,8 +2253,6 @@ Jumlah Robux: `;
                     const maxPages = 40;
 
                     while (page < maxPages) {
-
-                    while (page < maxPages) {
                         const url = `https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=AdjustCurrencyAmounts&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
                         const auditRes = await axios.get(url, {
                             headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
@@ -2323,9 +2321,6 @@ Jumlah Robux: `;
         }
         return;
     }
-
-    // --- LINK COMMUNITY ---
-    if (command === 'linkcommunity') {
     
     // --- LINK COMMUNITY ---
     if (command === 'linkcommunity') {
