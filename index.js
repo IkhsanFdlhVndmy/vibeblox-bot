@@ -2252,21 +2252,29 @@ Jumlah Robux: `;
                     // 40 halaman = maks 4000 entri, cukup untuk grup yang payout puluhan kali/hari.
                     const maxPages = 40;
 
-                    while (page < maxPages) {
-                        const url = `https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=AdjustCurrencyAmounts&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
+                   while (page < maxPages) {
+                        const url = `https://groups.roblox.com/v1/groups/${grp.id}/audit-log?limit=100${cursor ? `&cursor=${cursor}` : ''}`; // 🔍 SEMENTARA: tanpa filter actionType untuk debug
                         const auditRes = await axios.get(url, {
                             headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
                         });
 
                         const entries = auditRes.data?.data || [];
+
                         // 🔍 DEBUG SEMENTARA — dikirim langsung ke Discord, tidak perlu buka log hosting
                         if (page === 0 && grp === targetGroups[0]) {
-                            if (entries.length > 0) {
+                            const uniqueTypes = [...new Set(entries.map(e => e.actionType))];
+                            await interaction.followUp({ content: `🔍 **DEBUG** — actionType yang ADA di ${grp.name} (100 log terbaru):\n\`\`\`\n${uniqueTypes.join('\n')}\n\`\`\``, flags: MessageFlags.Ephemeral }).catch(() => {});
+
+                            const payoutLike = entries.find(e => /currency|fund|payout|reward/i.test(e.actionType));
+                            if (payoutLike) {
+                                const rawSample = JSON.stringify(payoutLike, null, 2).slice(0, 1800);
+                                await interaction.followUp({ content: `🔍 **DEBUG** — contoh entri yang kelihatan seperti payout:\n\`\`\`json\n${rawSample}\n\`\`\``, flags: MessageFlags.Ephemeral }).catch(() => {});
+                            } else if (entries.length > 0) {
                                 const rawSample = JSON.stringify(entries[0], null, 2).slice(0, 1800);
-                                await interaction.followUp({ content: `🔍 **DEBUG** — contoh 1 entri mentah dari Roblox (${grp.name}):\n\`\`\`json\n${rawSample}\n\`\`\``, flags: MessageFlags.Ephemeral }).catch(() => {});
-                            } else {
-                                await interaction.followUp({ content: `🔍 **DEBUG** — actionType=AdjustCurrencyAmounts kembalikan **0 entri** di ${grp.name}. Kemungkinan besar actionType-nya salah.`, flags: MessageFlags.Ephemeral }).catch(() => {});
+                                await interaction.followUp({ content: `🔍 **DEBUG** — tidak ketemu yang jelas payout, ini contoh entri pertama sebagai referensi:\n\`\`\`json\n${rawSample}\n\`\`\``, flags: MessageFlags.Ephemeral }).catch(() => {});
                             }
+
+                            return interaction.editReply({ content: '🔍 Mode debug aktif, cek pesan detail di atas.' }); // stop di sini dulu, jangan lanjut proses normal
                         }
 
                         if (entries.length === 0) break;
