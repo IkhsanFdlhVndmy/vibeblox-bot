@@ -2194,7 +2194,7 @@ Jumlah Robux: `;
         }
 
         isCheckingTransaksi = true;
-        await interaction.deferReply(); // publik, samakan gaya /cek-eligible
+        await interaction.deferReply();
 
         try {
             // Dapatkan User ID Roblox (pola sama seperti /cek-eligible)
@@ -2211,6 +2211,7 @@ Jumlah Robux: `;
 
             const userId = userRes.data.data[0].id;
             const actualUsername = userRes.data.data[0].name;
+            const actualDisplayName = userRes.data.data[0].displayName || actualUsername;
 
             await sleep(500);
 
@@ -2248,35 +2249,18 @@ Jumlah Robux: `;
                 try {
                     let cursor = '';
                     let page = 0;
-                    // Rem darurat aja, BUKAN batas normal — kondisi berhenti utama tetap cutoffOldest (30 hari) di bawah.
-                    // 40 halaman = maks 4000 entri, cukup untuk grup yang payout puluhan kali/hari.
                     const maxPages = 40;
 
-                   while (page < maxPages) {
-                        const url = `https://groups.roblox.com/v1/groups/${grp.id}/audit-log?limit=100${cursor ? `&cursor=${cursor}` : ''}`; // 🔍 SEMENTARA: tanpa filter actionType untuk debug
+                    // Nama target yang dicari di teks log — cocokkan ke Username ATAU Display Name (case-insensitive)
+                    const namesToMatch = [actualUsername.toLowerCase(), actualDisplayName.toLowerCase()];
+
+                    while (page < maxPages) {
+                        const url = `https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=${encodeURIComponent('Spend Group Funds')}&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
                         const auditRes = await axios.get(url, {
                             headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
                         });
 
                         const entries = auditRes.data?.data || [];
-
-                        // 🔍 DEBUG SEMENTARA — dikirim langsung ke Discord, tidak perlu buka log hosting
-                        if (page === 0 && grp === targetGroups[0]) {
-                            const uniqueTypes = [...new Set(entries.map(e => e.actionType))];
-                            await interaction.followUp({ content: `🔍 **DEBUG** — actionType yang ADA di ${grp.name} (100 log terbaru):\n\`\`\`\n${uniqueTypes.join('\n')}\n\`\`\``, flags: MessageFlags.Ephemeral }).catch(() => {});
-
-                            const payoutLike = entries.find(e => /currency|fund|payout|reward/i.test(e.actionType));
-                            if (payoutLike) {
-                                const rawSample = JSON.stringify(payoutLike, null, 2).slice(0, 1800);
-                                await interaction.followUp({ content: `🔍 **DEBUG** — contoh entri yang kelihatan seperti payout:\n\`\`\`json\n${rawSample}\n\`\`\``, flags: MessageFlags.Ephemeral }).catch(() => {});
-                            } else if (entries.length > 0) {
-                                const rawSample = JSON.stringify(entries[0], null, 2).slice(0, 1800);
-                                await interaction.followUp({ content: `🔍 **DEBUG** — tidak ketemu yang jelas payout, ini contoh entri pertama sebagai referensi:\n\`\`\`json\n${rawSample}\n\`\`\``, flags: MessageFlags.Ephemeral }).catch(() => {});
-                            }
-
-                            return interaction.editReply({ content: '🔍 Mode debug aktif, cek pesan detail di atas.' }); // stop di sini dulu, jangan lanjut proses normal
-                        }
-
                         if (entries.length === 0) break;
 
                         let stop = false;
@@ -2284,16 +2268,21 @@ Jumlah Robux: `;
                             const createdTime = new Date(entry.created).getTime();
                             if (createdTime < cutoffOldest) { stop = true; break; }
 
-                            // ⚠️ CEK LAGI field ini pas testing pertama — struktur description
-                            // bisa beda tergantung versi API. Lihat panduan debug di bawah.
-                            const desc = entry.description || {};
-                            const targetId = desc.TargetId || desc.targetId || desc.RecipientId || desc.recipientId;
-                            const amount = desc.Amount ?? desc.amount ?? desc.NewValue ?? desc.newValue ?? 0;
+                            // Format asli: "one-time payout of Robux from group funds to Nama1 (1,000), Nama2 (2,000)"
+                            // 1 entri bisa berisi BANYAK penerima berbeda, jadi Amount total TIDAK dijumlah langsung —
+                            // di-parse per-nama dari teksnya.
+                            const itemDesc = entry.description?.ItemDescription || '';
+                            const pairRegex = /([A-Za-z0-9_]+)\s*\(([\d,]+)\)/g;
+                            let match;
+                            while ((match = pairRegex.exec(itemDesc)) !== null) {
+                                const recipientName = match[1].toLowerCase();
+                                const recipientAmount = parseInt(match[2].replace(/,/g, ''), 10) || 0;
 
-                            if (String(targetId) === String(userId)) {
-                                const ageDays = (now - createdTime) / (1000 * 60 * 60 * 24);
-                                for (const p of periods) {
-                                    if (ageDays <= p) totals[p] += Number(amount) || 0;
+                                if (namesToMatch.includes(recipientName)) {
+                                    const ageDays = (now - createdTime) / (1000 * 60 * 60 * 24);
+                                    for (const p of periods) {
+                                        if (ageDays <= p) totals[p] += recipientAmount;
+                                    }
                                 }
                             }
                         }
@@ -2303,8 +2292,8 @@ Jumlah Robux: `;
                         if (!cursor) break;
 
                         page++;
-                        if (page >= maxPages) reachedPageLimit = true; // habis "jatah" halaman sebelum nyampe 30 hari
-                        await sleep(350); // jeda antar-halaman (dipangkas, GET/baca log jauh lebih aman dari write action)
+                        if (page >= maxPages) reachedPageLimit = true;
+                        await sleep(350);
                     }
                 } catch (e) {
                     console.error(`Gagal ambil audit log payout ${grp.name}:`, e.response?.data || e.message);
