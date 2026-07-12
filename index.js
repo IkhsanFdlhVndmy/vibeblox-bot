@@ -2259,6 +2259,10 @@ Jumlah Robux: `;
                         });
 
                         const entries = auditRes.data?.data || [];
+                        console.log(`[DEBUG cek-transaksi] Grup ${grp.name} halaman ${page}: dapat ${entries.length} entri.`);
+                        if (entries.length > 0) {
+                            console.log(`[DEBUG cek-transaksi] Contoh entri pertama:`, JSON.stringify(entries[0], null, 2));
+                        }
                         if (entries.length === 0) break;
 
                         let stop = false;
