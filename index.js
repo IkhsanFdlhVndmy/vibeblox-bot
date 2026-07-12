@@ -2226,7 +2226,7 @@ Jumlah Robux: `;
                 { id: '1108229986', name: 'Community 2 (Vandamoy)' }
             ];
             const now = Date.now();
-            const cutoffOldest = now - (30 * 24 * 60 * 60 * 1000); // batas 30 hari ke belakang
+            const cutoffOldest = now - (10 * 24 * 60 * 60 * 1000); // batas 10 hari ke belakang
 
             const embed = new EmbedBuilder()
                 .setTitle('🧾 Transaksi Robux Checker')
@@ -2241,7 +2241,7 @@ Jumlah Robux: `;
             for (const grp of targetGroups) {
                 await sleep(500); // jeda antar-grup (disamakan gaya /cek-eligible)
 
-                const totals = { p1_5: 0, p6_10: 0, p11_30: 0 };
+                const totals = { p1_3: 0, p4_6: 0, p7_10: 0 };
                 let fetchFailed = false;
                 let reachedPageLimit = false;
 
@@ -2279,9 +2279,9 @@ Jumlah Robux: `;
 
                                 if (namesToMatch.includes(recipientName)) {
                                     const ageDays = (now - createdTime) / (1000 * 60 * 60 * 24);
-                                    if (ageDays <= 5) totals.p1_5 += recipientAmount;
-                                    else if (ageDays <= 10) totals.p6_10 += recipientAmount;
-                                    else if (ageDays <= 30) totals.p11_30 += recipientAmount;
+                                    if (ageDays <= 3) totals.p1_3 += recipientAmount;
+                                    else if (ageDays <= 6) totals.p4_6 += recipientAmount;
+                                    else if (ageDays <= 10) totals.p7_10 += recipientAmount;
                                 }
                             }
                         }
@@ -2302,18 +2302,18 @@ Jumlah Robux: `;
                 if (fetchFailed) {
                     embed.addFields({ name: `🏢 ${grp.name}`, value: '⚠️ Gagal mengambil data (cek console log bot).', inline: false });
                 } else {
-                    const totalGrp = totals.p1_5 + totals.p6_10 + totals.p11_30; // total 30 hari khusus grup ini
+                    const totalGrp = totals.p1_3 + totals.p4_6 + totals.p7_10; // total 10 hari khusus grup ini
                     grandTotal += totalGrp;
-                    const warning = reachedPageLimit ? '\n⚠️ *Data mungkin belum lengkap (log terlalu banyak, terpotong di halaman ke-40).*' : '';
+                    const warning = reachedPageLimit ? '\n⚠️ *Data mungkin belum lengkap (log terlalu banyak, terpotong di halaman ke-15).*' : '';
                     embed.addFields({
                         name: `🏢 ${grp.name}`,
-                        value: `📅 **1-5 Hari:** \`${totals.p1_5.toLocaleString('id-ID')} Robux\`\n📅 **6-10 Hari:** \`${totals.p6_10.toLocaleString('id-ID')} Robux\`\n📅 **11-30 Hari:** \`${totals.p11_30.toLocaleString('id-ID')} Robux\`\n📊 **Total (30 Hari):** \`${totalGrp.toLocaleString('id-ID')} Robux\`${warning}`,
+                        value: `📅 **1-3 Hari:** \`${totals.p1_3.toLocaleString('id-ID')} Robux\`\n📅 **4-6 Hari:** \`${totals.p4_6.toLocaleString('id-ID')} Robux\`\n📅 **7-10 Hari:** \`${totals.p7_10.toLocaleString('id-ID')} Robux\`\n📊 **Total (10 Hari):** \`${totalGrp.toLocaleString('id-ID')} Robux\`${warning}`,
                         inline: false
                     });
                 }
             }
 
-            embed.addFields({ name: '📊 Total Keseluruhan (30 Hari)', value: `\`${grandTotal.toLocaleString('id-ID')} Robux\``, inline: false });
+           embed.addFields({ name: '📊 Total Keseluruhan (10 Hari)', value: `\`${grandTotal.toLocaleString('id-ID')} Robux\``, inline: false });
 
             transaksiCache.set(cacheKey, { embed: embed.toJSON(), timestamp: Date.now() });
             userCooldowns.set(txCooldownKey, Date.now());
