@@ -2225,7 +2225,6 @@ Jumlah Robux: `;
                 { id: '1064667246', name: 'Community 1 (BEJIRLAH)' },
                 { id: '1108229986', name: 'Community 2 (Vandamoy)' }
             ];
-            
             const now = Date.now();
             const cutoffOldest = now - (30 * 24 * 60 * 60 * 1000); // batas 30 hari ke belakang
 
