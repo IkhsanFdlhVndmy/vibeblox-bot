@@ -111,7 +111,7 @@ if (menuType === 'howtoorder') {
         m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
         
         embed.setTitle(`${ann} PRICE LIST VIA PAYOUT COMMUNITY (INSTANT)`)
-             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/groups/654669898\n\n${priceList}`)
+             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\n${priceList}`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102402657915081/Frame_57.png?ex=6a2dc892&is=6a2c7712&hm=59ff55fdb78d365538f8464c291d309c1be584876ee2ff194d350935245ee954&');
 
     } else if (menuType === 'gamepass_after') {
@@ -2338,7 +2338,7 @@ Jumlah Robux: `;
 
         await interaction.deferReply();
 
-        await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/groups/654669898' });
+        await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\n' });
         linkCommunityActive = false;
         return;
     }
