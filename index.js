@@ -111,7 +111,7 @@ if (menuType === 'howtoorder') {
         m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
         
         embed.setTitle(`${ann} PRICE LIST VIA PAYOUT COMMUNITY (INSTANT)`)
-             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\n${priceList}`)
+             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/communities/653724099/Maycomn\n\n${priceList}`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102402657915081/Frame_57.png?ex=6a2dc892&is=6a2c7712&hm=59ff55fdb78d365538f8464c291d309c1be584876ee2ff194d350935245ee954&');
 
     } else if (menuType === 'gamepass_after') {
@@ -352,7 +352,7 @@ const slashCommands = [
     //cek eligble
     {
         name: 'cek-eligible', 
-        description: 'Cek status antrean 14 hari di grup BEJIRLAH & Vandamoy',
+        description: 'Cek status antrean 14 hari di grup BEJIRLAH, Vandamoy & Maycomn',
         options: [
             { name: 'username', description: 'Username Roblox pembeli', type: 3, required: true }
         ]
@@ -2036,9 +2036,11 @@ Jumlah Robux: `;
 
             const targetGroups = [
                 { id: '1064667246', name: 'Community 1 (BEJIRLAH)' },
-                { id: '1108229986', name: 'Community 2 (Vandamoy)' }
+                { id: '1108229986', name: 'Community 2 (Vandamoy)' },
+                { id: '653724099', name: 'Community 3 (Maycomn)' }
             ];
 
+            // Helper Waktu (Format Teks & Kalkulasi Remaining)
             // Helper Waktu (Format Teks & Kalkulasi Remaining)
             const formatWaktu = (isoString) => {
                 const d = new Date(isoString);
@@ -2076,13 +2078,18 @@ Jumlah Robux: `;
             let hasEligible = false;
             let hasPending = false;
 
+            // Emoji status kustom (biar layout ringkas & konsisten untuk 3 community)
+            const emojiNotJoin = '<:notjoin:1530931902985277521>';
+            const emojiEligible = '<a:eligible:1502074502228738098>';
+            const emojiPending = '<:pending:1530933220726804603>';
+
             for (let i = 0; i < targetGroups.length; i++) {
                 const grp = targetGroups[i];
 
                 if (!userGroups.includes(grp.id)) {
                     // KONDISI 1: Belum Join
                     embed.addFields(
-                        { name: `🏢 ${grp.name}`, value: `**Status:**\n🔴 **NOT ELIGIBLE** (Belum Join Grup)`, inline: false }
+                        { name: `🏢 ${grp.name}`, value: `${emojiNotJoin} Belum Bergabung`, inline: false }
                     );
                 } else {
                     // KONDISI 2: Sudah Join (Cek Audit Log)
@@ -2102,19 +2109,19 @@ Jumlah Robux: `;
                             if (isElig) {
                                 hasEligible = true;
                                 embed.addFields(
-                                    { name: `🏢 ${grp.name}`, value: `📆 **Join Date:**\n\`${formatWaktu(rawJoin)}\`\n🗓️ **Eligible Since:**\n\`${formatWaktu(eligibleDate)}\`\n📊 **Status:**\n🟢 **ELIGIBLE**`, inline: false }
+                                    { name: `🏢 ${grp.name}`, value: `📆 Join: \`${formatWaktu(rawJoin)}\`\n${emojiEligible} **ELIGIBLE** *(sejak ${formatWaktu(eligibleDate)})*`, inline: false }
                                 );
                             } else {
                                 hasPending = true;
                                 embed.addFields(
-                                    { name: `🏢 ${grp.name}`, value: `📆 **Join Date:**\n\`${formatWaktu(rawJoin)}\`\n🗓️ **Eligible At:**\n\`${formatWaktu(eligibleDate)}\`\n⏱️ **Remaining:**\n\`${getRemainingTime(eligibleDate)}\`\n📊 **Status:**\n🟠 **NOT ELIGIBLE (PENDING)**`, inline: false }
+                                    { name: `🏢 ${grp.name}`, value: `📆 Join: \`${formatWaktu(rawJoin)}\`\n${emojiPending} **PENDING** — Sisa \`${getRemainingTime(eligibleDate)}\``, inline: false }
                                 );
                             }
                         } else {
                             // Tertimbun = Otomatis Eligible
                             hasEligible = true;
                             embed.addFields(
-                                { name: `🏢 ${grp.name}`, value: `📊 **Status:**\n🟢 **ELIGIBLE** *(User tergabung > 14 hari)*`, inline: false }
+                                { name: `🏢 ${grp.name}`, value: `${emojiEligible} **ELIGIBLE** *(tergabung > 14 hari)*`, inline: false }
                             );
                         }
                     } catch (e) {
@@ -2223,7 +2230,8 @@ Jumlah Robux: `;
 
             const targetGroups = [
                 { id: '1064667246', name: 'Community 1 (BEJIRLAH)' },
-                { id: '1108229986', name: 'Community 2 (Vandamoy)' }
+                { id: '1108229986', name: 'Community 2 (Vandamoy)' },
+                { id: '653724099', name: 'Community 3 (Maycomn)' }
             ];
             const now = Date.now();
             const cutoffOldest = now - (10 * 24 * 60 * 60 * 1000); // batas 10 hari ke belakang
@@ -2304,10 +2312,10 @@ Jumlah Robux: `;
                 } else {
                     const totalGrp = totals.p1_3 + totals.p4_6 + totals.p7_10; // total 10 hari khusus grup ini
                     grandTotal += totalGrp;
-                    const warning = reachedPageLimit ? '\n⚠️ *Data mungkin belum lengkap (log terlalu banyak, terpotong di halaman ke-40).*' : '';
+                    const warning = reachedPageLimit ? '\n⚠️ *Data mungkin belum lengkap (terpotong di halaman ke-40).*' : '';
                     embed.addFields({
                         name: `🏢 ${grp.name}`,
-                        value: `📅 **1-3 Hari:** \`${totals.p1_3.toLocaleString('id-ID')} Robux\`\n📅 **4-6 Hari:** \`${totals.p4_6.toLocaleString('id-ID')} Robux\`\n📅 **7-10 Hari:** \`${totals.p7_10.toLocaleString('id-ID')} Robux\`\n📊 **Total (10 Hari):** \`${totalGrp.toLocaleString('id-ID')} Robux\`${warning}`,
+                        value: `📅 1-3H: \`${totals.p1_3.toLocaleString('id-ID')}\` • 4-6H: \`${totals.p4_6.toLocaleString('id-ID')}\` • 7-10H: \`${totals.p7_10.toLocaleString('id-ID')}\`\n📊 **Total: \`${totalGrp.toLocaleString('id-ID')} Robux\`**${warning}`,
                         inline: false
                     });
                 }
@@ -2338,7 +2346,7 @@ Jumlah Robux: `;
 
         await interaction.deferReply();
 
-        await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\n' });
+       await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/communities/653724099/Maycomn\n\n' });
         linkCommunityActive = false;
         return;
     }
