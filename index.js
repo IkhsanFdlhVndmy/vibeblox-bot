@@ -2041,7 +2041,6 @@ Jumlah Robux: `;
             ];
 
             // Helper Waktu (Format Teks & Kalkulasi Remaining)
-            // Helper Waktu (Format Teks & Kalkulasi Remaining)
             const formatWaktu = (isoString) => {
                 const d = new Date(isoString);
                 return d.toLocaleString('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Jakarta' }).replace(/\./g, ':') + ' WIB';
@@ -2346,7 +2345,7 @@ Jumlah Robux: `;
 
         await interaction.deferReply();
 
-       await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/communities/653724099/Maycomn\n\n' });
+        await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/communities/653724099/Maycomn\n\n' });
         linkCommunityActive = false;
         return;
     }
