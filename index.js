@@ -2,6 +2,7 @@ require('dotenv').config();
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Options, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle, AttachmentBuilder } = require('discord.js');
 const mongoose = require('mongoose');
 const axios = require('axios');
+axios.defaults.timeout = 15000; // 15 detik — cegah request macet tanpa batas waktu yang bikin "Sending Command..." tidak pernah selesai
 const User = require('./models/User');
 const Store = require('./models/Store');
 const RobuxRate = require('./models/RobuxRate');
@@ -34,7 +35,12 @@ const client = new Client({
     }
 });
 
-mongoose.connect(process.env.MONGODB_URI)
+mongoose.connect(process.env.MONGODB_URI, {
+    maxPoolSize: 20,             // batasi koneksi paralel (default 100, kebesaran untuk RAM 256MB)
+    minPoolSize: 1,
+    serverSelectionTimeoutMS: 8000,  // gagal cepat kalau MongoDB tidak bisa dihubungi, bukan nunggu tanpa batas
+    socketTimeoutMS: 20000           // gagal cepat kalau query macet di tengah jalan
+})
     .then(async () => {
         console.log('📂 Database MongoDB Tersambung!');
         // Initialize default robux rates jika belum ada
@@ -228,6 +234,11 @@ const slashCommands = [
     { name: 'gopay', description: 'Tampilkan info pembayaran GoPay VibeBlox' },
     { name: 'vouch', description: 'Template vouch (hanya terlihat olehmu)' },
     { name: 'linkcommunity', description: 'Tampilkan link grup komunitas Roblox' },
+    // --- TAMBAHAN BARU: PRE-ORDER ---
+    {
+        name: 'pre-order',
+        description: '[Owner/Handler] Tandai channel ticket ini sebagai Pre-Order (tambah -po di nama channel)'
+    },
     {
         name: 'robux', description: 'Kalkulator harga Robux',
         options: [
@@ -2082,14 +2093,13 @@ Jumlah Robux: `;
             const emojiEligible = '<a:eligible:1502074502228738098>';
             const emojiPending = '<:pending:1530933220726804603>';
 
-            for (let i = 0; i < targetGroups.length; i++) {
+for (let i = 0; i < targetGroups.length; i++) {
                 const grp = targetGroups[i];
+                let fieldValue;
 
                 if (!userGroups.includes(grp.id)) {
                     // KONDISI 1: Belum Join
-                    embed.addFields(
-                        { name: `🏢 ${grp.name}`, value: `${emojiNotJoin} Belum Bergabung`, inline: false }
-                    );
+                    fieldValue = `${emojiNotJoin} Belum Bergabung`;
                 } else {
                     // KONDISI 2: Sudah Join (Cek Audit Log)
                     await sleep(1000); 
@@ -2107,28 +2117,27 @@ Jumlah Robux: `;
 
                             if (isElig) {
                                 hasEligible = true;
-                                embed.addFields(
-                                    { name: `🏢 ${grp.name}`, value: `📆 Join: \`${formatWaktu(rawJoin)}\`\n${emojiEligible} **ELIGIBLE** *(sejak ${formatWaktu(eligibleDate)})*`, inline: false }
-                                );
+                                fieldValue = `📆 Join: \`${formatWaktu(rawJoin)}\`\n${emojiEligible} **ELIGIBLE** *(sejak ${formatWaktu(eligibleDate)})*`;
                             } else {
                                 hasPending = true;
-                                embed.addFields(
-                                    { name: `🏢 ${grp.name}`, value: `📆 Join: \`${formatWaktu(rawJoin)}\`\n${emojiPending} **PENDING** — Sisa \`${getRemainingTime(eligibleDate)}\``, inline: false }
-                                );
+                                fieldValue = `📆 Join: \`${formatWaktu(rawJoin)}\`\n${emojiPending} **PENDING** — Sisa \`${getRemainingTime(eligibleDate)}\``;
                             }
                         } else {
                             // Tertimbun = Otomatis Eligible
                             hasEligible = true;
-                            embed.addFields(
-                                { name: `🏢 ${grp.name}`, value: `${emojiEligible} **ELIGIBLE** *(tergabung > 14 hari)*`, inline: false }
-                            );
+                            fieldValue = `${emojiEligible} **ELIGIBLE** *(tergabung > 14 hari)*`;
                         }
                     } catch (e) {
                         hasEligible = true; // Asumsi positif jika API Roblox nyangkut tapi user ada di grup
-                        embed.addFields(
-                            { name: `🏢 ${grp.name}`, value: `⚠️ **User ada di dalam grup** *(Gagal narik tanggal. Silakan cek manual).*`, inline: false }
-                        );
+                        fieldValue = `⚠️ **User ada di dalam grup** *(Gagal narik tanggal. Silakan cek manual).*`;
                     }
+                }
+
+                embed.addFields({ name: `🏢 ${grp.name}`, value: fieldValue, inline: false });
+
+                // Spacer field — kasih jarak antar-community biar tidak dempet di layar mobile
+                if (i < targetGroups.length - 1) {
+                    embed.addFields({ name: '\u200b', value: '\u200b', inline: false });
                 }
             }
 
@@ -2245,7 +2254,8 @@ Jumlah Robux: `;
 
             let grandTotal = 0;
 
-            for (const grp of targetGroups) {
+            for (let gi = 0; gi < targetGroups.length; gi++) {
+                const grp = targetGroups[gi];
                 await sleep(500); // jeda antar-grup (disamakan gaya /cek-eligible)
 
                 const totals = { p1_3: 0, p4_6: 0, p7_10: 0 };
@@ -2314,11 +2324,18 @@ Jumlah Robux: `;
                     const warning = reachedPageLimit ? '\n⚠️ *Data mungkin belum lengkap (terpotong di halaman ke-40).*' : '';
                     embed.addFields({
                         name: `🏢 ${grp.name}`,
-                        value: `📅 1-3H: \`${totals.p1_3.toLocaleString('id-ID')}\` • 4-6H: \`${totals.p4_6.toLocaleString('id-ID')}\` • 7-10H: \`${totals.p7_10.toLocaleString('id-ID')}\`\n📊 **Total: \`${totalGrp.toLocaleString('id-ID')} Robux\`**${warning}`,
+                        value: `📅 **1-3 Hari:** \`${totals.p1_3.toLocaleString('id-ID')} Robux\`\n📅 **4-6 Hari:** \`${totals.p4_6.toLocaleString('id-ID')} Robux\`\n📅 **7-10 Hari:** \`${totals.p7_10.toLocaleString('id-ID')} Robux\`\n📊 **Total: \`${totalGrp.toLocaleString('id-ID')} Robux\`**${warning}`,
                         inline: false
                     });
                 }
+
+                // Spacer field — kasih jarak antar-community biar enak dibaca
+                if (gi < targetGroups.length - 1) {
+                    embed.addFields({ name: '\u200b', value: '\u200b', inline: false });
+                }
             }
+
+           embed.addFields({ name: '\u200b', value: '\u200b', inline: false });
 
            embed.addFields({ name: '📊 Total Keseluruhan (10 Hari)', value: `\`${grandTotal.toLocaleString('id-ID')} Robux\``, inline: false });
 
@@ -2518,6 +2535,38 @@ Jumlah Robux: `;
             .setTimestamp();
 
         return interaction.editReply({ embeds: [summaryEmbed] });
+    }
+
+    // ==================================================
+    // --- COMMAND: PRE-ORDER ---
+    // ==================================================
+    if (command === 'pre-order') {
+        const allowedRolesPO = ['1489612423521374309', '1489612221544665231']; // Owner, Handler
+        const hasRolePO = interaction.member.roles.cache.some(role => allowedRolesPO.includes(role.id));
+        if (!hasRolePO) {
+            return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
+        }
+
+        // Wajib dipakai di dalam channel ticket, sama seperti /invoice
+        const allowedTicketCategoriesPO = ['1488785950011166790', '1522155806475419788']; // ID Kategori Utama & Backup
+        if (!allowedTicketCategoriesPO.includes(interaction.channel.parentId)) {
+            return interaction.reply({ content: '❌ Perintah pre-order hanya bisa digunakan di dalam channel Ticket!', flags: MessageFlags.Ephemeral });
+        }
+
+        if (interaction.channel.name.endsWith('-po')) {
+            return interaction.reply({ content: '⚠️ Channel ini **sudah** ditandai Pre-Order.', flags: MessageFlags.Ephemeral });
+        }
+
+        const newNamePO = `${interaction.channel.name}-po`;
+
+        try {
+            await interaction.channel.setName(newNamePO);
+            await interaction.reply({ content: `✅ Channel ditandai sebagai **Pre-Order** — nama diganti jadi \`${newNamePO}\`.` });
+        } catch (err) {
+            console.log('Abaikan/Info: Gagal rename channel (Tambah -po), kemungkinan kena rate limit Discord (maks 2x rename/10 menit).', err.message);
+            await interaction.reply({ content: '⚠️ Gagal ganti nama channel — kemungkinan kena rate limit Discord (channel cuma boleh di-rename maks 2x per 10 menit). Coba lagi sebentar.', flags: MessageFlags.Ephemeral });
+        }
+        return;
     }
 
     // ==================================================
