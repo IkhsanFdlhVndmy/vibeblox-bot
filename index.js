@@ -2046,9 +2046,9 @@ Jumlah Robux: `;
             const userGroups = groupsRes.data.data.map(g => g.group.id.toString());
 
             const targetGroups = [
-                { id: '1064667246', name: 'Community 1 (BEJIRLAH)' },
-                { id: '1108229986', name: 'Community 2 (Vandamoy)' },
-                { id: '653724099', name: 'Community 3 (Maycomn)' }
+                { id: '1064667246', shortName: 'BEJIRLAH', url: 'https://www.roblox.com/communities/1064667246/BEJIRLAH-Community' },
+                { id: '1108229986', shortName: 'Vandamoy', url: 'https://www.roblox.com/id/communities/1108229986/Vandamoy' },
+                { id: '653724099', shortName: 'Maycomn', url: 'https://www.roblox.com/communities/653724099/Maycomn' }
             ];
 
             // Helper Waktu (Format Teks & Kalkulasi Remaining)
@@ -2133,12 +2133,7 @@ for (let i = 0; i < targetGroups.length; i++) {
                     }
                 }
 
-                embed.addFields({ name: `🏢 ${grp.name}`, value: fieldValue, inline: false });
-
-                // Spacer field — kasih jarak antar-community biar tidak dempet di layar mobile
-                if (i < targetGroups.length - 1) {
-                    embed.addFields({ name: '\u200b', value: '\u200b', inline: false });
-                }
+                embed.addFields({ name: `🏢 Community ${i + 1}`, value: `[**${grp.shortName}**](${grp.url})\n${fieldValue}\n\u200b`, inline: false });
             }
 
             // Terapkan Warna Prioritas
@@ -2317,25 +2312,18 @@ for (let i = 0; i < targetGroups.length; i++) {
                 }
 
                 if (fetchFailed) {
-                    embed.addFields({ name: `🏢 ${grp.name}`, value: '⚠️ Gagal mengambil data (cek console log bot).', inline: false });
+                    embed.addFields({ name: `🏢 ${grp.name}`, value: '⚠️ Gagal mengambil data (cek console log bot).\n\u200b', inline: false });
                 } else {
                     const totalGrp = totals.p1_3 + totals.p4_6 + totals.p7_10; // total 10 hari khusus grup ini
                     grandTotal += totalGrp;
                     const warning = reachedPageLimit ? '\n⚠️ *Data mungkin belum lengkap (terpotong di halaman ke-40).*' : '';
                     embed.addFields({
                         name: `🏢 ${grp.name}`,
-                        value: `📅 **1-3 Hari:** \`${totals.p1_3.toLocaleString('id-ID')} Robux\`\n📅 **4-6 Hari:** \`${totals.p4_6.toLocaleString('id-ID')} Robux\`\n📅 **7-10 Hari:** \`${totals.p7_10.toLocaleString('id-ID')} Robux\`\n📊 **Total: \`${totalGrp.toLocaleString('id-ID')} Robux\`**${warning}`,
+                        value: `📅 **1-3 Hari:** \`${totals.p1_3.toLocaleString('id-ID')} Robux\`\n📅 **4-6 Hari:** \`${totals.p4_6.toLocaleString('id-ID')} Robux\`\n📅 **7-10 Hari:** \`${totals.p7_10.toLocaleString('id-ID')} Robux\`\n📊 **Total: \`${totalGrp.toLocaleString('id-ID')} Robux\`**${warning}\n\u200b`,
                         inline: false
                     });
                 }
-
-                // Spacer field — kasih jarak antar-community biar enak dibaca
-                if (gi < targetGroups.length - 1) {
-                    embed.addFields({ name: '\u200b', value: '\u200b', inline: false });
-                }
             }
-
-           embed.addFields({ name: '\u200b', value: '\u200b', inline: false });
 
            embed.addFields({ name: '📊 Total Keseluruhan (10 Hari)', value: `\`${grandTotal.toLocaleString('id-ID')} Robux\``, inline: false });
 
