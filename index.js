@@ -35,12 +35,7 @@ const client = new Client({
     }
 });
 
-mongoose.connect(process.env.MONGODB_URI, {
-    maxPoolSize: 20,             // batasi koneksi paralel (default 100, kebesaran untuk RAM 256MB)
-    minPoolSize: 1,
-    serverSelectionTimeoutMS: 8000,  // gagal cepat kalau MongoDB tidak bisa dihubungi, bukan nunggu tanpa batas
-    socketTimeoutMS: 20000           // gagal cepat kalau query macet di tengah jalan
-})
+mongoose.connect(process.env.MONGODB_URI)
     .then(async () => {
         console.log('📂 Database MongoDB Tersambung!');
         // Initialize default robux rates jika belum ada
