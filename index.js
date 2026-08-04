@@ -35,7 +35,12 @@ const client = new Client({
     }
 });
 
-mongoose.connect(process.env.MONGODB_URI)
+mongoose.connect(process.env.MONGODB_URI, {
+    maxPoolSize: 20,                 // batasi koneksi paralel (default 100, kebesaran untuk RAM 256MB)
+    minPoolSize: 1,
+    serverSelectionTimeoutMS: 8000,  // GAGAL CEPAT kalau MongoDB tidak bisa dihubungi, bukan nunggu tanpa batas
+    socketTimeoutMS: 20000           // GAGAL CEPAT kalau query macet di tengah jalan
+})
     .then(async () => {
         console.log('📂 Database MongoDB Tersambung!');
         // Initialize default robux rates jika belum ada
@@ -56,6 +61,18 @@ mongoose.connect(process.env.MONGODB_URI)
         }
     })
     .catch(err => console.error('❌ Gagal koneksi DB:', err));
+
+// Pantau koneksi MongoDB SETELAH tersambung pertama kali — supaya kalau putus di tengah jalan
+// (bukan cuma pas start), kita tetap KELIHATAN di log, bukan diam-diam bikin semua command macet.
+mongoose.connection.on('disconnected', () => {
+    console.error('⚠️ MongoDB terputus! Semua command yang butuh database akan macet sampai konek lagi.');
+});
+mongoose.connection.on('reconnected', () => {
+    console.log('✅ MongoDB tersambung kembali.');
+});
+mongoose.connection.on('error', (err) => {
+    console.error('❌ Error koneksi MongoDB:', err.message);
+});
 
 // =============================================================
 // === HELPER: Parse Amount & Format Rupiah ====================
