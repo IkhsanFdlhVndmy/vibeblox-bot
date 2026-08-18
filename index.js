@@ -9,6 +9,7 @@ const RobuxRate = require('./models/RobuxRate');
 const Partner = require('./models/Partner'); // <--- TAMBAHKAN INI
 const TicketConfig = require('./models/TicketConfig'); // <--- TAMBAHAN TICKET
 const Ticket = require('./models/Ticket');             // <--- TAMBAHAN TICKET
+const Restock = require('./models/Restock');            // <--- TAMBAHAN RESTOCK
 
 const client = new Client({
     intents: [
@@ -178,13 +179,11 @@ function scheduleLiveLeaderboardUpdate() {
 const slashCommands = [
     { name: 'setupboard', description: 'Setup panel Leaderboard' },
     {
-        name: 'restock', description: 'Countdown restock Robux',
+        name: 'restock', description: 'Countdown restock Robux (real-time, otomatis 5 hari dari tanggal masuk)',
         options: [
             { name: 'amount', description: 'Jumlah Robux (contoh: 55.000)', type: 3, required: true },
-            { name: 'days', description: 'Hari (contoh: 5)', type: 4, required: false },
-            { name: 'hours', description: 'Jam (contoh: 12)', type: 4, required: false },
-            { name: 'minutes', description: 'Menit (contoh: 35)', type: 4, required: false },
-            { name: 'seconds', description: 'Detik (contoh: 60)', type: 4, required: false }
+            { name: 'tanggal_masuk', description: 'Tanggal & jam Robux MASUK, format: DD-MM-YYYY HH:MM (contoh: 02-08-2026 17:00)', type: 3, required: true },
+            { name: 'community', description: 'Nomor community, pisah koma jika lebih dari satu (contoh: 1,3)', type: 3, required: true }
         ]
     },
     {
@@ -413,12 +412,17 @@ client.once('ready', async () => {
         console.error('❌ Gagal memuat Cache Channel:', e);
     }
     
-    try {
+       try {
         await client.application.commands.set(slashCommands);
         console.log('✅ Slash Commands berhasil didaftarkan!');
     } catch (err) {
         console.error('❌ Gagal mendaftarkan Slash Commands:', err);
     }
+
+    // --- RESTOCK: mulai loop countdown real-time (jalan tiap 15 detik) ---
+    // Karena berbasis timestamp absolut di DB, ini otomatis "nyambung" lagi walau bot sempat mati/restart.
+    tickRestocks(); // jalankan sekali langsung saat startup, jangan nunggu 15 detik pertama
+    setInterval(tickRestocks, 15000);
 });
 
 // === FUNGSI AUTO ROLE PEMBELI ===
@@ -605,12 +609,183 @@ let isCheckingTransaksi = false;
 const transaksiCache = new Map();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// ==================================================
+// --- RESTOCK: KONSTANTA & HELPER ---
+// ==================================================
+// Tambah community baru cukup nambah 1 baris di sini — TIDAK perlu ubah command/choices Discord.
+const RESTOCK_COMMUNITIES = {
+    1: { name: 'BEJIRLAH', groupId: '1064667246' },
+    2: { name: 'Vandamoy', groupId: '1108229986' },
+    3: { name: 'Maycomn', groupId: '653724099' }
+};
+
+// "1,3" -> [1, 3] (nomor valid saja, dedup, urut)
+function parseCommunityNumbers(raw) {
+    const nums = raw.split(',')
+        .map(s => parseInt(s.trim(), 10))
+        .filter(n => !isNaN(n) && RESTOCK_COMMUNITIES[n]);
+    return [...new Set(nums)].sort((a, b) => a - b);
+}
+
+// [1, 3] -> "Community 1 dan 3" | [1,2,3] -> "Community 1, 2, dan 3"
+function formatCommunityList(nums) {
+    if (nums.length === 0) return '-';
+    if (nums.length === 1) return `Community ${nums[0]} (${RESTOCK_COMMUNITIES[nums[0]].name})`;
+    const names = nums.map(n => `${n} (${RESTOCK_COMMUNITIES[n].name})`);
+    const last = names.pop();
+    return `Community ${names.join(', ')} dan ${last}`;
+}
+
+// "02-08-2026 17:00" -> Date (WIB / UTC+7)
+function parseRestockDate(raw) {
+    const match = raw.trim().match(/^(\d{1,2})-(\d{1,2})-(\d{4})\s+(\d{1,2}):(\d{2})$/);
+    if (!match) return null;
+    const [, dd, mm, yyyy, hh, min] = match.map(Number);
+    if (mm < 1 || mm > 12 || dd < 1 || dd > 31 || hh > 23 || min > 59) return null;
+    // Dibuat sebagai WIB (UTC+7) secara eksplisit, terlepas timezone server hosting
+    const utcMs = Date.UTC(yyyy, mm - 1, dd, hh - 7, min, 0);
+    const date = new Date(utcMs);
+    if (isNaN(date.getTime())) return null;
+    return date;
+}
+
+// Format tanggal jadi "2026-08-22 06:00 WIB"
+function formatWIB(date) {
+    const wib = new Date(date.getTime() + (7 * 60 * 60 * 1000));
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${wib.getUTCFullYear()}-${pad(wib.getUTCMonth() + 1)}-${pad(wib.getUTCDate())} ${pad(wib.getUTCHours())}:${pad(wib.getUTCMinutes())} WIB`;
+}
+
+// Countdown asli real-time: "3d 17h 38m 30s left until 2026-08-22 06:00 WIB"
+function formatCountdown(targetDate) {
+    const diffMs = targetDate.getTime() - Date.now();
+    if (diffMs <= 0) return null; // sudah lewat waktu
+    const totalSec = Math.floor(diffMs / 1000);
+    const d = Math.floor(totalSec / 86400);
+    const h = Math.floor((totalSec % 86400) / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    return `${d}d ${h}h ${m}m ${s}s left until ${formatWIB(targetDate)}`;
+}
+
+// Ambil saldo Group Funds LIVE via API Roblox (pakai cookie dummy yang sama dengan cek-eligible/cek-transaksi)
+async function fetchGroupFunds(groupId) {
+    try {
+        const res = await axios.get(`https://economy.roblox.com/v1/groups/${groupId}/currency`, {
+            headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
+        });
+        return typeof res.data?.robux === 'number' ? res.data.robux : null;
+    } catch (e) {
+        return null; // gagal ambil -> field ini dilewati aja di embed, tidak fatal
+    }
+}
+
+function buildRestockPendingEmbed(restock) {
+    const countdown = formatCountdown(restock.arrivalTimestamp) || '0d 0h 0m 0s left';
+    const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
+    return new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle('📦 VIBEBLOX RESTOCK INCOMING!')
+        .setDescription('Halo Vibies! Robux kita bakal segera restock. Jangan sampai telat!')
+        .addFields(
+            { name: `${'<:robux:1497884445494087752>'} Jumlah Robux`, value: `\`${formattedAmount} Robux\``, inline: true },
+            { name: '🏢 Lokasi Restock', value: formatCommunityList(restock.communities), inline: true },
+            { name: '⏳ Countdown', value: `\`${countdown}\``, inline: false }
+        )
+        .setFooter({ text: 'VibeBlox Auto-Notifier • Update tiap ±15 detik' })
+        .setTimestamp();
+}
+
+async function buildRestockCompletedEmbed(restock) {
+    const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
+    const embed = new EmbedBuilder()
+        .setColor(0x57F287)
+        .setTitle('✅ RESTOCK SELESAI — STOK READY!')
+        .setDescription('Robux sudah masuk! Langsung merapat ke tiket sebelum diborong yang lain 🚀')
+        .addFields(
+            { name: `${'<:robux:1497884445494087752>'} Jumlah Robux`, value: `\`${formattedAmount} Robux\``, inline: true },
+            { name: '🏢 Lokasi Restock', value: formatCommunityList(restock.communities), inline: true }
+        )
+        .setFooter({ text: 'VibeBlox Restock Complete' })
+        .setTimestamp();
+
+    // Bonus: tarik saldo Group Funds LIVE tiap community yang terlibat (kalau gagal, dilewati aja)
+    for (const num of restock.communities) {
+        const grp = RESTOCK_COMMUNITIES[num];
+        if (!grp) continue;
+        const funds = await fetchGroupFunds(grp.groupId);
+        if (funds !== null) {
+            embed.addFields({ name: `💰 Group Funds — ${grp.name}`, value: `\`${funds.toLocaleString('id-ID')} Robux\``, inline: true });
+        }
+    }
+
+    return embed;
+}
+
+// Loop utama: jalan tiap 15 detik, urus SEMUA restock aktif dari database.
+// Karena sumber kebenarannya adalah arrivalTimestamp absolut di DB (bukan setTimeout in-memory),
+// ini otomatis "nyambung" lagi dengan benar walau bot sempat mati/restart.
+async function tickRestocks() {
+    let activeRestocks;
+    try {
+        activeRestocks = await Restock.find({ status: 'pending' });
+    } catch (e) {
+        console.error('Gagal ambil data restock aktif:', e.message);
+        return;
+    }
+
+    for (const restock of activeRestocks) {
+        try {
+            const channel = await client.channels.fetch(restock.channelId).catch(() => null);
+            if (!channel) {
+                await Restock.deleteOne({ _id: restock._id }); // channel sudah tidak ada
+                continue;
+            }
+            const msg = await channel.messages.fetch(restock.messageId).catch(() => null);
+            if (!msg) {
+                // Pesan sudah dihapus manual (dan event messageDelete terlewat, misal bot sempat offline) -> bersihkan DB
+                await Restock.deleteOne({ _id: restock._id });
+                continue;
+            }
+
+            const remaining = restock.arrivalTimestamp.getTime() - Date.now();
+
+            if (remaining > 0) {
+                // Masih menghitung mundur -> update embed
+                await msg.edit({ embeds: [buildRestockPendingEmbed(restock)] }).catch(() => {});
+            } else {
+                // Sudah waktunya -> ubah jadi embed "STOK READY"
+                const finishedEmbed = await buildRestockCompletedEmbed(restock);
+                await msg.edit({
+                    content: '@everyone',
+                    embeds: [finishedEmbed],
+                    allowedMentions: { parse: ['everyone'] }
+                }).catch(() => {});
+                restock.status = 'completed';
+                await restock.save();
+            }
+        } catch (e) {
+            console.error(`Gagal update restock ${restock._id}:`, e.message);
+        }
+    }
+}
+
 // --- TAMBAHAN CACHE & COOLDOWN ---
 const userCooldowns = new Map();
 const eligibilityCache = new Map();
 
-client.on('interactionCreate', async (interaction) => {
+// --- RESTOCK: bersihkan data DB kalau embed-nya dihapus manual ---
+// (Ini pembersih CEPAT; tickRestocks() di atas juga punya fallback kalau event ini terlewat, misal bot sempat offline)
+client.on('messageDelete', async (message) => {
+    try {
+        if (!message?.id) return;
+        await Restock.deleteOne({ messageId: message.id });
+    } catch (e) {
+        // Diamkan saja — ini cuma pembersihan, tidak kritikal kalau sesekali gagal
+    }
+});
 
+client.on('interactionCreate', async (interaction) => {
 // =========================================================================
     // === TICKET SYSTEM - AI OPTIMIZED FOR ALWAYSDATA ===
     // =========================================================================
@@ -1761,64 +1936,58 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // --- RESTOCK COUNTDOWN ---
-    if (command === 'restock') {
+        if (command === 'restock') {
         const allowedRolesRestock = ['1489612423521374309', '1489612221544665231', '1519076541055897670']; // Owner, Handler, Partner
         const hasRoleRestock = interaction.member.roles.cache.some(role => allowedRolesRestock.includes(role.id));
         if (!hasRoleRestock) {
             return interaction.reply({ content: '❌ Sori, command ini khusus Owner, Handler, dan Partner.', flags: MessageFlags.Ephemeral });
         }
 
-        // Defer dulu agar tidak "outdated" saat proses build embed
         await interaction.deferReply();
 
         const rawAmount = interaction.options.getString('amount');
         const amount = parseAmount(rawAmount);
-
         if (isNaN(amount) || amount <= 0) {
             return interaction.editReply({ content: '❌ Nominal Robux tidak valid! Pastikan hanya memakai angka dan titik (contoh: 55.000).' });
         }
 
-        const days = interaction.options.getInteger('days') || 0;
-        const hours = interaction.options.getInteger('hours') || 0;
-        const minutes = interaction.options.getInteger('minutes') || 0;
-        const seconds = interaction.options.getInteger('seconds') || 0;
-
-        const ms = (days * 86400000) + (hours * 3600000) + (minutes * 60000) + (seconds * 1000);
-
-        if (ms <= 0) {
-            return interaction.editReply({ content: '❌ Durasi tidak valid! Masukkan minimal salah satu: days, hours, minutes, atau seconds.' });
+        const rawDate = interaction.options.getString('tanggal_masuk');
+        const masukDate = parseRestockDate(rawDate);
+        if (!masukDate) {
+            return interaction.editReply({ content: '❌ Format tanggal salah! Gunakan format: `DD-MM-YYYY HH:MM` (contoh: `02-08-2026 17:00`).' });
         }
 
-        const futureTime = new Date(Date.now() + ms);
-        const unixTimestamp = Math.floor(futureTime.getTime() / 1000);
+        const rawCommunity = interaction.options.getString('community');
+        const communities = parseCommunityNumbers(rawCommunity);
+        if (communities.length === 0) {
+            const validNums = Object.keys(RESTOCK_COMMUNITIES).join(', ');
+            return interaction.editReply({ content: `❌ Nomor community tidak valid! Nomor yang tersedia: ${validNums}. Contoh input: \`1,3\`.` });
+        }
 
-        const formattedAmount = amount >= 1000 ? Math.floor(amount / 1000) + 'K+' : formatRupiah(amount);
+        // Restock READY = tanggal masuk + 5 hari, jam yang sama
+        const arrivalTimestamp = new Date(masukDate.getTime() + (5 * 24 * 60 * 60 * 1000));
 
-        const restockEmbed = new EmbedBuilder()
-            .setColor(0x4F4580)
-            .setDescription(`**📦 VIBEBLOX RESTOCK INCOMING!**\nHalo Vibies! Robux kita bakal segera restock di Community. jangan sampai telat!\n# <:robux:1497884445494087752> ${formattedAmount} Robux\n## ⏳ <t:${unixTimestamp}:R>\n*(Tepatnya pada: <t:${unixTimestamp}:F>)*`)
-            .setFooter({ text: 'VibeBlox Auto-Notifier' })
-            .setTimestamp();
+        const restockDoc = new Restock({
+            channelId: interaction.channel.id,
+            guildId: interaction.guild.id,
+            amount,
+            communities,
+            arrivalTimestamp,
+            createdBy: interaction.user.id,
+            messageId: 'pending' // diisi sebentar lagi setelah pesan terkirim
+        });
 
-        await interaction.editReply({ content: '@everyone', embeds: [restockEmbed] });
+        const previewEmbed = buildRestockPendingEmbed(restockDoc);
+
+        await interaction.editReply({
+            content: '@everyone',
+            embeds: [previewEmbed],
+            allowedMentions: { parse: ['everyone'] }
+        });
         const replyMessage = await interaction.fetchReply();
 
-        if (ms <= 2147483647) {
-            setTimeout(async () => {
-                try {
-                    const finishedEmbed = new EmbedBuilder()
-                        .setColor(0x57F287)
-                        .setDescription(`**✅ RESTOCK SELESAI!**\nRobux sudah masuk ke Community VibeBlox! Langsung sikat sebelum diborong yang lain!\n# <:robux:1497884445494087752> ${formattedAmount} Robux\n## 🎉 STOK READY!`)
-                        .setFooter({ text: 'VibeBlox Restock Complete' })
-                        .setTimestamp();
-
-                    await replyMessage.edit({ content: '@everyone', embeds: [finishedEmbed] });
-                    await interaction.channel.send(`🚨 Panggilan buat @everyone! Stok **${formattedAmount} Robux** resmi mendarat! Gas merapat ke tiket sekarang!`);
-                } catch (err) {
-                    console.error("Gagal update pesan saat Restock selesai:", err);
-                }
-            }, ms);
-        }
+        restockDoc.messageId = replyMessage.id;
+        await restockDoc.save();
 
         return;
     }
@@ -1982,7 +2151,14 @@ Jumlah Robux: `;
     
 
 // --- CEK ELIGIBLE (ANTI-SPAM, CACHING & DYNAMIC EMBED) ---
-    if (command === 'cek-eligible') {
+       if (command === 'cek-eligible') {
+        // 0. LARANGAN CHANNEL — tidak boleh dipakai di channel chit-chat
+        const chitChatChannelId = '1488782137149624442';
+        const botCmdChannelId = '1504349336559947818';
+        if (interaction.channel.id === chitChatChannelId) {
+            return interaction.reply({ content: `❌ Command ini tidak bisa dipakai di sini. Silakan gunakan di <#${botCmdChannelId}>.`, flags: MessageFlags.Ephemeral });
+        }
+
         const targetUsername = interaction.options.getString('username').trim();
         const cacheKey = targetUsername.toLowerCase();
 
@@ -2174,14 +2350,8 @@ for (let i = 0; i < targetGroups.length; i++) {
         return;
     }
 
-    // --- CEK TRANSAKSI PAYOUT (OWNER/HANDLER ONLY) ---
+        // --- CEK TRANSAKSI PAYOUT ---
     if (command === 'cek-transaksi') {
-
-        // 1. GATE AKSES: hanya role Owner & Handler yang boleh pakai
-        const allowedRolesTransaksi = ['1489612423521374309', '1489612221544665231']; // Owner, Handler
-        if (!interaction.member.roles.cache.some(r => allowedRolesTransaksi.includes(r.id))) {
-            return interaction.reply({ content: '❌ Command ini khusus Owner/Handler.', flags: MessageFlags.Ephemeral });
-        }
 
         const targetUsername = interaction.options.getString('username').trim();
         const cacheKey = `tx_${targetUsername.toLowerCase()}`;
@@ -2368,13 +2538,7 @@ for (let i = 0; i < targetGroups.length; i++) {
     }
 
 // --- ROBUX CALCULATOR ---
-    if (command === 'robux') {
-        const allowedRolesRobux = ['1489612423521374309', '1489612221544665231', '1519076541055897670'];
-        const hasRoleRobux = interaction.member.roles.cache.some(role => allowedRolesRobux.includes(role.id));
-        if (!hasRoleRobux) {
-            return interaction.reply({ content: '❌ Sori, cuma Owner, Handler, Partner yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
-        }
-
+        if (command === 'robux') {
         await interaction.deferReply();
 
         const type = interaction.options.getString('type');
