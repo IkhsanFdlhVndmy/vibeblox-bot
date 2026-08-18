@@ -686,7 +686,79 @@ async function fetchGroupFunds(groupId) {
     }
 }
 
+// Catatan: markdown heading (#) Discord CUMA render besar kalau ditaruh di description embed,
+// TIDAK bekerja di dalam field value. Makanya build via description (bukan addFields) biar tulisan
+// amount/countdown bisa besar seperti versi lama, dan gak perlu backtick (`) yang bikin kotak kecil jelek.
+
 function buildRestockPendingEmbed(restock) {
+    const countdown = formatCountdown(restock.arrivalTimestamp) || '0d 0h 0m 0s left';
+    const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
+
+    const description = [
+        'Halo Vibies! Robux kita bakal segera restock. Jangan sampai telat!',
+        '',
+        `${'<:robux:1497884445494087752>'} **Jumlah Robux**`,
+        `# ${formattedAmount} Robux`,
+        '',
+        '🏢 **Lokasi Restock**',
+        formatCommunityList(restock.communities),
+        '',
+        '⏳ **Countdown**',
+        `# ${countdown}`,
+        `-# Tepatnya pada: ${formatWIB(restock.arrivalTimestamp)}`
+    ].join('\n');
+
+    return new EmbedBuilder()
+        .setColor(0x5865F2)
+        .setTitle('📦 VIBEBLOX RESTOCK INCOMING!')
+        .setDescription(description)
+        .setFooter({ text: 'VibeBlox Auto-Notifier • Update tiap ±15 detik' })
+        .setTimestamp();
+}
+
+// Embed status singkat yang dipasang di pesan countdown LAMA begitu waktunya habis.
+// Pengumuman lengkapnya dikirim TERPISAH sebagai pesan baru (lihat buildRestockCompletedEmbed),
+// supaya @everyone di pesan baru itu benar-benar memicu notifikasi baru buat semua orang.
+function buildRestockDoneStatusEmbed(restock) {
+    const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
+    return new EmbedBuilder()
+        .setColor(0x57F287)
+        .setTitle('✅ Countdown Selesai')
+        .setDescription(`${'<:robux:1497884445494087752>'} **${formattedAmount} Robux** sudah READY! Cek pengumuman terbaru di bawah 👇`)
+        .setFooter({ text: 'VibeBlox Auto-Notifier' })
+        .setTimestamp();
+}
+
+async function buildRestockCompletedEmbed(restock) {
+    const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
+
+    const lines = [
+        'Robux sudah masuk! Langsung merapat ke tiket sebelum diborong yang lain 🚀',
+        '',
+        `${'<:robux:1497884445494087752>'} **Jumlah Robux**`,
+        `# ${formattedAmount} Robux`,
+        '',
+        '🏢 **Lokasi Restock**',
+        formatCommunityList(restock.communities)
+    ];
+
+    // Bonus: tarik saldo Group Funds LIVE tiap community yang terlibat (kalau gagal, dilewati aja)
+    for (const num of restock.communities) {
+        const grp = RESTOCK_COMMUNITIES[num];
+        if (!grp) continue;
+        const funds = await fetchGroupFunds(grp.groupId);
+        if (funds !== null) {
+            lines.push('', `💰 **Group Funds — ${grp.name}**`, `${funds.toLocaleString('id-ID')} Robux`);
+        }
+    }
+
+    return new EmbedBuilder()
+        .setColor(0x57F287)
+        .setTitle('✅ RESTOCK SELESAI — STOK READY!')
+        .setDescription(lines.join('\n'))
+        .setFooter({ text: 'VibeBlox Restock Complete' })
+        .setTimestamp();
+}
     const countdown = formatCountdown(restock.arrivalTimestamp) || '0d 0h 0m 0s left';
     const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
     return new EmbedBuilder()
@@ -760,13 +832,22 @@ async function tickRestocks() {
                 // Masih menghitung mundur -> update embed
                 await msg.edit({ embeds: [buildRestockPendingEmbed(restock)] }).catch(() => {});
             } else {
-                // Sudah waktunya -> ubah jadi embed "STOK READY"
-                const finishedEmbed = await buildRestockCompletedEmbed(restock);
+                // Sudah waktunya -> pesan countdown LAMA cukup diubah jadi status singkat "Countdown Selesai"
+                // (content @everyone lama dihapus, gak perlu lagi karena udah kepakai pas awal post)
                 await msg.edit({
+                    content: null,
+                    embeds: [buildRestockDoneStatusEmbed(restock)]
+                }).catch(() => {});
+
+                // Pengumuman lengkapnya dikirim sebagai PESAN BARU + @everyone,
+                // biar semua orang beneran dapat notifikasi baru kalau stok udah ready
+                const finishedEmbed = await buildRestockCompletedEmbed(restock);
+                await channel.send({
                     content: '@everyone',
                     embeds: [finishedEmbed],
                     allowedMentions: { parse: ['everyone'] }
                 }).catch(() => {});
+
                 restock.status = 'completed';
                 await restock.save();
             }
