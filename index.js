@@ -671,7 +671,7 @@ function formatCountdown(targetDate) {
     const h = Math.floor((totalSec % 86400) / 3600);
     const m = Math.floor((totalSec % 3600) / 60);
     const s = totalSec % 60;
-    return `${d}d ${h}h ${m}m ${s}s left until ${formatWIB(targetDate)}`;
+    return `${d}d ${h}h ${m}m ${s}s left`;
 }
 
 // Ambil saldo Group Funds LIVE via API Roblox (pakai cookie dummy yang sama dengan cek-eligible/cek-transaksi)
@@ -696,7 +696,6 @@ function buildRestockPendingEmbed(restock) {
 
     const description = [
         'Halo Vibies! Robux kita bakal segera restock. Jangan sampai telat!',
-        '',
         `# ${'<:robux:1497884445494087752>'} ${formattedAmount} Robux`,
         '',
         `## ⏳ ${countdown}`,
@@ -732,7 +731,6 @@ function buildRestockCompletedEmbed(restock) {
 
     const description = [
         'Robux sudah masuk! Langsung merapat ke tiket sebelum diborong yang lain 🚀',
-        '',
         `# ${'<:robux:1497884445494087752>'} ${formattedAmount} Robux`,
         '',
         '🏢 **Lokasi Restock**',
