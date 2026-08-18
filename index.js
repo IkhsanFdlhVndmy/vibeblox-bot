@@ -697,15 +697,13 @@ function buildRestockPendingEmbed(restock) {
     const description = [
         'Halo Vibies! Robux kita bakal segera restock. Jangan sampai telat!',
         '',
-        `${'<:robux:1497884445494087752>'} **Jumlah Robux**`,
-        `# ${formattedAmount} Robux`,
+        `# ${'<:robux:1497884445494087752>'} ${formattedAmount} Robux`,
+        '',
+        `## ⏳ ${countdown}`,
+        `-# Tepatnya pada: ${formatWIB(restock.arrivalTimestamp)}`,
         '',
         '🏢 **Lokasi Restock**',
-        formatCommunityList(restock.communities),
-        '',
-        '⏳ **Countdown**',
-        `# ${countdown}`,
-        `-# Tepatnya pada: ${formatWIB(restock.arrivalTimestamp)}`
+        formatCommunityList(restock.communities)
     ].join('\n');
 
     return new EmbedBuilder()
@@ -729,33 +727,22 @@ function buildRestockDoneStatusEmbed(restock) {
         .setTimestamp();
 }
 
-async function buildRestockCompletedEmbed(restock) {
+function buildRestockCompletedEmbed(restock) {
     const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
 
-    const lines = [
+    const description = [
         'Robux sudah masuk! Langsung merapat ke tiket sebelum diborong yang lain 🚀',
         '',
-        `${'<:robux:1497884445494087752>'} **Jumlah Robux**`,
-        `# ${formattedAmount} Robux`,
+        `# ${'<:robux:1497884445494087752>'} ${formattedAmount} Robux`,
         '',
         '🏢 **Lokasi Restock**',
         formatCommunityList(restock.communities)
-    ];
-
-    // Bonus: tarik saldo Group Funds LIVE tiap community yang terlibat (kalau gagal, dilewati aja)
-    for (const num of restock.communities) {
-        const grp = RESTOCK_COMMUNITIES[num];
-        if (!grp) continue;
-        const funds = await fetchGroupFunds(grp.groupId);
-        if (funds !== null) {
-            lines.push('', `💰 **Group Funds — ${grp.name}**`, `${funds.toLocaleString('id-ID')} Robux`);
-        }
-    }
+    ].join('\n');
 
     return new EmbedBuilder()
         .setColor(0x57F287)
         .setTitle('✅ RESTOCK SELESAI — STOK READY!')
-        .setDescription(lines.join('\n'))
+        .setDescription(description)
         .setFooter({ text: 'VibeBlox Restock Complete' })
         .setTimestamp();
 }
