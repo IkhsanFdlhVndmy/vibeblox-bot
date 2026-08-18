@@ -701,6 +701,7 @@ function buildRestockPendingEmbed(restock) {
         `## ⏳ ${countdown}`,
         `-# Tepatnya pada: ${formatWIB(restock.arrivalTimestamp)}`,
         '',
+        '',
         '🏢 **Lokasi Restock**',
         formatCommunityList(restock.communities)
     ].join('\n');
@@ -709,8 +710,6 @@ function buildRestockPendingEmbed(restock) {
         .setColor(0x5865F2)
         .setTitle('📦 VIBEBLOX RESTOCK INCOMING!')
         .setDescription(description)
-        .setFooter({ text: 'VibeBlox Auto-Notifier • Update tiap ±15 detik' })
-        .setTimestamp();
 }
 
 // Embed status singkat yang dipasang di pesan countdown LAMA begitu waktunya habis.
@@ -732,6 +731,7 @@ function buildRestockCompletedEmbed(restock) {
     const description = [
         'Robux sudah masuk! Langsung merapat ke tiket sebelum diborong yang lain 🚀',
         `# ${'<:robux:1497884445494087752>'} ${formattedAmount} Robux`,
+        '',
         '',
         '🏢 **Lokasi Restock**',
         formatCommunityList(restock.communities)
