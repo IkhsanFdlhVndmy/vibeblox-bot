@@ -759,46 +759,6 @@ async function buildRestockCompletedEmbed(restock) {
         .setFooter({ text: 'VibeBlox Restock Complete' })
         .setTimestamp();
 }
-    const countdown = formatCountdown(restock.arrivalTimestamp) || '0d 0h 0m 0s left';
-    const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
-    return new EmbedBuilder()
-        .setColor(0x5865F2)
-        .setTitle('📦 VIBEBLOX RESTOCK INCOMING!')
-        .setDescription('Halo Vibies! Robux kita bakal segera restock. Jangan sampai telat!')
-        .addFields(
-            { name: `${'<:robux:1497884445494087752>'} Jumlah Robux`, value: `\`${formattedAmount} Robux\``, inline: true },
-            { name: '🏢 Lokasi Restock', value: formatCommunityList(restock.communities), inline: true },
-            { name: '⏳ Countdown', value: `\`${countdown}\``, inline: false }
-        )
-        .setFooter({ text: 'VibeBlox Auto-Notifier • Update tiap ±15 detik' })
-        .setTimestamp();
-}
-
-async function buildRestockCompletedEmbed(restock) {
-    const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
-    const embed = new EmbedBuilder()
-        .setColor(0x57F287)
-        .setTitle('✅ RESTOCK SELESAI — STOK READY!')
-        .setDescription('Robux sudah masuk! Langsung merapat ke tiket sebelum diborong yang lain 🚀')
-        .addFields(
-            { name: `${'<:robux:1497884445494087752>'} Jumlah Robux`, value: `\`${formattedAmount} Robux\``, inline: true },
-            { name: '🏢 Lokasi Restock', value: formatCommunityList(restock.communities), inline: true }
-        )
-        .setFooter({ text: 'VibeBlox Restock Complete' })
-        .setTimestamp();
-
-    // Bonus: tarik saldo Group Funds LIVE tiap community yang terlibat (kalau gagal, dilewati aja)
-    for (const num of restock.communities) {
-        const grp = RESTOCK_COMMUNITIES[num];
-        if (!grp) continue;
-        const funds = await fetchGroupFunds(grp.groupId);
-        if (funds !== null) {
-            embed.addFields({ name: `💰 Group Funds — ${grp.name}`, value: `\`${funds.toLocaleString('id-ID')} Robux\``, inline: true });
-        }
-    }
-
-    return embed;
-}
 
 // Loop utama: jalan tiap 15 detik, urus SEMUA restock aktif dari database.
 // Karena sumber kebenarannya adalah arrivalTimestamp absolut di DB (bukan setTimeout in-memory),
