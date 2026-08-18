@@ -636,12 +636,18 @@ function formatCommunityList(nums) {
     return `Community ${names.join(', ')} dan ${last}`;
 }
 
+// Jumlah hari valid di suatu bulan (termasuk cek tahun kabisat untuk Februari)
+function daysInMonth(yyyy, mm) {
+    return new Date(Date.UTC(yyyy, mm, 0)).getUTCDate(); // mm di sini 1-based
+}
+
 // "02-08-2026 17:00" -> Date (WIB / UTC+7)
 function parseRestockDate(raw) {
     const match = raw.trim().match(/^(\d{1,2})-(\d{1,2})-(\d{4})\s+(\d{1,2}):(\d{2})$/);
     if (!match) return null;
     const [, dd, mm, yyyy, hh, min] = match.map(Number);
-    if (mm < 1 || mm > 12 || dd < 1 || dd > 31 || hh > 23 || min > 59) return null;
+    if (mm < 1 || mm > 12 || hh > 23 || min > 59) return null;
+    if (dd < 1 || dd > daysInMonth(yyyy, mm)) return null; // tolak tanggal yg gak ada, misal 31 Februari
     // Dibuat sebagai WIB (UTC+7) secara eksplisit, terlepas timezone server hosting
     const utcMs = Date.UTC(yyyy, mm - 1, dd, hh - 7, min, 0);
     const date = new Date(utcMs);
@@ -1936,7 +1942,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // --- RESTOCK COUNTDOWN ---
-        if (command === 'restock') {
+    if (command === 'restock') {
         const allowedRolesRestock = ['1489612423521374309', '1489612221544665231', '1519076541055897670']; // Owner, Handler, Partner
         const hasRoleRestock = interaction.member.roles.cache.some(role => allowedRolesRestock.includes(role.id));
         if (!hasRoleRestock) {
@@ -1945,49 +1951,54 @@ client.on('interactionCreate', async (interaction) => {
 
         await interaction.deferReply();
 
-        const rawAmount = interaction.options.getString('amount');
-        const amount = parseAmount(rawAmount);
-        if (isNaN(amount) || amount <= 0) {
-            return interaction.editReply({ content: '❌ Nominal Robux tidak valid! Pastikan hanya memakai angka dan titik (contoh: 55.000).' });
+        try {
+            const rawAmount = interaction.options.getString('amount');
+            const amount = parseAmount(rawAmount);
+            if (isNaN(amount) || amount <= 0) {
+                return interaction.editReply({ content: '❌ Nominal Robux tidak valid! Pastikan hanya memakai angka dan titik (contoh: 55.000).' });
+            }
+
+            const rawDate = interaction.options.getString('tanggal_masuk');
+            const masukDate = parseRestockDate(rawDate);
+            if (!masukDate) {
+                return interaction.editReply({ content: '❌ Format tanggal salah/tidak ada! Gunakan format: `DD-MM-YYYY HH:MM` (contoh: `02-08-2026 17:00`).' });
+            }
+
+            const rawCommunity = interaction.options.getString('community');
+            const communities = parseCommunityNumbers(rawCommunity);
+            if (communities.length === 0) {
+                const validNums = Object.keys(RESTOCK_COMMUNITIES).join(', ');
+                return interaction.editReply({ content: `❌ Nomor community tidak valid! Nomor yang tersedia: ${validNums}. Contoh input: \`1,3\`.` });
+            }
+
+            // Restock READY = tanggal masuk + 5 hari, jam yang sama
+            const arrivalTimestamp = new Date(masukDate.getTime() + (5 * 24 * 60 * 60 * 1000));
+
+            const restockDoc = new Restock({
+                channelId: interaction.channel.id,
+                guildId: interaction.guild.id,
+                amount,
+                communities,
+                arrivalTimestamp,
+                createdBy: interaction.user.id,
+                messageId: 'pending' // diisi sebentar lagi setelah pesan terkirim
+            });
+
+            const previewEmbed = buildRestockPendingEmbed(restockDoc);
+
+            await interaction.editReply({
+                content: '@everyone',
+                embeds: [previewEmbed],
+                allowedMentions: { parse: ['everyone'] }
+            });
+            const replyMessage = await interaction.fetchReply();
+
+            restockDoc.messageId = replyMessage.id;
+            await restockDoc.save();
+        } catch (err) {
+            console.error('Gagal menjalankan /restock:', err);
+            return interaction.editReply({ content: '❌ Waduh, gagal bikin restock countdown. Coba lagi ya (cek log kalau masih gagal).' }).catch(() => {});
         }
-
-        const rawDate = interaction.options.getString('tanggal_masuk');
-        const masukDate = parseRestockDate(rawDate);
-        if (!masukDate) {
-            return interaction.editReply({ content: '❌ Format tanggal salah! Gunakan format: `DD-MM-YYYY HH:MM` (contoh: `02-08-2026 17:00`).' });
-        }
-
-        const rawCommunity = interaction.options.getString('community');
-        const communities = parseCommunityNumbers(rawCommunity);
-        if (communities.length === 0) {
-            const validNums = Object.keys(RESTOCK_COMMUNITIES).join(', ');
-            return interaction.editReply({ content: `❌ Nomor community tidak valid! Nomor yang tersedia: ${validNums}. Contoh input: \`1,3\`.` });
-        }
-
-        // Restock READY = tanggal masuk + 5 hari, jam yang sama
-        const arrivalTimestamp = new Date(masukDate.getTime() + (5 * 24 * 60 * 60 * 1000));
-
-        const restockDoc = new Restock({
-            channelId: interaction.channel.id,
-            guildId: interaction.guild.id,
-            amount,
-            communities,
-            arrivalTimestamp,
-            createdBy: interaction.user.id,
-            messageId: 'pending' // diisi sebentar lagi setelah pesan terkirim
-        });
-
-        const previewEmbed = buildRestockPendingEmbed(restockDoc);
-
-        await interaction.editReply({
-            content: '@everyone',
-            embeds: [previewEmbed],
-            allowedMentions: { parse: ['everyone'] }
-        });
-        const replyMessage = await interaction.fetchReply();
-
-        restockDoc.messageId = replyMessage.id;
-        await restockDoc.save();
 
         return;
     }
