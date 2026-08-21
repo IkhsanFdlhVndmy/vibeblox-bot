@@ -748,57 +748,72 @@ function buildRestockCompletedEmbed(restock) {
 // Loop utama: jalan tiap 15 detik, urus SEMUA restock aktif dari database.
 // Karena sumber kebenarannya adalah arrivalTimestamp absolut di DB (bukan setTimeout in-memory),
 // ini otomatis "nyambung" lagi dengan benar walau bot sempat mati/restart.
+let isTickRunning = false; // cegah tickRestocks() jalan bertumpuk kalau eksekusi sebelumnya belum selesai
+
 async function tickRestocks() {
-    let activeRestocks;
+    if (isTickRunning) return; // masih ada proses tick sebelumnya yang jalan -> skip, jangan numpuk
+    isTickRunning = true;
+
     try {
-        activeRestocks = await Restock.find({ status: 'pending' });
-    } catch (e) {
-        console.error('Gagal ambil data restock aktif:', e.message);
-        return;
-    }
-
-    for (const restock of activeRestocks) {
+        let activeRestocks;
         try {
-            const channel = await client.channels.fetch(restock.channelId).catch(() => null);
-            if (!channel) {
-                await Restock.deleteOne({ _id: restock._id }); // channel sudah tidak ada
-                continue;
-            }
-            const msg = await channel.messages.fetch(restock.messageId).catch(() => null);
-            if (!msg) {
-                // Pesan sudah dihapus manual (dan event messageDelete terlewat, misal bot sempat offline) -> bersihkan DB
-                await Restock.deleteOne({ _id: restock._id });
-                continue;
-            }
-
-            const remaining = restock.arrivalTimestamp.getTime() - Date.now();
-
-            if (remaining > 0) {
-                // Masih menghitung mundur -> update embed
-                await msg.edit({ embeds: [buildRestockPendingEmbed(restock)] }).catch(() => {});
-            } else {
-                // Sudah waktunya -> pesan countdown LAMA cukup diubah jadi status singkat "Countdown Selesai"
-                // (content @everyone lama dihapus, gak perlu lagi karena udah kepakai pas awal post)
-                await msg.edit({
-                    content: null,
-                    embeds: [buildRestockDoneStatusEmbed(restock)]
-                }).catch(() => {});
-
-                // Pengumuman lengkapnya dikirim sebagai PESAN BARU + @everyone,
-                // biar semua orang beneran dapat notifikasi baru kalau stok udah ready
-                const finishedEmbed = await buildRestockCompletedEmbed(restock);
-                await channel.send({
-                    content: '@everyone',
-                    embeds: [finishedEmbed],
-                    allowedMentions: { parse: ['everyone'] }
-                }).catch(() => {});
-
-                restock.status = 'completed';
-                await restock.save();
-            }
+            activeRestocks = await Restock.find({ status: 'pending' });
         } catch (e) {
-            console.error(`Gagal update restock ${restock._id}:`, e.message);
+            console.error('Gagal ambil data restock aktif:', e.message);
+            return;
         }
+
+        for (const restock of activeRestocks) {
+            try {
+                const channel = await client.channels.fetch(restock.channelId).catch(() => null);
+                if (!channel) {
+                    await Restock.deleteOne({ _id: restock._id }); // channel sudah tidak ada
+                    continue;
+                }
+                const msg = await channel.messages.fetch(restock.messageId).catch(() => null);
+                if (!msg) {
+                    // Pesan sudah dihapus manual (dan event messageDelete terlewat, misal bot sempat offline) -> bersihkan DB
+                    await Restock.deleteOne({ _id: restock._id });
+                    continue;
+                }
+
+                const remaining = restock.arrivalTimestamp.getTime() - Date.now();
+
+                if (remaining > 0) {
+                    // Masih menghitung mundur -> update embed
+                    await msg.edit({ embeds: [buildRestockPendingEmbed(restock)] }).catch(() => {});
+                } else {
+                    // Klaim restock ini SECARA ATOMIK dulu (pending -> completed) SEBELUM kirim pengumuman.
+                    // Kalau gagal (null), berarti restock ini udah "dimenangkan"/dikirim oleh proses lain -> skip.
+                    // Ini yang mencegah pengumuman kekirim berkali-kali kalau tick sempat lambat/overlap.
+                    const claimed = await Restock.findOneAndUpdate(
+                        { _id: restock._id, status: 'pending' },
+                        { $set: { status: 'completed' } }
+                    );
+                    if (!claimed) continue; // sudah diklaim proses lain, jangan kirim lagi
+
+                    // Pesan countdown LAMA cukup diubah jadi status singkat "Countdown Selesai"
+                    // (content @everyone lama dihapus, gak perlu lagi karena udah kepakai pas awal post)
+                    await msg.edit({
+                        content: null,
+                        embeds: [buildRestockDoneStatusEmbed(restock)]
+                    }).catch(() => {});
+
+                    // Pengumuman lengkapnya dikirim sebagai PESAN BARU + @everyone,
+                    // biar semua orang beneran dapat notifikasi baru kalau stok udah ready
+                    const finishedEmbed = await buildRestockCompletedEmbed(restock);
+                    await channel.send({
+                        content: '@everyone',
+                        embeds: [finishedEmbed],
+                        allowedMentions: { parse: ['everyone'] }
+                    }).catch(() => {});
+                }
+            } catch (e) {
+                console.error(`Gagal update restock ${restock._id}:`, e.message);
+            }
+        }
+    } finally {
+        isTickRunning = false;
     }
 }
 
