@@ -130,7 +130,7 @@ if (menuType === 'howtoorder') {
         m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
         
         embed.setTitle(`${ann} PRICE LIST VIA PAYOUT COMMUNITY (INSTANT)`)
-             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/communities/653724099/Maycomn\n\n${priceList}`)
+             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Ingin link Community-nya?**\nSilakan tanya langsung ke admin di tiket/DM ya! 🙋\n\n${priceList}`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102402657915081/Frame_57.png?ex=6a2dc892&is=6a2c7712&hm=59ff55fdb78d365538f8464c291d309c1be584876ee2ff194d350935245ee954&');
 
     } else if (menuType === 'gamepass_after') {
@@ -2575,8 +2575,13 @@ for (let i = 0; i < targetGroups.length; i++) {
         return;
     }
     
-    // --- LINK COMMUNITY ---
-    if (command === 'linkcommunity') {
+       if (command === 'linkcommunity') {
+        const allowedRolesLinkCommunity = ['1489612423521374309', '1489612221544665231', '1519076541055897670']; // Owner, Handler, Partner
+        const hasRoleLinkCommunity = interaction.member.roles.cache.some(role => allowedRolesLinkCommunity.includes(role.id));
+        if (!hasRoleLinkCommunity) {
+            return interaction.reply({ content: '❌ Sori, command ini khusus Owner, Handler, dan Partner.', flags: MessageFlags.Ephemeral });
+        }
+
         if (linkCommunityActive) {
             return interaction.reply({ content: '⏳ Command ini sedang digunakan oleh user lain. Coba lagi nanti.', flags: MessageFlags.Ephemeral });
         }
