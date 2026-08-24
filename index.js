@@ -783,14 +783,21 @@ async function tickRestocks() {
                     // Masih menghitung mundur -> update embed
                     await msg.edit({ embeds: [buildRestockPendingEmbed(restock)] }).catch(() => {});
                 } else {
-                    // Klaim restock ini SECARA ATOMIK dulu (pending -> completed) SEBELUM kirim pengumuman.
-                    // Kalau gagal (null), berarti restock ini udah "dimenangkan"/dikirim oleh proses lain -> skip.
-                    // Ini yang mencegah pengumuman kekirim berkali-kali kalau tick sempat lambat/overlap.
+                    // KLAIM SECARA ATOMIK dulu SEBELUM kirim pengumuman apapun.
+                    // Filter mengecek DUA hal sekaligus (status DAN announcementSent) supaya "tertutup rapat" —
+                    // begitu salah satu proses berhasil klaim, filter ini otomatis gak akan pernah match lagi
+                    // buat proses manapun lainnya, walau ada banyak proses/tick yang jalan bersamaan atau
+                    // status sempat direset manual di DB. MongoDB menjamin operasi ini atomik, jadi walau
+                    // 100 proses coba klaim di waktu yang sama persis, cuma SATU yang bisa menang.
                     const claimed = await Restock.findOneAndUpdate(
-                        { _id: restock._id, status: 'pending' },
-                        { $set: { status: 'completed' } }
+                        { _id: restock._id, status: 'pending', announcementSent: { $ne: true } },
+                        { $set: { status: 'completed', announcementSent: true } }
                     );
-                    if (!claimed) continue; // sudah diklaim proses lain, jangan kirim lagi
+                    if (!claimed) {
+                        // Ini bukti kalau proteksinya BEKERJA: ada percobaan kirim kedua/ketiga yang berhasil dicegah.
+                        console.log(`[Restock] Skip restock ${restock._id} — sudah pernah diumumkan sebelumnya, mencegah duplikat.`);
+                        continue;
+                    }
 
                     // Pesan countdown LAMA cukup diubah jadi status singkat "Countdown Selesai"
                     // (content @everyone lama dihapus, gak perlu lagi karena udah kepakai pas awal post)
@@ -807,6 +814,8 @@ async function tickRestocks() {
                         embeds: [finishedEmbed],
                         allowedMentions: { parse: ['everyone'] }
                     }).catch(() => {});
+
+                    console.log(`[Restock] Pengumuman restock ${restock._id} berhasil dikirim (1x).`);
                 }
             } catch (e) {
                 console.error(`Gagal update restock ${restock._id}:`, e.message);
@@ -2068,6 +2077,10 @@ client.on('interactionCreate', async (interaction) => {
     // --- BCA ---
     if (command === 'bca') {
         const allowedRolesBca = ['1489612423521374309', '1489612221544665231'];
+        if (!interaction.member?.roles?.cache) {
+            // Data member/role belum ke-cache penuh -> jangan crash, kasih tau user coba lagi
+            return interaction.reply({ content: '❌ Gagal verifikasi role kamu, coba lagi ya.', flags: MessageFlags.Ephemeral }).catch(() => {});
+        }
         const hasRoleBca = interaction.member.roles.cache.some(role => allowedRolesBca.includes(role.id));
         if (!hasRoleBca) {
             return interaction.reply({ content: '❌ Sori, cuma Owner dan Handler yang bisa pakai command ini.', flags: MessageFlags.Ephemeral });
