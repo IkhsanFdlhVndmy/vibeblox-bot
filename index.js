@@ -10,6 +10,8 @@ const Partner = require('./models/Partner'); // <--- TAMBAHKAN INI
 const TicketConfig = require('./models/TicketConfig'); // <--- TAMBAHAN TICKET
 const Ticket = require('./models/Ticket');             // <--- TAMBAHAN TICKET
 const Restock = require('./models/Restock');            // <--- TAMBAHAN RESTOCK
+const InvoiceTracker = require('./models/InvoiceTracker'); // <--- TAMBAHAN PANEL STOCK
+const PanelStock = require('./models/PanelStock');          // <--- TAMBAHAN PANEL STOCK
 
 const client = new Client({
     intents: [
@@ -178,6 +180,7 @@ function scheduleLiveLeaderboardUpdate() {
 // =============================================================
 const slashCommands = [
     { name: 'setupboard', description: 'Setup panel Leaderboard' },
+    { name: 'panelstock', description: '[Vibe Owner] Setup panel tracking stock & invoice Community secara real-time' },
     {
         name: 'restock', description: 'Countdown restock Robux (real-time, otomatis 5 hari dari tanggal masuk)',
         options: [
@@ -423,6 +426,11 @@ client.once('ready', async () => {
     // Karena berbasis timestamp absolut di DB, ini otomatis "nyambung" lagi walau bot sempat mati/restart.
     tickRestocks(); // jalankan sekali langsung saat startup, jangan nunggu 15 detik pertama
     setInterval(tickRestocks, 15000);
+
+    // --- PANEL STOCK: refresh berkala (jaga-jaga kalau saldo Group Funds berubah dari luar bot,
+    // dan sebagai self-heal kalau ada event yang sempat terlewat pas bot offline) ---
+    updatePanelStockMessage();
+    setInterval(updatePanelStockMessage, 20000);
 });
 
 // === FUNGSI AUTO ROLE PEMBELI ===
@@ -745,6 +753,120 @@ function buildRestockCompletedEmbed(restock) {
         .setTimestamp();
 }
 
+// ==================================================
+// --- PANEL STOCK: BANGUN EMBED (2 SECTION) ---
+// ==================================================
+async function buildPanelStockEmbed() {
+    // Section 2 (data): saldo live tiap community
+    const fundsPerCommunity = {};
+    let totalStock = 0;
+    let anyFundsFailed = false;
+    for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
+        const funds = await fetchGroupFunds(grp.groupId);
+        fundsPerCommunity[num] = funds;
+        if (funds !== null) totalStock += funds;
+        else anyFundsFailed = true;
+    }
+
+    // Ambil semua invoice Community yang masih AKTIF (belum done/cancel/dihapus)
+    let activeInvoices = [];
+    try {
+        activeInvoices = await InvoiceTracker.find({}).sort({ createdAt: 1 });
+    } catch (e) {
+        console.error('Gagal ambil data InvoiceTracker:', e.message);
+    }
+    const totalInvoiced = activeInvoices.reduce((sum, inv) => sum + inv.amount, 0);
+    const sisaStock = totalStock - totalInvoiced;
+
+    const embed = new EmbedBuilder()
+        .setColor(sisaStock < 0 ? 0xED4245 : 0x5865F2)
+        .setTitle('📊 VibeBlox Stock Tracking Panel')
+        .setTimestamp();
+
+    // --- Section 1: daftar per-tiket (di-gabung per channel) — SEMUA ditampilkan, tanpa limit ---
+    const grouped = {};
+    for (const inv of activeInvoices) {
+        if (!grouped[inv.channelId]) grouped[inv.channelId] = { channelName: inv.channelName, total: 0, count: 0 };
+        grouped[inv.channelId].total += inv.amount;
+        grouped[inv.channelId].count += 1;
+    }
+    const groupedArr = Object.values(grouped);
+
+    embed.addFields({ name: `🎫 Section 1 — Invoice Aktif per Ticket (${groupedArr.length} tiket)`, value: '\u200b', inline: false });
+
+    if (groupedArr.length === 0) {
+        embed.addFields({ name: '\u200b', value: '*Belum ada invoice Community yang aktif saat ini.*', inline: false });
+    } else {
+        const lines = groupedArr.map((g, i) => `${i + 1}. **${g.channelName}** — \`${g.total.toLocaleString('id-ID')} Robux\` — ${g.count} invoice`);
+
+        // Pecah jadi beberapa field kalau kepanjangan (limit Discord: 1024 karakter/field)
+        // supaya SEMUA tiket tetap muncul, tanpa ada yang kepotong/hilang.
+        let chunk = '';
+        for (const line of lines) {
+            if ((chunk + '\n' + line).length > 1000) {
+                embed.addFields({ name: '\u200b', value: chunk, inline: false });
+                chunk = line;
+            } else {
+                chunk = chunk ? `${chunk}\n${line}` : line;
+            }
+        }
+        if (chunk) embed.addFields({ name: '\u200b', value: chunk, inline: false });
+    }
+
+    embed.addFields({ name: '\u200b', value: '\u200b', inline: false });
+
+    // --- Section 2: stock overview ---
+    let stockText = '';
+    for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
+        const val = fundsPerCommunity[num];
+        stockText += `🏢 **Community ${num} (${grp.name}):** ${val !== null ? `\`${val.toLocaleString('id-ID')} Robux\`` : '⚠️ *Gagal ambil data*'}\n`;
+    }
+    stockText += `\n💎 **Total Stock (3 Community):** \`${totalStock.toLocaleString('id-ID')} Robux\`\n`;
+    stockText += `🧾 **Total Ter-invoice (Aktif):** \`${totalInvoiced.toLocaleString('id-ID')} Robux\` *(${activeInvoices.length} invoice)*\n`;
+    stockText += `${sisaStock < 0 ? '🔴' : '🟢'} **Sisa Stock:** \`${sisaStock.toLocaleString('id-ID')} Robux\``;
+    if (sisaStock < 0) stockText += '\n⚠️ **PERINGATAN: Total invoice sudah MELEBIHI stock!**';
+    if (anyFundsFailed) stockText += '\n*(Sebagian data gagal ditarik, kemungkinan sementara — akan otomatis re-sync)*';
+
+    embed.addFields({ name: '📦 Section 2 — Stock Overview', value: stockText, inline: false });
+    embed.setFooter({ text: 'VibeBlox Stock Tracking • Update otomatis real-time' });
+    return embed;
+}
+
+// Update pesan panel yang tersimpan di DB. Self-healing: kalau channel/pesan sudah tidak ada, DB dibersihkan.
+async function updatePanelStockMessage() {
+    let panel;
+    try {
+        panel = await PanelStock.findOne();
+    } catch (e) {
+        console.error('Gagal ambil data PanelStock:', e.message);
+        return;
+    }
+    if (!panel) return;
+
+    try {
+        const channel = await client.channels.fetch(panel.channelId).catch(() => null);
+        if (!channel) { await PanelStock.deleteOne({ _id: panel._id }); return; }
+        const msg = await channel.messages.fetch(panel.messageId).catch(() => null);
+        if (!msg) { await PanelStock.deleteOne({ _id: panel._id }); return; }
+
+        const embed = await buildPanelStockEmbed();
+        await msg.edit({ embeds: [embed] });
+    } catch (e) {
+        console.error('Gagal update Panel Stock:', e.message);
+    }
+}
+
+// Debounce — supaya kalau beberapa invoice berubah beruntun dalam waktu singkat,
+// panel tidak di-edit berkali-kali (hemat rate limit Discord & CPU).
+let panelStockTimeout = null;
+function schedulePanelStockUpdate() {
+    if (panelStockTimeout) clearTimeout(panelStockTimeout);
+    panelStockTimeout = setTimeout(() => {
+        updatePanelStockMessage();
+        panelStockTimeout = null;
+    }, 2000);
+}
+
 // Loop utama: jalan tiap 15 detik, urus SEMUA restock aktif dari database.
 // Karena sumber kebenarannya adalah arrivalTimestamp absolut di DB (bukan setTimeout in-memory),
 // ini otomatis "nyambung" lagi dengan benar walau bot sempat mati/restart.
@@ -830,14 +952,30 @@ async function tickRestocks() {
 const userCooldowns = new Map();
 const eligibilityCache = new Map();
 
-// --- RESTOCK: bersihkan data DB kalau embed-nya dihapus manual ---
-// (Ini pembersih CEPAT; tickRestocks() di atas juga punya fallback kalau event ini terlewat, misal bot sempat offline)
+// --- RESTOCK & PANEL STOCK: bersihkan data DB kalau pesan terkait dihapus manual ---
+// (Ini pembersih CEPAT; tickRestocks()/updatePanelStockMessage() di atas juga punya fallback
+// kalau event ini terlewat, misal bot sempat offline)
 client.on('messageDelete', async (message) => {
     try {
         if (!message?.id) return;
         await Restock.deleteOne({ messageId: message.id });
+
+        const removedInvoice = await InvoiceTracker.deleteOne({ messageId: message.id });
+        if (removedInvoice.deletedCount > 0) schedulePanelStockUpdate();
     } catch (e) {
         // Diamkan saja — ini cuma pembersihan, tidak kritikal kalau sesekali gagal
+    }
+});
+
+// --- PANEL STOCK: kalau channel tiket dihapus MANUAL (bukan lewat tombol close),
+// pastikan invoice yang nyangkut di situ tetap ikut lepas dari tracking ---
+client.on('channelDelete', async (channel) => {
+    try {
+        if (!channel?.id) return;
+        const removed = await InvoiceTracker.deleteMany({ channelId: channel.id });
+        if (removed.deletedCount > 0) schedulePanelStockUpdate();
+    } catch (e) {
+        // Diamkan saja — pembersihan, tidak kritikal
     }
 });
 
@@ -1325,6 +1463,12 @@ client.on('interactionCreate', async (interaction) => {
                     await logChannel.send({ embeds: [logEmbed], files: [fileAttachment] });
                 }
 
+                // --- PANEL STOCK: lepas semua invoice yang masih nyangkut di tiket ini ---
+                try {
+                    const removed = await InvoiceTracker.deleteMany({ channelId: interaction.channel.id });
+                    if (removed.deletedCount > 0) schedulePanelStockUpdate();
+                } catch (e) {}
+
                 // 3. Hapus DB dan Channel
                 await Ticket.deleteOne({ channelId: interaction.channel.id });
                 await interaction.channel.delete();
@@ -1396,6 +1540,10 @@ client.on('interactionCreate', async (interaction) => {
         if (action === 'cancel') {
             await interaction.deferUpdate();
             try { await interaction.message.delete(); } catch (e) {}
+            try {
+                await InvoiceTracker.deleteOne({ messageId: invoiceMsgId });
+                schedulePanelStockUpdate();
+            } catch (e) {}
             return;
         }
 
@@ -1683,6 +1831,12 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.channel.send({ content: vouchTemplate });
 
                 await interaction.editReply({ content: '✅ Invoice selesai! Pencatatan dan Auto-Vouch berhasil diproses.' });
+
+                // --- PANEL STOCK: invoice sudah selesai (dibayar+autovouch) -> lepas dari tracking stock ---
+                try {
+                    await InvoiceTracker.deleteOne({ messageId: msgIdPart });
+                    schedulePanelStockUpdate();
+                } catch (e) {}
 
                 // [UBAH NAMA CHANNEL JADI -DONE]
                 if (!interaction.channel.name.endsWith('-done')) {
@@ -2804,6 +2958,47 @@ for (let i = 0; i < targetGroups.length; i++) {
     }
 
     // ==================================================
+    // --- COMMAND: PANEL STOCK ---
+    // ==================================================
+    if (command === 'panelstock') {
+        const roleVibeOwner = '1489612423521374309'; // Owner
+        if (!interaction.member.roles.cache.has(roleVibeOwner)) {
+            return interaction.reply({ content: '❌ Command ini khusus role Vibe Owner.', flags: MessageFlags.Ephemeral });
+        }
+
+        await interaction.deferReply();
+
+        // Hapus panel lama kalau ada (biar cuma 1 panel aktif, tidak ada yang tertinggal double-update)
+        try {
+            const oldPanel = await PanelStock.findOne();
+            if (oldPanel) {
+                try {
+                    const oldChannel = await client.channels.fetch(oldPanel.channelId).catch(() => null);
+                    if (oldChannel) {
+                        const oldMsg = await oldChannel.messages.fetch(oldPanel.messageId).catch(() => null);
+                        if (oldMsg) await oldMsg.delete().catch(() => {});
+                    }
+                } catch (e) {}
+                await PanelStock.deleteMany({});
+            }
+        } catch (e) {
+            console.error('Gagal bersihkan panel stock lama:', e.message);
+        }
+
+        const embed = await buildPanelStockEmbed();
+        await interaction.editReply({ embeds: [embed] });
+        const panelMsg = await interaction.fetchReply();
+
+        await PanelStock.create({
+            messageId: panelMsg.id,
+            channelId: interaction.channel.id,
+            guildId: interaction.guild.id
+        });
+
+        return;
+    }
+
+    // ==================================================
     // --- COMMAND: INVOICE (UTAMA) ---
     // ==================================================
     if (command === 'invoice') {
@@ -2884,6 +3079,23 @@ for (let i = 0; i < targetGroups.length; i++) {
         );
 
         await interaction.editReply({ embeds: [invoiceEmbed], components: [row1, row2] });
+
+        // --- PANEL STOCK: catat invoice ini kalau tipenya Community ---
+        if (type === 'community') {
+            try {
+                await InvoiceTracker.create({
+                    messageId: invoiceMsgId,
+                    channelId: interaction.channel.id,
+                    channelName: interaction.channel.name,
+                    amount: amount,
+                    createdBy: interaction.user.id
+                });
+                schedulePanelStockUpdate();
+            } catch (e) {
+                console.error('Gagal catat InvoiceTracker:', e.message);
+            }
+        }
+
         return;
     }
 
