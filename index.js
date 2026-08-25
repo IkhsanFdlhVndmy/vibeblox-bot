@@ -792,7 +792,7 @@ async function buildPanelStockEmbed() {
     }
     const groupedArr = Object.values(grouped);
 
-    embed.addFields({ name: `🎫 Section 1 — Invoice Aktif per Ticket (${groupedArr.length} tiket)`, value: '\u200b', inline: false });
+    embed.addFields({ name: `🎫 Invoice Aktif per Ticket (${groupedArr.length} tiket)`, value: '\u200b', inline: false });
 
     if (groupedArr.length === 0) {
         embed.addFields({ name: '\u200b', value: '*Belum ada invoice Community yang aktif saat ini.*', inline: false });
@@ -821,14 +821,13 @@ async function buildPanelStockEmbed() {
         const val = fundsPerCommunity[num];
         stockText += `🏢 **Community ${num} (${grp.name}):** ${val !== null ? `\`${val.toLocaleString('id-ID')} Robux\`` : '⚠️ *Gagal ambil data*'}\n`;
     }
-    stockText += `\n💎 **Total Stock (3 Community):** \`${totalStock.toLocaleString('id-ID')} Robux\`\n`;
-    stockText += `🧾 **Total Ter-invoice (Aktif):** \`${totalInvoiced.toLocaleString('id-ID')} Robux\` *(${activeInvoices.length} invoice)*\n`;
+    stockText += `\n💎 **Total Stock:** \`${totalStock.toLocaleString('id-ID')} Robux\`\n`;
+    stockText += `🧾 **Total Ter-invoice:** \`${totalInvoiced.toLocaleString('id-ID')} Robux\` *(${activeInvoices.length} invoice)*\n`;
     stockText += `${sisaStock < 0 ? '🔴' : '🟢'} **Sisa Stock:** \`${sisaStock.toLocaleString('id-ID')} Robux\``;
     if (sisaStock < 0) stockText += '\n⚠️ **PERINGATAN: Total invoice sudah MELEBIHI stock!**';
     if (anyFundsFailed) stockText += '\n*(Sebagian data gagal ditarik, kemungkinan sementara — akan otomatis re-sync)*';
 
-    embed.addFields({ name: '📦 Section 2 — Stock Overview', value: stockText, inline: false });
-    embed.setFooter({ text: 'VibeBlox Stock Tracking • Update otomatis real-time' });
+    embed.addFields({ name: '📦 Stock Overview', value: stockText, inline: false });
     return embed;
 }
 
