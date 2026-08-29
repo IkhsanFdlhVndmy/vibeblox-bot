@@ -1349,8 +1349,16 @@ client.on('interactionCreate', async (interaction) => {
                 new ButtonBuilder().setCustomId('ta_close').setLabel('🔒 Close Ticket').setStyle(ButtonStyle.Danger)
             );
 
-            const msgContent = type === 'mm' && mmPings !== '' ? `Memanggil para pihak: ${mmPings}` : `<@${interaction.user.id}>`;
-            await ticketChannel.send({ content: msgContent, embeds: [ticketEmbed], components: [actionRow] });
+            const roleVibeOwner = '1489612423521374309'; // Vibe Owner — role yang handle tiket
+            const msgContent = type === 'mm' && mmPings !== ''
+                ? `Memanggil para pihak: ${mmPings}\n<@&${roleVibeOwner}>`
+                : `<@${interaction.user.id}> <@&${roleVibeOwner}>`;
+            await ticketChannel.send({
+                content: msgContent,
+                embeds: [ticketEmbed],
+                components: [actionRow],
+                allowedMentions: { parse: ['users', 'roles'] }
+            });
 
             return interaction.editReply(`✅ Tiket berhasil dibuat! Silakan menuju ${ticketChannel}`);
 
