@@ -1350,9 +1350,10 @@ client.on('interactionCreate', async (interaction) => {
             );
 
             const roleVibeOwner = '1489612423521374309'; // Vibe Owner — role yang handle tiket
+            const userHandlerId = '1192277645065470012'; // User spesifik yang juga handle tiket
             const msgContent = type === 'mm' && mmPings !== ''
-                ? `Memanggil para pihak: ${mmPings}\n<@&${roleVibeOwner}>`
-                : `<@${interaction.user.id}> <@&${roleVibeOwner}>`;
+                ? `Memanggil para pihak: ${mmPings}\n<@&${roleVibeOwner}> <@${userHandlerId}>`
+                : `<@${interaction.user.id}> <@&${roleVibeOwner}> <@${userHandlerId}>`;
             await ticketChannel.send({
                 content: msgContent,
                 embeds: [ticketEmbed],
