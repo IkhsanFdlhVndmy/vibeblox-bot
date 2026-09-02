@@ -2767,7 +2767,10 @@ for (let i = 0; i < targetGroups.length; i++) {
 
         await interaction.deferReply();
 
-        await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/communities/653724099/Maycomn\n\nKomunitas 4:\nhttps://www.roblox.com/id/communities/617301345/VibeBlox-Community\n\n' });
+        await interaction.editReply({
+            content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/communities/653724099/Maycomn\n\nKomunitas 4:\nhttps://www.roblox.com/id/communities/617301345/VibeBlox-Community\n\n',
+            flags: MessageFlags.SuppressEmbeds
+        });
         linkCommunityActive = false;
         return;
     }
