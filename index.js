@@ -3186,7 +3186,7 @@ for (let i = 0; i < targetGroups.length; i++) {
     // ==================================================
     // --- SECURITY FILTER UNTUK COMMAND KEUANGAN ---
     // ==================================================
-    const allowedChannels = ['1489665490770067678', '1519075561396371647'];
+    const allowedChannels = ['1489665490770067678', '1519075561396371647', '1544599293451833444'];
     if (!allowedChannels.includes(interaction.channel.id)) {
         return interaction.reply({ content: '❌ Command ini hanya bisa digunakan di channel Finance.', flags: MessageFlags.Ephemeral });
     }
