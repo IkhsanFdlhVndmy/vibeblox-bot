@@ -1366,7 +1366,7 @@ client.on('interactionCreate', async (interaction) => {
 
         } catch (e) {
             console.error(e);
-            return interaction.editReply('❌ Gagal membuat tiket karena error sistem/permission Discord.');
+            return interaction.editReply('❌ Tiket Sudah ditutup😂!');
         }
     }
 
