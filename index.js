@@ -132,7 +132,7 @@ if (menuType === 'howtoorder') {
         m.forEach(val => priceList += `${val} ${rx} ${arr} Rp ${formatRupiah(val*rate)}\n`);
         
         embed.setTitle(`${ann} PRICE LIST VIA PAYOUT COMMUNITY (INSTANT)`)
-             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Ingin link Community-nya?**\nSilakan tanya langsung ke admin di tiket/DM ya! 🙋\n\n${priceList}`)
+             .setDescription(`**Pengiriman Robux Langsung (Tanpa Login/Pending)** ${ver}\nRobux dikirim langsung ke saldo akun melalui sistem Payout Community Roblox kami. **SYARAT WAJIB**: Sesuai kebijakan Roblox, kamu **wajib sudah bergabung (Join) di Community kami minimal 14 Hari** agar sistem mengizinkan proses pencairan dana.\n\n**Ingin link Community-nya?**\nSilakan tanya langsung ke admin di tiket/DM ya! 🙋\n\n**Cara cek status 14 hari kamu?**\nCara cek eligible username Roblox-nya sudah 14 hari di Community atau belum, bisa gunakan fitur \`/cek-eligible\` di channel <#1504349336559947818>.\n\n${priceList}`)
              .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1515102402657915081/Frame_57.png?ex=6a2dc892&is=6a2c7712&hm=59ff55fdb78d365538f8464c291d309c1be584876ee2ff194d350935245ee954&');
 
     } else if (menuType === 'gamepass_after') {
@@ -377,7 +377,7 @@ const slashCommands = [
     //cek eligble
     {
         name: 'cek-eligible', 
-        description: 'Cek status antrean 14 hari di grup BEJIRLAH, Vandamoy & Maycomn',
+        description: 'Cek status antrean 14 hari di grup BEJIRLAH, Vandamoy, Maycomn & VibeBlox Community',
         options: [
             { name: 'username', description: 'Username Roblox pembeli', type: 3, required: true }
         ]
@@ -624,7 +624,8 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 const RESTOCK_COMMUNITIES = {
     1: { name: 'BEJIRLAH', groupId: '1064667246' },
     2: { name: 'Vandamoy', groupId: '1108229986' },
-    3: { name: 'Maycomn', groupId: '653724099' }
+    3: { name: 'Maycomn', groupId: '653724099' },
+    4: { name: 'VibeBlox Community', groupId: '617301345' }
 };
 
 // "1,3" -> [1, 3] (nomor valid saja, dedup, urut)
@@ -2463,7 +2464,8 @@ Jumlah Robux: `;
             const targetGroups = [
                 { id: '1064667246', shortName: 'BEJIRLAH', url: 'https://www.roblox.com/communities/1064667246/BEJIRLAH-Community' },
                 { id: '1108229986', shortName: 'Vandamoy', url: 'https://www.roblox.com/id/communities/1108229986/Vandamoy' },
-                { id: '653724099', shortName: 'Maycomn', url: 'https://www.roblox.com/communities/653724099/Maycomn' }
+                { id: '653724099', shortName: 'Maycomn', url: 'https://www.roblox.com/communities/653724099/Maycomn' },
+                { id: '617301345', shortName: 'VibeBlox Community', url: 'https://www.roblox.com/id/communities/617301345/VibeBlox-Community' }
             ];
 
             // Helper Waktu (Format Teks & Kalkulasi Remaining)
@@ -2643,7 +2645,8 @@ for (let i = 0; i < targetGroups.length; i++) {
             const targetGroups = [
                 { id: '1064667246', name: 'Community 1 (BEJIRLAH)' },
                 { id: '1108229986', name: 'Community 2 (Vandamoy)' },
-                { id: '653724099', name: 'Community 3 (Maycomn)' }
+                { id: '653724099', name: 'Community 3 (Maycomn)' },
+                { id: '617301345', name: 'Community 4 (VibeBlox Community)' }
             ];
             const now = Date.now();
             const cutoffOldest = now - (10 * 24 * 60 * 60 * 1000); // batas 10 hari ke belakang
@@ -2764,7 +2767,7 @@ for (let i = 0; i < targetGroups.length; i++) {
 
         await interaction.deferReply();
 
-        await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/communities/653724099/Maycomn\n\n' });
+        await interaction.editReply({ content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/communities/653724099/Maycomn\n\nKomunitas 4:\nhttps://www.roblox.com/id/communities/617301345/VibeBlox-Community\n\n' });
         linkCommunityActive = false;
         return;
     }
