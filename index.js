@@ -2519,7 +2519,7 @@ for (let i = 0; i < targetGroups.length; i++) {
                     fieldValue = `${emojiNotJoin} Belum Bergabung`;
                 } else {
                     // KONDISI 2: Sudah Join (Cek Audit Log)
-                    await sleep(1000); 
+                    await sleep(400);
                     try {
                         const auditRes = await axios.get(`https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=JoinGroup&userId=${userId}&limit=10`, {
                             headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
