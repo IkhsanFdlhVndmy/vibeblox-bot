@@ -1233,6 +1233,7 @@ client.on('interactionCreate', async (interaction) => {
         // --- LOGIKA OVERFLOW CATEGORY TICKET ---
         const primaryCategoryId = '1488785950011166790'; // Kategori Utama
         const backupCategoryId = '1522155806475419788'; // Kategori Backup
+        const backup2CategoryId = '1545837833145679973'; // Kategori Backup 2 (baru)
 
         let activeCategoryId = primaryCategoryId;
         try {
@@ -1245,7 +1246,24 @@ client.on('interactionCreate', async (interaction) => {
             }
 
             if (primaryCat && primaryCat.children.cache.size >= 50) {
-                activeCategoryId = backupCategoryId;
+                // Primary penuh -> cek backup
+                let backupCat = interaction.guild.channels.cache.get(backupCategoryId);
+                if (!backupCat) {
+                    backupCat = await interaction.guild.channels.fetch(backupCategoryId).catch(err => {
+                        console.error("DEBUG: Gagal fetch backup category:", err.message);
+                        return null;
+                    });
+                }
+
+                if (backupCat && backupCat.children.cache.size >= 50) {
+                    // Backup JUGA penuh -> lempar ke backup 2
+                    activeCategoryId = backup2CategoryId;
+                } else if (backupCat) {
+                    activeCategoryId = backupCategoryId;
+                } else {
+                    console.warn("DEBUG: Kategori backup tidak ditemukan! Fallback tetap ke backup (biar error kelihatan jelas).");
+                    activeCategoryId = backupCategoryId;
+                }
             } else if (!primaryCat) {
                 console.warn("DEBUG: Kategori utama tidak ditemukan!");
             }
@@ -2950,7 +2968,7 @@ for (let i = 0; i < targetGroups.length; i++) {
         }
 
         // Wajib dipakai di dalam channel ticket, sama seperti /invoice
-        const allowedTicketCategoriesPO = ['1488785950011166790', '1522155806475419788']; // ID Kategori Utama & Backup
+        const allowedTicketCategoriesPO = ['1488785950011166790', '1522155806475419788', '1545837833145679973']; // ID Kategori Utama, Backup & Backup 2
         if (!allowedTicketCategoriesPO.includes(interaction.channel.parentId)) {
             return interaction.reply({ content: '❌ Perintah pre-order hanya bisa digunakan di dalam channel Ticket!', flags: MessageFlags.Ephemeral });
         }
@@ -3023,7 +3041,7 @@ for (let i = 0; i < targetGroups.length; i++) {
         }
 
         // [VALIDASI TICKET CATEGORY & RENAME LOGIC]
-        const allowedTicketCategories = ['1488785950011166790', '1522155806475419788']; // ID Kategori Utama & Backup
+        const allowedTicketCategories = ['1488785950011166790', '1522155806475419788', '1545837833145679973']; // ID Kategori Utama, Backup & Backup 2
         if (!allowedTicketCategories.includes(interaction.channel.parentId)) {
             return interaction.reply({ content: '❌ Perintah invoice hanya bisa digunakan di dalam channel Ticket!', flags: MessageFlags.Ephemeral });
         }
@@ -3123,7 +3141,7 @@ for (let i = 0; i < targetGroups.length; i++) {
         }
         
         // [VALIDASI TICKET CATEGORY & RENAME LOGIC]
-        const allowedTicketCategories = ['1488785950011166790', '1522155806475419788']; // ID Kategori Utama & Backup
+        const allowedTicketCategories = ['1488785950011166790', '1522155806475419788', '1545837833145679973']; // ID Kategori Utama, Backup & Backup 2
         if (!allowedTicketCategories.includes(interaction.channel.parentId)) {
             return interaction.reply({ content: '❌ Perintah invoice hanya bisa digunakan di dalam channel Ticket!', flags: MessageFlags.Ephemeral });
         }
