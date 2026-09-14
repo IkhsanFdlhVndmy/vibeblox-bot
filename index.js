@@ -12,8 +12,7 @@ const Ticket = require('./models/Ticket');             // <--- TAMBAHAN TICKET
 const Restock = require('./models/Restock');            // <--- TAMBAHAN RESTOCK
 const InvoiceTracker = require('./models/InvoiceTracker'); // <--- TAMBAHAN PANEL STOCK
 const PanelStock = require('./models/PanelStock');          // <--- TAMBAHAN PANEL STOCK
-const TicketVouch = require('./models/TicketVouch');         // <--- TAMBAHAN VOUCH TRACKING
-const VouchedUser = require('./models/VouchedUser');         // <--- TAMBAHAN VOUCH TRACKING
+const TicketVouch = require('./models/TicketVouch');         // <--- TAMBAHAN VOUCH TRACKING (per-ticket, BUKAN global)
 
 const client = new Client({
     intents: [
@@ -617,16 +616,17 @@ client.on('messageCreate', async (message) => {
             await message.react('1502074502228738098');
         } catch (err) {}
 
-        // --- VOUCH TRACKING: tandai user ini sudah vouch (berlaku selamanya, lintas-tiket) ---
+        // --- VOUCH TRACKING: pesan ini dihitung SAH buat ticket manapun milik buyer yang sama
+        // yang masih pending DAN invoice-nya di-done SEBELUM pesan ini dikirim (doneAt <= waktu pesan).
+        // Vouch lama (sebelum invoice terkait selesai) otomatis gak ikut kehitung. ---
         try {
-            await VouchedUser.updateOne(
-                { userId: message.author.id },
-                { userId: message.author.id },
-                { upsert: true }
-            );
+            const msgTime = message.createdAt;
+            const pendingTickets = await TicketVouch.find({
+                buyerId: message.author.id,
+                vouched: false,
+                doneAt: { $lte: msgTime }
+            });
 
-            // Update SEMUA form tiket milik user ini yang statusnya masih "belum vouch"
-            const pendingTickets = await TicketVouch.find({ buyerId: message.author.id, vouched: false });
             for (const tv of pendingTickets) {
                 try {
                     const ch = await client.channels.fetch(tv.channelId).catch(() => null);
@@ -635,15 +635,15 @@ client.on('messageCreate', async (message) => {
                     if (!formMsg) { await TicketVouch.deleteOne({ _id: tv._id }); continue; }
 
                     const oldFormEmbed = formMsg.embeds[0];
-                    if (!oldFormEmbed) continue;
-                    const updatedFields = oldFormEmbed.fields.map(f =>
-                        f.name === '🗣️ Status Vouch'
-                            ? { name: f.name, value: '✅ Sudah melakukan Vouch', inline: f.inline }
-                            : f
-                    );
-                    const newFormEmbed = EmbedBuilder.from(oldFormEmbed).setFields(updatedFields);
-                    await formMsg.edit({ embeds: [newFormEmbed] });
-
+                    if (oldFormEmbed) {
+                        const updatedFields = oldFormEmbed.fields.map(f =>
+                            f.name === '🗣️ Status Vouch'
+                                ? { name: f.name, value: '✅ Sudah melakukan Vouch', inline: f.inline }
+                                : f
+                        );
+                        const newFormEmbed = EmbedBuilder.from(oldFormEmbed).setFields(updatedFields);
+                        await formMsg.edit({ embeds: [newFormEmbed] });
+                    }
                     tv.vouched = true;
                     await tv.save();
                 } catch (e) {
@@ -1919,36 +1919,47 @@ client.on('interactionCreate', async (interaction) => {
                     schedulePanelStockUpdate();
                 } catch (e) {}
 
-                // --- VOUCH TRACKING: tambah field status vouch ke form tiket, HANYA sekali per ticket
-                // (kalau invoice ke-2/ke-3 di ticket yang sama, field ini TIDAK ditambah lagi) ---
+                // --- VOUCH TRACKING: pastikan tiap invoice (bukan cuma tiap ticket) butuh vouch sendiri.
+                // Kalau ini invoice PERTAMA di ticket ini -> bikin record baru + tambah field ke form.
+                // Kalau ini invoice KE-2/KE-3+ di ticket yang SAMA -> RESET status vouch balik ke pending
+                // dan update doneAt ke waktu SEKARANG (jangan asal skip, karena vouch buat invoice
+                // sebelumnya BUKAN vouch yang sama buat invoice ini). ---
                 try {
                     const existingVouchDoc = await TicketVouch.findOne({ channelId: interaction.channel.id });
-                    if (!existingVouchDoc) {
-                        const ticketDoc = await Ticket.findOne({ channelId: interaction.channel.id });
-                        const buyerId = ticketDoc ? ticketDoc.creatorId : null;
+                    const ticketDoc = await Ticket.findOne({ channelId: interaction.channel.id });
+                    const buyerId = ticketDoc ? ticketDoc.creatorId : (existingVouchDoc ? existingVouchDoc.buyerId : null);
 
-                        if (buyerId) {
-                            // Kalau user ini SUDAH PERNAH vouch (dari ticket lain sebelumnya), langsung tandai sudah vouch
-                            const alreadyVouched = await VouchedUser.findOne({ userId: buyerId });
-                            const isVouched = !!alreadyVouched;
+                    if (buyerId) {
+                        const formMessages = await interaction.channel.messages.fetch({ limit: 5, after: interaction.channel.id });
+                        const formMsg = formMessages.find(m => m.author.id === '1490582060308369479' && m.embeds[0]?.title?.startsWith('🎫 Order Tiket'));
 
-                            const formMessages = await interaction.channel.messages.fetch({ limit: 5, after: interaction.channel.id });
-                            const formMsg = formMessages.find(m => m.author.id === '1490582060308369479' && m.embeds[0]?.title?.startsWith('🎫 Order Tiket'));
+                        if (formMsg) {
+                            const oldFormEmbed = formMsg.embeds[0];
+                            const hasStatusField = oldFormEmbed.fields.some(f => f.name === '🗣️ Status Vouch');
+                            const updatedFields = hasStatusField
+                                ? oldFormEmbed.fields.map(f =>
+                                    f.name === '🗣️ Status Vouch'
+                                        ? { name: f.name, value: '⏳ Belum melakukan vouches', inline: f.inline }
+                                        : f
+                                  )
+                                : [...oldFormEmbed.fields, { name: '🗣️ Status Vouch', value: '⏳ Belum melakukan vouches', inline: false }];
+                            const newFormEmbed = EmbedBuilder.from(oldFormEmbed).setFields(updatedFields);
+                            await formMsg.edit({ embeds: [newFormEmbed] });
 
-                            if (formMsg) {
-                                const oldFormEmbed = formMsg.embeds[0];
-                                const newFormEmbed = EmbedBuilder.from(oldFormEmbed).addFields({
-                                    name: '🗣️ Status Vouch',
-                                    value: isVouched ? '✅ Sudah melakukan Vouch' : '⏳ Belum melakukan vouches',
-                                    inline: false
-                                });
-                                await formMsg.edit({ embeds: [newFormEmbed] });
-
+                            if (existingVouchDoc) {
+                                // Invoice ke-2/ke-3+ di ticket yang sama -> reset, bukan skip
+                                existingVouchDoc.vouched = false;
+                                existingVouchDoc.doneAt = new Date();
+                                existingVouchDoc.messageId = formMsg.id;
+                                await existingVouchDoc.save();
+                            } else {
+                                // Invoice pertama di ticket ini
                                 await TicketVouch.create({
                                     channelId: interaction.channel.id,
                                     messageId: formMsg.id,
                                     buyerId: buyerId,
-                                    vouched: isVouched
+                                    vouched: false,
+                                    doneAt: new Date()
                                 });
                             }
                         }
