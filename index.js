@@ -423,6 +423,32 @@ client.once('ready', async () => {
     } catch (e) {
         console.error('❌ Gagal memuat Cache Channel:', e);
     }
+
+    // --- FIX PERCOBAAN: samakan izin akses di LEVEL KATEGORI 2 & 3 dengan kategori 1 ---
+    // Kategori 1 "Private" OFF, kategori 2 & 3 "Private" ON — bedanya, role staff cuma dikasih akses
+    // per-CHANNEL tiket (bukan di kategori-nya sendiri) untuk kategori 2 & 3. Ini nyamain biar konsisten,
+    // dengan harapan (BUKAN jaminan) bisa bantu soal collapse di client admin.
+    try {
+        const categoriesToFix = ['1522155806475419788', '1545837833145679973']; // Backup & Backup 2
+        const staffRoles = ['1489612423521374309', '1489612221544665231', '1519076541055897670']; // Owner, Handler, Partner
+
+        for (const guild of client.guilds.cache.values()) {
+            for (const catId of categoriesToFix) {
+                const cat = guild.channels.cache.get(catId);
+                if (!cat) continue;
+                for (const roleId of staffRoles) {
+                    await cat.permissionOverwrites.edit(roleId, {
+                        ViewChannel: true,
+                        SendMessages: true,
+                        ReadMessageHistory: true
+                    }).catch(err => console.error(`Gagal set izin kategori ${catId} untuk role ${roleId}:`, err.message));
+                }
+            }
+        }
+        console.log('✅ Sinkronisasi izin kategori 2 & 3 selesai.');
+    } catch (e) {
+        console.error('❌ Gagal sinkronisasi izin kategori:', e.message);
+    }
     
        try {
         await client.application.commands.set(slashCommands);
@@ -1333,8 +1359,16 @@ client.on('interactionCreate', async (interaction) => {
             { new: true, upsert: true }
         );
 
-        const channelName = `ticket-${config.ticketCounter}`;
-
+        const channelPrefixes = {
+            'community': 'community',
+            'robux_plus': 'visend',
+            'vilog': 'vilog',
+            'gamepass': 'gamepass',
+            'gig': 'gig',
+            'limited': 'limited',
+            'mm': 'mm'
+        };
+        const channelName = `${channelPrefixes[type] || 'ticket'}-${config.ticketCounter}`;
         try {
             // Setup Permission
             const permissionOverwrites = [
@@ -1629,6 +1663,28 @@ client.on('interactionCreate', async (interaction) => {
         }
 
         if (['bca', 'qris', 'dana', 'gopay'].includes(action)) {
+            // --- VALIDASI LIMIT QRIS: transaksi >= Rp 300.000 cuma bisa dibuka Admin ---
+            if (action === 'qris' && !hasRoleInv) {
+                let totalHargaCheck = 0;
+                const embedCheck = interaction.message.embeds[0];
+                if (embedCheck && embedCheck.fields) {
+                    for (const field of embedCheck.fields) {
+                        if (field.name.includes('Total Harga') || field.name.includes('Total Bayar')) {
+                            const numMatch = field.value.replace(/[^\d]/g, '');
+                            if (numMatch) totalHargaCheck = parseInt(numMatch);
+                        }
+                    }
+                }
+
+                if (totalHargaCheck >= 300000) {
+                    const warnEmbed = new EmbedBuilder()
+                        .setColor(0xFEE75C)
+                        .setTitle('⚠️ QRIS hanya untuk Transaksi dibawah RP 300.000')
+                        .setDescription('Silahkan gunakan metode pembayaran lainnya(DANA/GOPAY/BCA!)\n\nSilahkan konfirmasi terlebih dahulu kepada admin jika anda dari luar negri dan hanya bisa menggunakan qris untuk payment.\n\n**NOTE:** Jika memaksa membayar ke QRIS tanpa konfirmasi ke admin terlebih dahulu, maka akan ada **pengurangan jumlah robux/item** yang dikirimkan!');
+                    return interaction.reply({ embeds: [warnEmbed], flags: MessageFlags.Ephemeral });
+                }
+            }
+
             if (isUpdating.has(interaction.message.id)) {
                 return interaction.reply({ content: '⏳ Mohon tunggu, metode sedang dimuat...', flags: MessageFlags.Ephemeral });
             }
@@ -1640,7 +1696,7 @@ client.on('interactionCreate', async (interaction) => {
                 if (action === 'bca') {
                     embedPay.setColor(0x003D79).setTitle('🏦 Transfer Bank BCA VibeBlox').addFields({ name: '👤 Atas Nama', value: '**Angel Vinny Vincentia Pelawi**' }, { name: '🔢 No. Rekening', value: '**8205363625**' }, { name: '🏦 Bank', value: '**BCA**' }).setFooter({ text: 'VibeBlox Payment' });
                 } else if (action === 'qris') {
-                    embedPay.setColor(0x4F4580).setTitle('💳 Pembayaran QRIS VibeBlox').setDescription('Silakan scan QRIS di bawah ini untuk melakukan pembayaran.').setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1500317889872269324/1777300289337-1.png?ex=6a1c40ab&is=6a1aef2b&hm=be36eb1b73fd7c0448b6e5b989cac3eb5a15bd6cc88caefec52c55704cb534b6&').setFooter({ text: 'VibeBlox Payment' });
+                    embedPay.setColor(0x4F4580).setTitle('💳 Pembayaran QRIS VibeBlox').setDescription('Silakan scan QRIS di bawah ini untuk melakukan pembayaran.').setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1549162963695444079/qr_ID1026513310379_15.09.26_1789418946_1789418947032.jpg?ex=6aa9b1f0&is=6aa86070&hm=dafc1f013d11eb285bb37728fa7551a10fca68da44cc07530fba82e43d0ad6cb&').setFooter({ text: 'VibeBlox Payment' });
                 } else if (action === 'dana') {
                     embedPay.setColor(0x108EE9).setTitle('💙 Pembayaran Dana VibeBlox').addFields({ name: '👤 Atas Nama', value: '**Muhammad Ikhsan Fadillah**' }, { name: '📱 Nomor Dana', value: '**08119931329**' }, { name: '💳 Platform', value: '**Dana**' }).setFooter({ text: 'VibeBlox Payment' });
                 } else if (action === 'gopay') {
@@ -2351,13 +2407,12 @@ client.on('interactionCreate', async (interaction) => {
             .setColor(0x4F4580)
             .setTitle('💳 Pembayaran QRIS VibeBlox')
             .setDescription('Silakan scan QRIS di bawah ini untuk melakukan pembayaran.')
-            .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1500317889872269324/1777300289337-1.png?ex=6a1c40ab&is=6a1aef2b&hm=be36eb1b73fd7c0448b6e5b989cac3eb5a15bd6cc88caefec52c55704cb534b6&')
+            .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1549162963695444079/qr_ID1026513310379_15.09.26_1789418946_1789418947032.jpg?ex=6aa9b1f0&is=6aa86070&hm=dafc1f013d11eb285bb37728fa7551a10fca68da44cc07530fba82e43d0ad6cb&')
             .setFooter({ text: 'VibeBlox Payment' })
             .setTimestamp();
 
         return interaction.editReply({ embeds: [qrisEmbed] });
     }
-
     // --- BCA ---
     if (command === 'bca') {
         const allowedRolesBca = ['1489612423521374309', '1489612221544665231'];
@@ -3080,14 +3135,16 @@ for (let i = 0; i < targetGroups.length; i++) {
             return interaction.reply({ content: '⚠️ Channel ini **sudah** ditandai Pre-Order.', flags: MessageFlags.Ephemeral });
         }
 
+        await interaction.deferReply(); // cegah interaction expired (>3 detik) kalau proses rename lambat
+
         const newNamePO = `${interaction.channel.name}-po`;
 
         try {
             await interaction.channel.setName(newNamePO);
-            await interaction.reply({ content: `✅ Channel ditandai sebagai **Pre-Order** — nama diganti jadi \`${newNamePO}\`.` });
+            await interaction.editReply({ content: `✅ Channel ditandai sebagai **Pre-Order** — nama diganti jadi \`${newNamePO}\`.` });
         } catch (err) {
             console.log('Abaikan/Info: Gagal rename channel (Tambah -po), kemungkinan kena rate limit Discord (maks 2x rename/10 menit).', err.message);
-            await interaction.reply({ content: '⚠️ Gagal ganti nama channel — kemungkinan kena rate limit Discord (channel cuma boleh di-rename maks 2x per 10 menit). Coba lagi sebentar.', flags: MessageFlags.Ephemeral });
+            await interaction.editReply({ content: '⚠️ Gagal ganti nama channel — kemungkinan kena rate limit Discord (channel cuma boleh di-rename maks 2x per 10 menit). Coba lagi sebentar.' });
         }
         return;
     }
@@ -3269,13 +3326,13 @@ for (let i = 0; i < targetGroups.length; i++) {
         const invoiceMsgId = sentReply.id;
 
        const row1 = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`inv_cancel_${invoiceMsgId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId(`inv_bca_${invoiceMsgId}`).setLabel('BCA').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`inv_qris_${invoiceMsgId}`).setLabel('QRIS').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`inv_dana_${invoiceMsgId}`).setLabel('DANA').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`inv_gopay_${invoiceMsgId}`).setLabel('GOPAY').setStyle(ButtonStyle.Secondary)
         );
         const row2 = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`inv_cancel_${invoiceMsgId}`).setLabel('❌ Close').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId(`inv_done_${type}_${invoiceMsgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
         );
 
