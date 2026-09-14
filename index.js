@@ -12,6 +12,8 @@ const Ticket = require('./models/Ticket');             // <--- TAMBAHAN TICKET
 const Restock = require('./models/Restock');            // <--- TAMBAHAN RESTOCK
 const InvoiceTracker = require('./models/InvoiceTracker'); // <--- TAMBAHAN PANEL STOCK
 const PanelStock = require('./models/PanelStock');          // <--- TAMBAHAN PANEL STOCK
+const TicketVouch = require('./models/TicketVouch');         // <--- TAMBAHAN VOUCH TRACKING
+const VouchedUser = require('./models/VouchedUser');         // <--- TAMBAHAN VOUCH TRACKING
 
 const client = new Client({
     intents: [
@@ -248,6 +250,14 @@ const slashCommands = [
     { name: 'gopay', description: 'Tampilkan info pembayaran GoPay VibeBlox' },
     { name: 'vouch', description: 'Template vouch (hanya terlihat olehmu)' },
     { name: 'linkcommunity', description: 'Tampilkan link grup komunitas Roblox' },
+    {
+        name: 'editform',
+        description: '[Owner/Handler/Partner] Edit Username Roblox dan/atau Jumlah Robux pada form tiket ini',
+        options: [
+            { name: 'username', description: 'Username Roblox baru (kosongkan jika tidak diubah)', type: 3, required: false },
+            { name: 'robux', description: 'Jumlah Robux baru (kosongkan jika tidak diubah)', type: 4, required: false }
+        ]
+    },
     // --- TAMBAHAN BARU: PRE-ORDER ---
     {
         name: 'pre-order',
@@ -606,6 +616,43 @@ client.on('messageCreate', async (message) => {
         try {
             await message.react('1502074502228738098');
         } catch (err) {}
+
+        // --- VOUCH TRACKING: tandai user ini sudah vouch (berlaku selamanya, lintas-tiket) ---
+        try {
+            await VouchedUser.updateOne(
+                { userId: message.author.id },
+                { userId: message.author.id },
+                { upsert: true }
+            );
+
+            // Update SEMUA form tiket milik user ini yang statusnya masih "belum vouch"
+            const pendingTickets = await TicketVouch.find({ buyerId: message.author.id, vouched: false });
+            for (const tv of pendingTickets) {
+                try {
+                    const ch = await client.channels.fetch(tv.channelId).catch(() => null);
+                    if (!ch) { await TicketVouch.deleteOne({ _id: tv._id }); continue; }
+                    const formMsg = await ch.messages.fetch(tv.messageId).catch(() => null);
+                    if (!formMsg) { await TicketVouch.deleteOne({ _id: tv._id }); continue; }
+
+                    const oldFormEmbed = formMsg.embeds[0];
+                    if (!oldFormEmbed) continue;
+                    const updatedFields = oldFormEmbed.fields.map(f =>
+                        f.name === '🗣️ Status Vouch'
+                            ? { name: f.name, value: '✅ Sudah melakukan Vouch', inline: f.inline }
+                            : f
+                    );
+                    const newFormEmbed = EmbedBuilder.from(oldFormEmbed).setFields(updatedFields);
+                    await formMsg.edit({ embeds: [newFormEmbed] });
+
+                    tv.vouched = true;
+                    await tv.save();
+                } catch (e) {
+                    console.error(`Gagal update vouch di ticket ${tv.channelId}:`, e.message);
+                }
+            }
+        } catch (e) {
+            console.error('Gagal proses vouch tracking:', e.message);
+        }
     }
 });
 
@@ -962,6 +1009,8 @@ client.on('messageDelete', async (message) => {
 
         const removedInvoice = await InvoiceTracker.deleteOne({ messageId: message.id });
         if (removedInvoice.deletedCount > 0) schedulePanelStockUpdate();
+
+        await TicketVouch.deleteOne({ messageId: message.id });
     } catch (e) {
         // Diamkan saja — ini cuma pembersihan, tidak kritikal kalau sesekali gagal
     }
@@ -974,6 +1023,8 @@ client.on('channelDelete', async (channel) => {
         if (!channel?.id) return;
         const removed = await InvoiceTracker.deleteMany({ channelId: channel.id });
         if (removed.deletedCount > 0) schedulePanelStockUpdate();
+
+        await TicketVouch.deleteOne({ channelId: channel.id });
     } catch (e) {
         // Diamkan saja — pembersihan, tidak kritikal
     }
@@ -1496,6 +1547,9 @@ client.on('interactionCreate', async (interaction) => {
                     if (removed.deletedCount > 0) schedulePanelStockUpdate();
                 } catch (e) {}
 
+                // --- VOUCH TRACKING: bersihkan data vouch tiket ini juga ---
+                try { await TicketVouch.deleteOne({ channelId: interaction.channel.id }); } catch (e) {}
+
                 // 3. Hapus DB dan Channel
                 await Ticket.deleteOne({ channelId: interaction.channel.id });
                 await interaction.channel.delete();
@@ -1864,6 +1918,44 @@ client.on('interactionCreate', async (interaction) => {
                     await InvoiceTracker.deleteOne({ messageId: msgIdPart });
                     schedulePanelStockUpdate();
                 } catch (e) {}
+
+                // --- VOUCH TRACKING: tambah field status vouch ke form tiket, HANYA sekali per ticket
+                // (kalau invoice ke-2/ke-3 di ticket yang sama, field ini TIDAK ditambah lagi) ---
+                try {
+                    const existingVouchDoc = await TicketVouch.findOne({ channelId: interaction.channel.id });
+                    if (!existingVouchDoc) {
+                        const ticketDoc = await Ticket.findOne({ channelId: interaction.channel.id });
+                        const buyerId = ticketDoc ? ticketDoc.creatorId : null;
+
+                        if (buyerId) {
+                            // Kalau user ini SUDAH PERNAH vouch (dari ticket lain sebelumnya), langsung tandai sudah vouch
+                            const alreadyVouched = await VouchedUser.findOne({ userId: buyerId });
+                            const isVouched = !!alreadyVouched;
+
+                            const formMessages = await interaction.channel.messages.fetch({ limit: 5, after: interaction.channel.id });
+                            const formMsg = formMessages.find(m => m.author.id === '1490582060308369479' && m.embeds[0]?.title?.startsWith('🎫 Order Tiket'));
+
+                            if (formMsg) {
+                                const oldFormEmbed = formMsg.embeds[0];
+                                const newFormEmbed = EmbedBuilder.from(oldFormEmbed).addFields({
+                                    name: '🗣️ Status Vouch',
+                                    value: isVouched ? '✅ Sudah melakukan Vouch' : '⏳ Belum melakukan vouches',
+                                    inline: false
+                                });
+                                await formMsg.edit({ embeds: [newFormEmbed] });
+
+                                await TicketVouch.create({
+                                    channelId: interaction.channel.id,
+                                    messageId: formMsg.id,
+                                    buyerId: buyerId,
+                                    vouched: isVouched
+                                });
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error('Gagal setup vouch tracking:', e.message);
+                }
 
                 // [UBAH NAMA CHANNEL JADI -DONE]
                 if (!interaction.channel.name.endsWith('-done')) {
@@ -2987,6 +3079,72 @@ for (let i = 0; i < targetGroups.length; i++) {
             await interaction.reply({ content: '⚠️ Gagal ganti nama channel — kemungkinan kena rate limit Discord (channel cuma boleh di-rename maks 2x per 10 menit). Coba lagi sebentar.', flags: MessageFlags.Ephemeral });
         }
         return;
+    }
+
+    // ==================================================
+    // --- COMMAND: EDIT FORM TIKET ---
+    // ==================================================
+    if (command === 'editform') {
+        const allowedRolesEditForm = ['1489612423521374309', '1489612221544665231', '1519076541055897670']; // Owner, Handler, Partner
+        if (!interaction.member.roles.cache.some(r => allowedRolesEditForm.includes(r.id))) {
+            return interaction.reply({ content: '❌ Command ini khusus Owner, Handler, dan Partner.', flags: MessageFlags.Ephemeral });
+        }
+
+        const allowedCategoriesEditForm = ['1488785950011166790', '1522155806475419788', '1545837833145679973'];
+        if (!allowedCategoriesEditForm.includes(interaction.channel.parentId)) {
+            return interaction.reply({ content: '❌ Command ini cuma bisa dipakai di dalam channel tiket!', flags: MessageFlags.Ephemeral });
+        }
+
+        const newUsername = interaction.options.getString('username');
+        const newRobux = interaction.options.getInteger('robux');
+
+        if (!newUsername && newRobux === null) {
+            return interaction.reply({ content: '❌ Isi minimal salah satu: `username` atau `robux`.', flags: MessageFlags.Ephemeral });
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        try {
+            const messages = await interaction.channel.messages.fetch({ limit: 5, after: interaction.channel.id });
+            const formMsg = messages.find(m => m.author.id === '1490582060308369479' && m.embeds[0]?.title?.startsWith('🎫 Order Tiket'));
+
+            if (!formMsg) {
+                return interaction.editReply({ content: '❌ Form tiket tidak ditemukan di channel ini (bukan channel tiket, atau form-nya sudah dihapus).' });
+            }
+
+            const oldEmbed = formMsg.embeds[0];
+            let usernameFound = false, robuxFound = false;
+            const fields = oldEmbed.fields.map(f => {
+                if (newUsername && f.name.includes('Username Roblox')) {
+                    usernameFound = true;
+                    return { name: f.name, value: `\`${newUsername}\``, inline: f.inline };
+                }
+                if (newRobux !== null && f.name.includes('Jumlah Robux')) {
+                    robuxFound = true;
+                    return { name: f.name, value: `**${newRobux} R$**`, inline: f.inline };
+                }
+                return f;
+            });
+
+            if (newUsername && !usernameFound) {
+                return interaction.editReply({ content: '❌ Field "Username Roblox" tidak ditemukan di form tiket ini (tipe tiket ini mungkin tidak punya field tersebut).' });
+            }
+            if (newRobux !== null && !robuxFound) {
+                return interaction.editReply({ content: '❌ Field "Jumlah Robux" tidak ditemukan di form tiket ini (tipe tiket ini mungkin tidak punya field tersebut).' });
+            }
+
+            const newEmbed = EmbedBuilder.from(oldEmbed).setFields(fields);
+            await formMsg.edit({ embeds: [newEmbed] });
+
+            const changes = [];
+            if (newUsername) changes.push(`Username Roblox → \`${newUsername}\``);
+            if (newRobux !== null) changes.push(`Jumlah Robux → **${newRobux} R$**`);
+
+            return interaction.editReply({ content: `✅ Form tiket berhasil diupdate:\n${changes.join('\n')}` });
+        } catch (err) {
+            console.error('Gagal editform:', err.message);
+            return interaction.editReply({ content: '❌ Gagal update form tiket. Coba lagi.' });
+        }
     }
 
     // ==================================================
