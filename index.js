@@ -919,6 +919,7 @@ async function fetchGroupPendingInfo(groupId) {
     const cutoff = Date.now() - PENDING_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
     const info = { pending: 0, pendingCount: 0, refundedCount: 0, refundedAmount: 0 };
     let cursor = '';
+    let pagesWithoutPending = 0; // berhenti lebih awal kalau sudah lewat zona pending
 
     for (let page = 0; page < PENDING_MAX_PAGES; page++) {
         const url = `https://economy.roblox.com/v2/groups/${groupId}/transactions?transactionType=Sale&limit=100&sortOrder=Desc${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
@@ -936,6 +937,7 @@ async function fetchGroupPendingInfo(groupId) {
         }
 
         let reachedOld = false;
+        let pendingInThisPage = 0;
         for (const tx of items) {
             const createdTime = new Date(tx.created).getTime();
             if (createdTime && createdTime < cutoff) { reachedOld = true; break; }
@@ -949,30 +951,51 @@ async function fetchGroupPendingInfo(groupId) {
             if (tx.isPending === true) {
                 info.pending += amount;
                 info.pendingCount += 1;
+                pendingInThisPage += 1;
             }
         }
 
-        if (reachedOld || !res.data?.nextPageCursor || items.length === 0) break;
+        // Transaksi diurutkan dari yang terbaru. Pending selalu ada di bagian paling baru,
+        // jadi kalau 2 halaman berturut-turut (200 transaksi) sudah "Dibayar" semua, sisanya pasti juga sudah dibayar.
+        pagesWithoutPending = pendingInThisPage > 0 ? 0 : pagesWithoutPending + 1;
+
+        if (reachedOld || pagesWithoutPending >= 2 || !res.data?.nextPageCursor || items.length === 0) break;
         cursor = res.data.nextPageCursor;
         await sleepMs(400); // jeda antar halaman, ramah rate limit
     }
     return info;
 }
 
+const pendingErrorLogged = new Set(); // cegah log error yang sama muncul tiap 5 menit
+
 async function refreshPendingCache() {
     if (isPendingScanRunning) return; // jangan dobel kalau scan sebelumnya belum selesai
+    // Akun dummy dipakai bersama /cek-eligible & /cek-transaksi -> jangan rebutan, biar mereka tidak kena rate limit
+    if (isCheckingEligible || isCheckingTransaksi) {
+        setTimeout(refreshPendingCache, 60 * 1000); // coba lagi 1 menit lagi
+        return;
+    }
     isPendingScanRunning = true;
     try {
         for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
+            // Kalau di tengah scan ada yang pakai /cek-eligible atau /cek-transaksi, mundur dulu
+            if (isCheckingEligible || isCheckingTransaksi) {
+                setTimeout(refreshPendingCache, 60 * 1000);
+                return;
+            }
             try {
                 const info = await fetchGroupPendingInfo(grp.groupId);
                 pendingCache[num] = { ...info, ok: true };
+                if (pendingErrorLogged.delete(num)) console.log(`✅ [PENDING] Community ${num} (${grp.name}) kembali normal.`);
             } catch (e) {
                 const status = e.response?.status;
-                if (status === 401 || status === 403) {
-                    console.error(`❌ [PENDING] Akun dummy tidak punya akses transaksi Community ${num} (${grp.name}). Cek izin "lihat pendapatan/transaksi grup" & cookie.`);
-                } else {
-                    console.error(`⚠️ [PENDING] Gagal scan Community ${num} (${grp.name}):`, status || e.message);
+                if (!pendingErrorLogged.has(num)) {
+                    pendingErrorLogged.add(num);
+                    if (status === 401 || status === 403) {
+                        console.error(`❌ [PENDING] Akun dummy tidak punya akses transaksi Community ${num} (${grp.name}). Cek izin "lihat pendapatan/transaksi grup" & cookie.`);
+                    } else {
+                        console.error(`⚠️ [PENDING] Gagal scan Community ${num} (${grp.name}):`, status || e.message);
+                    }
                 }
                 // Data lama tetap dipakai (ditandai), jangan langsung jadi 0
                 pendingCache[num] = pendingCache[num] ? { ...pendingCache[num], ok: false } : { ok: false };
@@ -1178,29 +1201,50 @@ async function buildPanelStockEmbed() {
 }
 
 // Update pesan panel yang tersimpan di DB. Self-healing: kalau channel/pesan sudah tidak ada, DB dibersihkan.
+// Kode error Discord: 10003 = Unknown Channel, 10008 = Unknown Message (benar-benar sudah dihapus).
+let isPanelUpdating = false;
+let panelUpdateQueued = false;
 async function updatePanelStockMessage() {
-    let panel;
+    // Cegah 2 update jalan bersamaan (interval 20 detik + update dari invoice) -> hasil lama bisa menimpa yang baru
+    if (isPanelUpdating) { panelUpdateQueued = true; return; }
+    isPanelUpdating = true;
     try {
-        panel = await PanelStock.findOne();
-    } catch (e) {
-        console.error('Gagal ambil data PanelStock:', e.message);
-        return;
-    }
-    if (!panel) return;
+        let panel;
+        try {
+            panel = await PanelStock.findOne();
+        } catch (e) {
+            console.error('Gagal ambil data PanelStock:', e.message);
+            return;
+        }
+        if (!panel) return;
 
-    try {
-        const channel = await client.channels.fetch(panel.channelId).catch(() => null);
-        if (!channel) { await PanelStock.deleteOne({ _id: panel._id }); return; }
-        const msg = await channel.messages.fetch(panel.messageId).catch(() => null);
-        if (!msg) { await PanelStock.deleteOne({ _id: panel._id }); return; }
+        try {
+            let fetchError = null;
+            const channel = await client.channels.fetch(panel.channelId).catch(err => { fetchError = err; return null; });
+            if (!channel) {
+                // Hapus dari DB HANYA kalau channel memang sudah tidak ada, bukan karena gangguan sementara
+                if (fetchError?.code === 10003) await PanelStock.deleteOne({ _id: panel._id });
+                return;
+            }
+            const msg = await channel.messages.fetch(panel.messageId).catch(err => { fetchError = err; return null; });
+            if (!msg) {
+                if (fetchError?.code === 10008) await PanelStock.deleteOne({ _id: panel._id });
+                return;
+            }
 
-        const embed = await buildPanelStockEmbed();
-        await msg.edit({ embeds: [embed] });
-    } catch (e) {
-        console.error('Gagal update Panel Stock:', e.message);
+            const embed = await buildPanelStockEmbed();
+            await msg.edit({ embeds: [embed] });
+        } catch (e) {
+            console.error('Gagal update Panel Stock:', e.message);
+        }
+    } finally {
+        isPanelUpdating = false;
+        if (panelUpdateQueued) {
+            panelUpdateQueued = false;
+            schedulePanelStockUpdate(); // ada permintaan update selama proses tadi -> jalankan sekali lagi
+        }
     }
 }
-
 // Debounce — supaya kalau beberapa invoice berubah beruntun dalam waktu singkat,
 // panel tidak di-edit berkali-kali (hemat rate limit Discord & CPU).
 let panelStockTimeout = null;
