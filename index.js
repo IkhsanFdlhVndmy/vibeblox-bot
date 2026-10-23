@@ -1146,9 +1146,8 @@ async function buildPanelStockEmbed() {
         overviewFields.push({ name: '\u200b', value: summaryLines.join('\n').slice(0, 1024), inline: false });
     }
 
-    // --- Section 1: daftar per-tiket di DESCRIPTION (bukan field) ---
-    // Field Discord WAJIB punya judul; judul kosong (\u200b) tetap makan 1 baris -> itu sumber gap atas-bawah.
-    // Description tidak punya judul, jadi daftar tersambung rapat tanpa gap.
+    // --- Section 1: daftar per-tiket, dipecah ke beberapa FIELD (maks 1024 karakter/field) ---
+    // (Daftar panjang di description terbukti terpotong saat dirender Discord, jadi pakai field seperti versi lama.)
     const grouped = {};
     for (const inv of activeInvoices) {
         if (!grouped[inv.channelId]) grouped[inv.channelId] = { channelName: inv.channelName, total: 0, count: 0 };
@@ -1157,45 +1156,63 @@ async function buildPanelStockEmbed() {
     }
     const groupedArr = Object.values(grouped);
 
-    // Jatah karakter: description maks 4096, total 1 embed maks 6000
-    const usedByOthers = 40 /* title */ + overviewFields.reduce((s, f) => s + f.name.length + f.value.length, 0);
-    const listBudget = Math.min(4096, 6000 - usedByOthers - 50);
+    // Batas total 1 embed = 6000 karakter (title + semua field). Kalau lewat, Discord MENOLAK update -> panel macet.
+    const overviewSize = overviewFields.reduce((s, f) => s + f.name.length + f.value.length, 0);
+    const listBudget = 6000 - 40 /* title */ - overviewSize - 150 /* cadangan */;
 
-    // Format normal (sama seperti sebelumnya) & format padat (dipakai OTOMATIS hanya kalau tiket terlalu banyak)
+    // Format normal (sama seperti versi lama). Format padat dipakai OTOMATIS hanya kalau tiket terlalu banyak.
+    // Jumlah invoice per tiket SELALU tampil di kedua format.
     const normalLine = (g, i) => `${i + 1}. **${g.channelName}** — \`${fmt(g.total)} Robux\` — ${g.count} invoice`;
-    const compactLine = (g, i) => `${i + 1}. **${g.channelName}** — \`${fmt(g.total)}\`${g.count > 1 ? ` · ${g.count} invoice` : ''}`;
+    const compactLine = (g, i) => `${i + 1}. **${g.channelName}** — \`${fmt(g.total)}\` — ${g.count} invoice`;
 
-    const buildList = (header, lineFn) => {
-        let text = header;
+    // Susun baris jadi beberapa field. Field pertama memakai judul section (tanpa gap kosong di bawah judul).
+    const buildListFields = (header, lineFn) => {
+        const fields = [];
+        let chunk = '';
+        let used = header.length;
         let shown = 0;
-        const reserve = 70; // ruang untuk baris "...dan N tiket lainnya"
+        const reserve = 80; // ruang untuk baris "...dan N tiket lainnya"
         for (let i = 0; i < groupedArr.length; i++) {
-            const line = `\n${lineFn(groupedArr[i], i)}`;
-            if (text.length + line.length > listBudget - reserve) break;
-            text += line;
+            const line = lineFn(groupedArr[i], i);
+            if (used + line.length + 2 > listBudget - reserve) break;
+            if (chunk && (chunk.length + 1 + line.length) > 1000) {
+                fields.push(chunk);
+                used += 1; // nama field kosong (\u200b)
+                chunk = line;
+            } else {
+                chunk = chunk ? `${chunk}\n${line}` : line;
+            }
+            used += line.length + 1;
             shown++;
         }
-        return { text, shown };
+        if (chunk) fields.push(chunk);
+        return { fields, shown };
     };
 
-    let description;
+    const listHeaderNormal = `🎫 Invoice Aktif per Ticket (${groupedArr.length} tiket)`;
+    let listFields = [];
     if (groupedArr.length === 0) {
-        description = `🎫 **Invoice Aktif per Ticket (0 tiket)**\n*Belum ada invoice Community yang aktif saat ini.*`;
+        listFields.push({ name: listHeaderNormal, value: '*Belum ada invoice Community yang aktif saat ini.*', inline: false });
     } else {
-        let list = buildList(`🎫 **Invoice Aktif per Ticket (${groupedArr.length} tiket)**`, normalLine);
-        if (list.shown < groupedArr.length) {
-            // Tidak muat semua -> pakai format padat supaya sebanyak mungkin tiket tetap tampil
-            list = buildList(`🎫 **Invoice Aktif per Ticket (${groupedArr.length} tiket)** · *angka dalam Robux*`, compactLine);
+        let header = listHeaderNormal;
+        let built = buildListFields(header, normalLine);
+        if (built.shown < groupedArr.length) {
+            header = `🎫 Invoice Aktif per Ticket (${groupedArr.length} tiket) · angka dalam Robux`;
+            built = buildListFields(header, compactLine);
         }
-        description = list.text;
-        if (list.shown < groupedArr.length) {
-            const rest = groupedArr.slice(list.shown);
+        const chunks = built.fields;
+        if (built.shown < groupedArr.length) {
+            const rest = groupedArr.slice(built.shown);
             const restTotal = rest.reduce((s, g) => s + g.total, 0);
-            description += `\n*…dan ${rest.length} tiket lainnya (${fmt(restTotal)} Robux)*`;
+            const restInv = rest.reduce((s, g) => s + g.count, 0);
+            const note = `*…dan ${rest.length} tiket lainnya (${fmt(restTotal)} Robux · ${restInv} invoice)*`;
+            if (chunks.length && chunks[chunks.length - 1].length + 1 + note.length <= 1024) chunks[chunks.length - 1] += `\n${note}`;
+            else chunks.push(note);
         }
+        chunks.forEach((value, idx) => listFields.push({ name: idx === 0 ? header : '\u200b', value, inline: false }));
     }
 
-    embed.setDescription(description);
+    embed.addFields(listFields);
     embed.addFields(overviewFields);
     return embed;
 }
