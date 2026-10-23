@@ -1169,6 +1169,10 @@ client.on('channelUpdate', async (oldChannel, newChannel) => {
         // Diamkan saja — tidak kritikal
     }
 });
+
+// --- PANEL STOCK: kalau channel tiket dihapus MANUAL (bukan lewat tombol close),
+// pastikan invoice yang nyangkut di situ tetap ikut lepas dari tracking ---
+client.on('channelDelete', async (channel) => {
     try {
         if (!channel?.id) return;
 
