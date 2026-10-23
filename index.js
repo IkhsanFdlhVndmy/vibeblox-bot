@@ -1127,7 +1127,7 @@ async function buildPanelStockEmbed() {
     const summaryLines = [
         `💎 **Total Stock:** \`${fmt(totalStock)} Robux\``,
         `⏳ **Total Pending:** \`${fmt(totalPending)} Robux\``,
-        `🧾 **Total Ter-invoice:** \`${fmt(totalInvoiced)} Robux\` *(${activeInvoices.length} invoice)*`,
+        `🧾 **Ter-invoice:** \`${fmt(totalInvoiced)} Robux\` *(${activeInvoices.length} invoice)*`,
         `${sisaStock < 0 ? '🔴' : '🟢'} **Sisa Stock:** \`${fmt(sisaStock)} Robux\``
     ];
     if (sisaStock < 0) summaryLines.push('⚠️ **PERINGATAN: Total invoice sudah MELEBIHI stock!**');
