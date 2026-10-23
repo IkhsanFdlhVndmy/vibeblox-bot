@@ -3158,7 +3158,7 @@ for (let i = 0; i < targetGroups.length; i++) {
                 { id: '1064667246', name: 'Community 1 (BEJIRLAH)' },
                 { id: '1108229986', name: 'Community 2 (Vandamoy)' },
                 { id: '653724099', name: 'Community 3 (Maycomn)' },
-                { id: '617301345', name: 'Community 4 (VibeBlox Community)' }
+                { id: '617301345', name: 'Community 4 (Vibies)' }
             ];
             const now = Date.now();
             const cutoffOldest = now - (10 * 24 * 60 * 60 * 1000); // batas 10 hari ke belakang
