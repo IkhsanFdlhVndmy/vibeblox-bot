@@ -816,7 +816,7 @@ const RESTOCK_COMMUNITIES = {
     1: { name: 'BEJIRLAH', groupId: '1064667246' },
     2: { name: 'Vandamoy', groupId: '1108229986' },
     3: { name: 'Maycomn', groupId: '653724099' },
-    4: { name: 'VibeBlox Community', groupId: '617301345' }
+    4: { name: 'Vibies', groupId: '617301345' }
 };
 
 // "1,3" -> [1, 3] (nomor valid saja, dedup, urut)
@@ -2977,7 +2977,7 @@ Jumlah Robux: `;
                 { id: '1064667246', shortName: 'BEJIRLAH', url: 'https://www.roblox.com/communities/1064667246/BEJIRLAH-Community' },
                 { id: '1108229986', shortName: 'Vandamoy', url: 'https://www.roblox.com/id/communities/1108229986/Vandamoy' },
                 { id: '653724099', shortName: 'Maycomn', url: 'https://www.roblox.com/communities/653724099/Maycomn' },
-                { id: '617301345', shortName: 'VibeBlox Community', url: 'https://www.roblox.com/id/communities/617301345/VibeBlox-Community' }
+                { id: '617301345', shortName: 'Vibies', url: 'https://www.roblox.com/id/communities/617301345/VibeBlox-Community' }
             ];
 
             // Helper Waktu (Format Teks & Kalkulasi Remaining)
