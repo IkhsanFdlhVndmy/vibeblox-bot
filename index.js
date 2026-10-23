@@ -39,6 +39,113 @@ const client = new Client({
     }
 });
 
+// =====================================================================
+// === TICKET CATEGORY SYSTEM (5 KATEGORI + AUTO NAIK ANTRIAN) ===
+// =====================================================================
+// Urutan PENTING: index 0 = kategori paling atas (Ticket 1), dst.
+const TICKET_CATEGORY_IDS = [
+    '1488785950011166790', // Ticket 1 (Utama)
+    '1522155806475419788', // Ticket 2 (Backup)
+    '1545837833145679973', // Ticket 3 (Backup 2)
+    '1563087054798196846', // Ticket 4 (BARU)
+    '1563087326303887390'  // Ticket 5 (BARU)
+];
+const TICKET_CATEGORY_LIMIT = 50; // batas maksimal channel per kategori dari Discord
+const TICKET_STAFF_ROLES = ['1489612423521374309', '1489612221544665231', '1519076541055897670']; // Owner, Handler, Partner
+
+// Channel tiket yang sedang dalam proses close (jangan dipindah-pindah)
+const closingTicketChannels = new Set();
+
+// --- KUNCI ANTRIAN (MUTEX) ---
+// Semua proses "buka tiket" dan "geser antrian" lewat kunci ini satu per satu,
+// jadi tidak akan pernah tabrakan (misal: bot lagi mindahin channel, lalu ada yang open tiket).
+let ticketLockChain = Promise.resolve();
+function withTicketLock(task) {
+    const run = ticketLockChain.then(task, task);
+    ticketLockChain = run.catch(() => {}); // error satu tugas tidak boleh macetin antrian
+    return run;
+}
+
+// Cari kategori PERTAMA (paling atas) yang masih punya slot.
+// Karena auto-geser selalu menjaga kategori atas tetap penuh, ini otomatis jatuh ke posisi antrian yang benar.
+async function pickTicketCategory(guild) {
+    for (const catId of TICKET_CATEGORY_IDS) {
+        let cat = guild.channels.cache.get(catId);
+        if (!cat) {
+            cat = await guild.channels.fetch(catId).catch(err => {
+                console.error(`DEBUG: Gagal fetch kategori tiket ${catId}:`, err.message);
+                return null;
+            });
+        }
+        if (!cat) continue;
+        if (cat.children.cache.size < TICKET_CATEGORY_LIMIT) return cat.id;
+    }
+    return null; // semua kategori penuh
+}
+
+// Geser antrian: channel PALING AWAL dibuka di kategori bawah naik ke slot kosong di kategori atas,
+// beruntun (2 -> 1, 3 -> 2, 4 -> 3, 5 -> 4) sampai kategori atas penuh lagi.
+async function rebalanceTicketCategories(guild) {
+    const cats = TICKET_CATEGORY_IDS.map(id => guild.channels.cache.get(id)).filter(Boolean);
+    if (cats.length < 2) return;
+
+    // Hanya channel yang tercatat sebagai tiket di DB yang boleh dipindah
+    let ticketIds;
+    try {
+        ticketIds = new Set((await Ticket.find({}, 'channelId').lean()).map(t => t.channelId));
+    } catch (e) {
+        console.error('❌ Rebalance tiket: gagal baca DB:', e.message);
+        return;
+    }
+
+    const isMovable = (c) => c.type === 0 && ticketIds.has(c.id) && !closingTicketChannels.has(c.id);
+    let moved = 0;
+
+    for (let i = 0; i < cats.length - 1; i++) {
+        const target = cats[i];
+        let guard = 0;
+
+        while (target.children.cache.size < TICKET_CATEGORY_LIMIT && guard++ < TICKET_CATEGORY_LIMIT) {
+            // Ambil channel paling awal dibuka dari kategori terdekat di bawahnya yang masih ada isinya
+            let candidate = null;
+            for (let j = i + 1; j < cats.length && !candidate; j++) {
+                const list = [...cats[j].children.cache.filter(isMovable).values()]
+                    .sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+                if (list.length) candidate = list[0];
+            }
+            if (!candidate) return finishRebalance(moved); // kategori bawah sudah kosong semua
+
+            try {
+                await candidate.setParent(target.id, { lockPermissions: false }); // izin per-channel tetap utuh
+                // Taruh di paling bawah kategori tujuan (karena dia antrian setelah channel yang sudah ada)
+                const siblings = guild.channels.cache.filter(c => c.parentId === target.id && [0, 5].includes(c.type));
+                await candidate.setPosition(siblings.size - 1).catch(() => {});
+                moved++;
+            } catch (err) {
+                console.error(`⚠️ Gagal memindah ${candidate.name} ke ${target.name}:`, err.message);
+                ticketIds.delete(candidate.id); // lewati channel ini, jangan sampai loop terus
+            }
+        }
+    }
+    finishRebalance(moved);
+}
+function finishRebalance(moved) {
+    if (moved > 0) console.log(`✅ Auto-geser antrian tiket: ${moved} channel dinaikkan.`);
+}
+
+// Jadwalkan geser antrian (didebounce, biar close beruntun cuma diproses sekali)
+const pendingRebalance = new Set();
+function scheduleTicketRebalance(guild, delayMs = 1500) {
+    if (!guild || pendingRebalance.has(guild.id)) return;
+    pendingRebalance.add(guild.id);
+    setTimeout(() => {
+        withTicketLock(async () => {
+            pendingRebalance.delete(guild.id); // close baru selama proses berjalan -> dijadwalkan ulang
+            await rebalanceTicketCategories(guild);
+        }).catch(e => console.error('❌ Error rebalance tiket:', e));
+    }, delayMs);
+}
+
 mongoose.connect(process.env.MONGODB_URI, {
     maxPoolSize: 20,                 // batasi koneksi paralel (default 100, kebesaran untuk RAM 256MB)
     minPoolSize: 1,
@@ -429,8 +536,8 @@ client.once('ready', async () => {
     // per-CHANNEL tiket (bukan di kategori-nya sendiri) untuk kategori 2 & 3. Ini nyamain biar konsisten,
     // dengan harapan (BUKAN jaminan) bisa bantu soal collapse di client admin.
     try {
-        const categoriesToFix = ['1522155806475419788', '1545837833145679973']; // Backup & Backup 2
-        const staffRoles = ['1489612423521374309', '1489612221544665231', '1519076541055897670']; // Owner, Handler, Partner
+        const categoriesToFix = TICKET_CATEGORY_IDS.slice(1); // Ticket 2, 3, 4 & 5
+        const staffRoles = TICKET_STAFF_ROLES; // Owner, Handler, Partner
 
         for (const guild of client.guilds.cache.values()) {
             for (const catId of categoriesToFix) {
@@ -445,9 +552,15 @@ client.once('ready', async () => {
                 }
             }
         }
-        console.log('✅ Sinkronisasi izin kategori 2 & 3 selesai.');
+        console.log('✅ Sinkronisasi izin kategori 2 - 5 selesai.');
     } catch (e) {
         console.error('❌ Gagal sinkronisasi izin kategori:', e.message);
+    }
+
+    // --- AUTO GESER ANTRIAN TIKET: rapikan sekali saat bot online
+    // (jaga-jaga ada tiket yang di-close waktu bot sedang mati) ---
+    for (const guild of client.guilds.cache.values()) {
+        scheduleTicketRebalance(guild, 3000);
     }
     
        try {
@@ -1047,6 +1160,14 @@ client.on('messageDelete', async (message) => {
 client.on('channelDelete', async (channel) => {
     try {
         if (!channel?.id) return;
+
+        // --- AUTO GESER ANTRIAN: ada channel tiket hilang -> slot kosong -> naikkan antrian ---
+        closingTicketChannels.delete(channel.id);
+        if (channel.guild && TICKET_CATEGORY_IDS.includes(channel.parentId)) {
+            await Ticket.deleteOne({ channelId: channel.id }).catch(() => {}); // kalau dihapus manual
+            scheduleTicketRebalance(channel.guild);
+        }
+
         const removed = await InvoiceTracker.deleteMany({ channelId: channel.id });
         if (removed.deletedCount > 0) schedulePanelStockUpdate();
 
@@ -1307,46 +1428,7 @@ client.on('interactionCreate', async (interaction) => {
         }
         // =====================================================================
 
-        // --- LOGIKA OVERFLOW CATEGORY TICKET ---
-        const primaryCategoryId = '1488785950011166790'; // Kategori Utama
-        const backupCategoryId = '1522155806475419788'; // Kategori Backup
-        const backup2CategoryId = '1545837833145679973'; // Kategori Backup 2 (baru)
-
-        let activeCategoryId = primaryCategoryId;
-        try {
-            let primaryCat = interaction.guild.channels.cache.get(primaryCategoryId);
-            if (!primaryCat) {
-                primaryCat = await interaction.guild.channels.fetch(primaryCategoryId).catch(err => {
-                    console.error("DEBUG: Gagal fetch primary category:", err.message);
-                    return null;
-                });
-            }
-
-            if (primaryCat && primaryCat.children.cache.size >= 50) {
-                // Primary penuh -> cek backup
-                let backupCat = interaction.guild.channels.cache.get(backupCategoryId);
-                if (!backupCat) {
-                    backupCat = await interaction.guild.channels.fetch(backupCategoryId).catch(err => {
-                        console.error("DEBUG: Gagal fetch backup category:", err.message);
-                        return null;
-                    });
-                }
-
-                if (backupCat && backupCat.children.cache.size >= 50) {
-                    // Backup JUGA penuh -> lempar ke backup 2
-                    activeCategoryId = backup2CategoryId;
-                } else if (backupCat) {
-                    activeCategoryId = backupCategoryId;
-                } else {
-                    console.warn("DEBUG: Kategori backup tidak ditemukan! Fallback tetap ke backup (biar error kelihatan jelas).");
-                    activeCategoryId = backupCategoryId;
-                }
-            } else if (!primaryCat) {
-                console.warn("DEBUG: Kategori utama tidak ditemukan!");
-            }
-        } catch (err) {
-            console.error("DEBUG: Error tidak terduga pada logika kategori:", err);
-        }
+        // --- KATEGORI TICKET: dipilih di dalam kunci antrian (lihat withTicketLock di bawah) ---
 
         const roleOwner = '1489612423521374309';
         const roleHandler = '1489612221544665231';
@@ -1387,14 +1469,22 @@ client.on('interactionCreate', async (interaction) => {
                 mmPings += `<@${foundPembeli.id}> <@${foundPenjual.id}>`;
             }
 
-            // Buat Channel
-            const ticketChannel = await interaction.guild.channels.create({
-                name: channelName,
-                type: 0, // Text Channel
-                parent: activeCategoryId,
-                permissionOverwrites: permissionOverwrites
+            // Buat Channel — DI DALAM KUNCI ANTRIAN, jadi tidak tabrakan dengan proses auto-geser
+            const ticketChannel = await withTicketLock(async () => {
+                const activeCategoryId = await pickTicketCategory(interaction.guild);
+                if (!activeCategoryId) return null; // semua kategori penuh
+                return interaction.guild.channels.create({
+                    name: channelName,
+                    type: 0, // Text Channel
+                    parent: activeCategoryId,
+                    permissionOverwrites: permissionOverwrites
+                });
             });
 
+            if (!ticketChannel) {
+                return interaction.editReply('❌ Semua kategori tiket sedang penuh. Silakan coba lagi beberapa saat lagi.');
+            }
+            
             // Simpan ke DB
             await Ticket.create({
                 channelId: ticketChannel.id,
@@ -1539,8 +1629,9 @@ client.on('interactionCreate', async (interaction) => {
             if (isUpdating.has(`tc_close_${msgId}`)) return interaction.reply({ content: '⏳ Tiket sedang ditutup...', flags: MessageFlags.Ephemeral });
             isUpdating.add(`tc_close_${msgId}`);
 
+            closingTicketChannels.add(interaction.channel.id); // jangan dipindah saat sedang ditutup
             await interaction.reply({ content: '🔒 Menyiapkan data dan menutup tiket... Channel akan terhapus sebentar lagi.' });
-
+            
             try {
                 // 1. Buat Text Transcript Hemat RAM (Max 100 pesan)
                 const msgs = await interaction.channel.messages.fetch({ limit: 100 });
@@ -1589,6 +1680,7 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.channel.delete();
             } catch (err) {
                 console.error("Gagal saat close tiket:", err);
+                closingTicketChannels.delete(interaction.channel.id); // gagal hapus -> boleh dipindah lagi
             } finally {
                 isUpdating.delete(`tc_close_${msgId}`);
             }
@@ -3126,7 +3218,7 @@ for (let i = 0; i < targetGroups.length; i++) {
         }
 
         // Wajib dipakai di dalam channel ticket, sama seperti /invoice
-        const allowedTicketCategoriesPO = ['1488785950011166790', '1522155806475419788', '1545837833145679973']; // ID Kategori Utama, Backup & Backup 2
+        const allowedTicketCategoriesPO = TICKET_CATEGORY_IDS; 
         if (!allowedTicketCategoriesPO.includes(interaction.channel.parentId)) {
             return interaction.reply({ content: '❌ Perintah pre-order hanya bisa digunakan di dalam channel Ticket!', flags: MessageFlags.Ephemeral });
         }
@@ -3158,7 +3250,7 @@ for (let i = 0; i < targetGroups.length; i++) {
             return interaction.reply({ content: '❌ Command ini khusus Owner, Handler, dan Partner.', flags: MessageFlags.Ephemeral });
         }
 
-        const allowedCategoriesEditForm = ['1488785950011166790', '1522155806475419788', '1545837833145679973'];
+        const allowedCategoriesEditForm = TICKET_CATEGORY_IDS;
         if (!allowedCategoriesEditForm.includes(interaction.channel.parentId)) {
             return interaction.reply({ content: '❌ Command ini cuma bisa dipakai di dalam channel tiket!', flags: MessageFlags.Ephemeral });
         }
@@ -3267,7 +3359,7 @@ for (let i = 0; i < targetGroups.length; i++) {
         }
 
         // [VALIDASI TICKET CATEGORY & RENAME LOGIC]
-        const allowedTicketCategories = ['1488785950011166790', '1522155806475419788', '1545837833145679973']; // ID Kategori Utama, Backup & Backup 2
+        const allowedTicketCategories = TICKET_CATEGORY_IDS; // ID Kategori Utama, Backup & Backup 2
         if (!allowedTicketCategories.includes(interaction.channel.parentId)) {
             return interaction.reply({ content: '❌ Perintah invoice hanya bisa digunakan di dalam channel Ticket!', flags: MessageFlags.Ephemeral });
         }
@@ -3367,7 +3459,7 @@ for (let i = 0; i < targetGroups.length; i++) {
         }
         
         // [VALIDASI TICKET CATEGORY & RENAME LOGIC]
-        const allowedTicketCategories = ['1488785950011166790', '1522155806475419788', '1545837833145679973']; // ID Kategori Utama, Backup & Backup 2
+        const allowedTicketCategories = TICKET_CATEGORY_IDS; // ID Kategori Utama, Backup & Backup 2
         if (!allowedTicketCategories.includes(interaction.channel.parentId)) {
             return interaction.reply({ content: '❌ Perintah invoice hanya bisa digunakan di dalam channel Ticket!', flags: MessageFlags.Ephemeral });
         }
