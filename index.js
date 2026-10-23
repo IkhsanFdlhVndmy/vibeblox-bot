@@ -579,7 +579,12 @@ client.once('ready', async () => {
     // dan sebagai self-heal kalau ada event yang sempat terlewat pas bot offline) ---
     updatePanelStockMessage();
     setInterval(updatePanelStockMessage, 20000);
+    // --- PANEL STOCK: scan PENDING ROBUX tiap community (lebih jarang, tiap 5 menit) ---
+    refreshPendingCache();
+    setInterval(refreshPendingCache, PENDING_REFRESH_MS);
 });
+
+
 
 // === FUNGSI AUTO ROLE PEMBELI ===
 async function updateSpenderRoles(member, userData) {
@@ -881,6 +886,106 @@ async function fetchGroupFunds(groupId) {
     }
 }
 
+
+// ==================================================
+// --- PANEL STOCK: PENDING ROBUX PER COMMUNITY (dari riwayat transaksi) ---
+// ==================================================
+// Dibaca dari riwayat transaksi "Sale" tiap community (akun dummy, cookie sama dengan cek-eligible).
+// Status di web Roblox:
+//   "Pending"           -> isPending: true  -> dihitung sebagai pending
+//   "Dibayar"           -> isPending: false -> sudah masuk Dana Komunitas, tidak dihitung
+//   "Dana Dikembalikan" -> dana batal masuk -> dicatat kecil, tidak dihitung pending
+// Discan TERPISAH tiap 5 menit (bukan tiap 20 detik seperti saldo) supaya tidak kena rate limit Roblox.
+const PENDING_LOOKBACK_DAYS = 45;              // transaksi lebih lama dari ini dianggap pasti sudah selesai
+const PENDING_MAX_PAGES = 40;                  // pengaman: maks 40 x 100 transaksi per community per scan
+const PENDING_REFRESH_MS = 5 * 60 * 1000;      // scan ulang tiap 5 menit
+const pendingCache = {};                       // { [nomorCommunity]: { pending, pendingCount, refundedCount, refundedAmount, ok } }
+let pendingLastUpdated = null;
+let isPendingScanRunning = false;
+let pendingSampleLogged = false;
+
+const sleepMs = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Deteksi status "Dana Dikembalikan".
+// Nama field-nya tidak didokumentasikan resmi oleh Roblox, jadi dicek dari beberapa kemungkinan sekaligus.
+function isRefundedTx(tx) {
+    if (!tx) return false;
+    if (tx.isRefunded === true || tx.refunded === true || tx.isReverted === true || tx.isReversed === true) return true;
+    const status = String(tx.transactionStatus ?? tx.status ?? tx.state ?? tx.saleStatus ?? '').toLowerCase();
+    return /refund|revers|revert|cancel|chargeback|dikembalikan/.test(status);
+}
+
+async function fetchGroupPendingInfo(groupId) {
+    const cutoff = Date.now() - PENDING_LOOKBACK_DAYS * 24 * 60 * 60 * 1000;
+    const info = { pending: 0, pendingCount: 0, refundedCount: 0, refundedAmount: 0 };
+    let cursor = '';
+
+    for (let page = 0; page < PENDING_MAX_PAGES; page++) {
+        const url = `https://economy.roblox.com/v2/groups/${groupId}/transactions?transactionType=Sale&limit=100&sortOrder=Desc${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
+        const res = await axios.get(url, {
+            headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` },
+            timeout: 15000
+        });
+
+        const items = Array.isArray(res.data?.data) ? res.data.data : [];
+
+        // Log 1x per bot nyala: contoh isi transaksi, buat memastikan nama field status refund
+        if (!pendingSampleLogged && items.length > 0) {
+            pendingSampleLogged = true;
+            console.log('[PENDING] Contoh field transaksi Roblox:', JSON.stringify(items[0]).slice(0, 600));
+        }
+
+        let reachedOld = false;
+        for (const tx of items) {
+            const createdTime = new Date(tx.created).getTime();
+            if (createdTime && createdTime < cutoff) { reachedOld = true; break; }
+
+            const amount = Number(tx.currency?.amount) || 0;
+            if (isRefundedTx(tx)) {
+                info.refundedCount += 1;
+                info.refundedAmount += amount;
+                continue; // dana dikembalikan -> BUKAN pending
+            }
+            if (tx.isPending === true) {
+                info.pending += amount;
+                info.pendingCount += 1;
+            }
+        }
+
+        if (reachedOld || !res.data?.nextPageCursor || items.length === 0) break;
+        cursor = res.data.nextPageCursor;
+        await sleepMs(400); // jeda antar halaman, ramah rate limit
+    }
+    return info;
+}
+
+async function refreshPendingCache() {
+    if (isPendingScanRunning) return; // jangan dobel kalau scan sebelumnya belum selesai
+    isPendingScanRunning = true;
+    try {
+        for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
+            try {
+                const info = await fetchGroupPendingInfo(grp.groupId);
+                pendingCache[num] = { ...info, ok: true };
+            } catch (e) {
+                const status = e.response?.status;
+                if (status === 401 || status === 403) {
+                    console.error(`❌ [PENDING] Akun dummy tidak punya akses transaksi Community ${num} (${grp.name}). Cek izin "lihat pendapatan/transaksi grup" & cookie.`);
+                } else {
+                    console.error(`⚠️ [PENDING] Gagal scan Community ${num} (${grp.name}):`, status || e.message);
+                }
+                // Data lama tetap dipakai (ditandai), jangan langsung jadi 0
+                pendingCache[num] = pendingCache[num] ? { ...pendingCache[num], ok: false } : { ok: false };
+            }
+            await sleepMs(800); // jeda antar community
+        }
+        pendingLastUpdated = new Date();
+        schedulePanelStockUpdate();
+    } finally {
+        isPendingScanRunning = false;
+    }
+}
+
 // Catatan: markdown heading (#) Discord CUMA render besar kalau ditaruh di description embed,
 // TIDAK bekerja di dalam field value. Makanya build via description (bukan addFields) biar tulisan
 // amount/countdown bisa besar seperti versi lama, dan gak perlu backtick (`) yang bikin kotak kecil jelek.
@@ -970,7 +1075,57 @@ async function buildPanelStockEmbed() {
         .setTitle('📊 VibeBlox Stock Tracking Panel')
         .setTimestamp();
 
-    // --- Section 1: daftar per-tiket (di-gabung per channel) — SEMUA ditampilkan, tanpa limit ---
+    // --- Section 2: stock overview (dibangun duluan supaya tahu sisa jatah karakter untuk daftar tiket) ---
+    const fmt = (n) => Number(n).toLocaleString('id-ID');
+    let totalPending = 0;
+    let anyPendingFailed = false;
+    const communityLines = [];
+    for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
+        const val = fundsPerCommunity[num];
+        communityLines.push(`🏢 **Community ${num} (${grp.name}):** ${val !== null ? `\`${fmt(val)} Robux\`` : '⚠️ *Gagal ambil data*'}`);
+
+        const p = pendingCache[num];
+        if (!p) {
+            communityLines.push('└ ⏳ Pending: *memuat...*');
+        } else if (typeof p.pending !== 'number') {
+            communityLines.push('└ ⏳ Pending: ⚠️ *gagal ambil data*');
+            anyPendingFailed = true;
+        } else {
+            totalPending += p.pending;
+            if (!p.ok) anyPendingFailed = true;
+            communityLines.push(`└ ⏳ Pending: \`${fmt(p.pending)} Robux\`${p.ok ? '' : ' *(data lama)*'}`);
+            if (p.refundedCount > 0) {
+                const refundAmt = p.refundedAmount > 0 ? ` · ${fmt(p.refundedAmount)} Robux` : '';
+                communityLines.push(`└ *↩️ ${p.refundedCount}x dana dikembalikan${refundAmt}*`);
+            }
+        }
+    }
+
+    const summaryLines = [
+        `💎 **Total Stock:** \`${fmt(totalStock)} Robux\``,
+        `⏳ **Total Pending:** \`${fmt(totalPending)} Robux\``,
+        `🧾 **Total Ter-invoice:** \`${fmt(totalInvoiced)} Robux\` *(${activeInvoices.length} invoice)*`,
+        `${sisaStock < 0 ? '🔴' : '🟢'} **Sisa Stock:** \`${fmt(sisaStock)} Robux\``
+    ];
+    if (sisaStock < 0) summaryLines.push('⚠️ **PERINGATAN: Total invoice sudah MELEBIHI stock!**');
+    if (anyFundsFailed || anyPendingFailed) summaryLines.push('*(Sebagian data gagal ditarik, kemungkinan sementara — akan otomatis re-sync)*');
+    if (pendingLastUpdated) {
+        summaryLines.push(`*Pending dicek tiap 5 menit · terakhir <t:${Math.floor(pendingLastUpdated.getTime() / 1000)}:R> · refund = ${PENDING_LOOKBACK_DAYS} hari terakhir*`);
+    }
+
+    // Limit Discord: 1 field maks 1024 karakter -> kalau kepanjangan, pecah jadi 2 field (per-community & ringkasan)
+    const overviewFields = [];
+    const fullOverview = `${communityLines.join('\n')}\n\n${summaryLines.join('\n')}`;
+    if (fullOverview.length <= 1024) {
+        overviewFields.push({ name: '📦 Stock Overview', value: fullOverview, inline: false });
+    } else {
+        overviewFields.push({ name: '📦 Stock Overview', value: communityLines.join('\n').slice(0, 1024), inline: false });
+        overviewFields.push({ name: '\u200b', value: summaryLines.join('\n').slice(0, 1024), inline: false });
+    }
+
+    // --- Section 1: daftar per-tiket di DESCRIPTION (bukan field) ---
+    // Field Discord WAJIB punya judul; judul kosong (\u200b) tetap makan 1 baris -> itu sumber gap atas-bawah.
+    // Description tidak punya judul, jadi daftar tersambung rapat tanpa gap.
     const grouped = {};
     for (const inv of activeInvoices) {
         if (!grouped[inv.channelId]) grouped[inv.channelId] = { channelName: inv.channelName, total: 0, count: 0 };
@@ -979,42 +1134,46 @@ async function buildPanelStockEmbed() {
     }
     const groupedArr = Object.values(grouped);
 
-    embed.addFields({ name: `🎫 Invoice Aktif per Ticket (${groupedArr.length} tiket)`, value: '\u200b', inline: false });
+    // Jatah karakter: description maks 4096, total 1 embed maks 6000
+    const usedByOthers = 40 /* title */ + overviewFields.reduce((s, f) => s + f.name.length + f.value.length, 0);
+    const listBudget = Math.min(4096, 6000 - usedByOthers - 50);
 
-    if (groupedArr.length === 0) {
-        embed.addFields({ name: '\u200b', value: '*Belum ada invoice Community yang aktif saat ini.*', inline: false });
-    } else {
-        const lines = groupedArr.map((g, i) => `${i + 1}. **${g.channelName}** — \`${g.total.toLocaleString('id-ID')} Robux\` — ${g.count} invoice`);
+    // Format normal (sama seperti sebelumnya) & format padat (dipakai OTOMATIS hanya kalau tiket terlalu banyak)
+    const normalLine = (g, i) => `${i + 1}. **${g.channelName}** — \`${fmt(g.total)} Robux\` — ${g.count} invoice`;
+    const compactLine = (g, i) => `${i + 1}. **${g.channelName}** — \`${fmt(g.total)}\`${g.count > 1 ? ` · ${g.count} invoice` : ''}`;
 
-        // Pecah jadi beberapa field kalau kepanjangan (limit Discord: 1024 karakter/field)
-        // supaya SEMUA tiket tetap muncul, tanpa ada yang kepotong/hilang.
-        let chunk = '';
-        for (const line of lines) {
-            if ((chunk + '\n' + line).length > 1000) {
-                embed.addFields({ name: '\u200b', value: chunk, inline: false });
-                chunk = line;
-            } else {
-                chunk = chunk ? `${chunk}\n${line}` : line;
-            }
+    const buildList = (header, lineFn) => {
+        let text = header;
+        let shown = 0;
+        const reserve = 70; // ruang untuk baris "...dan N tiket lainnya"
+        for (let i = 0; i < groupedArr.length; i++) {
+            const line = `\n${lineFn(groupedArr[i], i)}`;
+            if (text.length + line.length > listBudget - reserve) break;
+            text += line;
+            shown++;
         }
-        if (chunk) embed.addFields({ name: '\u200b', value: chunk, inline: false });
+        return { text, shown };
+    };
+
+    let description;
+    if (groupedArr.length === 0) {
+        description = `🎫 **Invoice Aktif per Ticket (0 tiket)**\n*Belum ada invoice Community yang aktif saat ini.*`;
+    } else {
+        let list = buildList(`🎫 **Invoice Aktif per Ticket (${groupedArr.length} tiket)**`, normalLine);
+        if (list.shown < groupedArr.length) {
+            // Tidak muat semua -> pakai format padat supaya sebanyak mungkin tiket tetap tampil
+            list = buildList(`🎫 **Invoice Aktif per Ticket (${groupedArr.length} tiket)** · *angka dalam Robux*`, compactLine);
+        }
+        description = list.text;
+        if (list.shown < groupedArr.length) {
+            const rest = groupedArr.slice(list.shown);
+            const restTotal = rest.reduce((s, g) => s + g.total, 0);
+            description += `\n*…dan ${rest.length} tiket lainnya (${fmt(restTotal)} Robux)*`;
+        }
     }
 
-    embed.addFields({ name: '\u200b', value: '\u200b', inline: false });
-
-    // --- Section 2: stock overview ---
-    let stockText = '';
-    for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
-        const val = fundsPerCommunity[num];
-        stockText += `🏢 **Community ${num} (${grp.name}):** ${val !== null ? `\`${val.toLocaleString('id-ID')} Robux\`` : '⚠️ *Gagal ambil data*'}\n`;
-    }
-    stockText += `\n💎 **Total Stock:** \`${totalStock.toLocaleString('id-ID')} Robux\`\n`;
-    stockText += `🧾 **Total Ter-invoice:** \`${totalInvoiced.toLocaleString('id-ID')} Robux\` *(${activeInvoices.length} invoice)*\n`;
-    stockText += `${sisaStock < 0 ? '🔴' : '🟢'} **Sisa Stock:** \`${sisaStock.toLocaleString('id-ID')} Robux\``;
-    if (sisaStock < 0) stockText += '\n⚠️ **PERINGATAN: Total invoice sudah MELEBIHI stock!**';
-    if (anyFundsFailed) stockText += '\n*(Sebagian data gagal ditarik, kemungkinan sementara — akan otomatis re-sync)*';
-
-    embed.addFields({ name: '📦 Stock Overview', value: stockText, inline: false });
+    embed.setDescription(description);
+    embed.addFields(overviewFields);
     return embed;
 }
 
