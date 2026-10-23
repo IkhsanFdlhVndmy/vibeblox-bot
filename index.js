@@ -1157,7 +1157,18 @@ client.on('messageDelete', async (message) => {
 
 // --- PANEL STOCK: kalau channel tiket dihapus MANUAL (bukan lewat tombol close),
 // pastikan invoice yang nyangkut di situ tetap ikut lepas dari tracking ---
-client.on('channelDelete', async (channel) => {
+// --- AUTO GESER ANTRIAN: kalau channel tiket DIPINDAH MANUAL keluar/masuk kategori tiket,
+// slot jadi berubah -> rapikan antrian juga ---
+client.on('channelUpdate', async (oldChannel, newChannel) => {
+    try {
+        if (!newChannel?.guild || oldChannel.parentId === newChannel.parentId) return;
+        if (TICKET_CATEGORY_IDS.includes(oldChannel.parentId) || TICKET_CATEGORY_IDS.includes(newChannel.parentId)) {
+            scheduleTicketRebalance(newChannel.guild);
+        }
+    } catch (e) {
+        // Diamkan saja — tidak kritikal
+    }
+});
     try {
         if (!channel?.id) return;
 
@@ -1469,28 +1480,37 @@ client.on('interactionCreate', async (interaction) => {
                 mmPings += `<@${foundPembeli.id}> <@${foundPenjual.id}>`;
             }
 
-            // Buat Channel — DI DALAM KUNCI ANTRIAN, jadi tidak tabrakan dengan proses auto-geser
+            // Buat Channel + Simpan DB — KEDUANYA DI DALAM KUNCI ANTRIAN,
+            // supaya proses auto-geser tidak pernah melihat channel baru yang belum tercatat di DB
             const ticketChannel = await withTicketLock(async () => {
                 const activeCategoryId = await pickTicketCategory(interaction.guild);
                 if (!activeCategoryId) return null; // semua kategori penuh
-                return interaction.guild.channels.create({
+
+                const newChannel = await interaction.guild.channels.create({
                     name: channelName,
                     type: 0, // Text Channel
                     parent: activeCategoryId,
                     permissionOverwrites: permissionOverwrites
                 });
+
+                try {
+                    await Ticket.create({
+                        channelId: newChannel.id,
+                        creatorId: interaction.user.id,
+                        ticketType: type
+                    });
+                } catch (dbErr) {
+                    // DB gagal -> hapus channel lagi, jangan sampai ada channel "yatim" yang tidak bisa di-close/dipindah
+                    console.error('❌ Gagal simpan tiket ke DB, channel dibatalkan:', dbErr.message);
+                    await newChannel.delete().catch(() => {});
+                    throw dbErr;
+                }
+                return newChannel;
             });
 
             if (!ticketChannel) {
                 return interaction.editReply('❌ Semua kategori tiket sedang penuh. Silakan coba lagi beberapa saat lagi.');
             }
-            
-            // Simpan ke DB
-            await Ticket.create({
-                channelId: ticketChannel.id,
-                creatorId: interaction.user.id,
-                ticketType: type
-            });
 
             // Susun Embed Tiket
             const typeLabels = {
