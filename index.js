@@ -1703,6 +1703,7 @@ async function refreshPanelFunds() {
             run: async () => {
                 const out = {};
                 for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
+                    if (rbxIsPaused()) break; // kena rate limit -> berhenti, saldo lama tetap dipakai                    
                     out[num] = await fetchGroupFunds(grp.groupId);
                     await sleep(250);
                 }
