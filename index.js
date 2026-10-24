@@ -808,6 +808,592 @@ let isCheckingTransaksi = false;
 const transaksiCache = new Map();
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+
+// =====================================================================
+// === HELPER: ULANGI AKSI DISCORD YANG GAGAL SEMENTARA ===
+// =====================================================================
+// Dipakai invoice: kalau koneksi ke Discord putus/lambat sesaat, aksi diulang otomatis.
+// Error yang PERMANEN (pesan sudah dihapus, interaksi kadaluarsa, tidak ada izin) tidak diulang.
+async function discordRetry(fn, tries = 3) {
+    let lastErr;
+    for (let attempt = 1; attempt <= tries; attempt++) {
+        try {
+            return await fn();
+        } catch (e) {
+            lastErr = e;
+            if ([10008, 10015, 10062, 50001, 50013, 50035].includes(e?.code)) break;
+            if (attempt < tries) await sleep(1000 * attempt);
+        }
+    }
+    throw lastErr;
+}
+
+// Kirim invoice (embed + tombol) SEKALIGUS dalam 1 edit, dengan cadangan edit lewat channel.
+// Kalau tetap gagal, pesan setengah jadi dihapus & staf diberi tahu -> tidak ada lagi invoice tanpa tombol.
+async function sendInvoiceMessage(interaction, messageId, payload, commandName) {
+    try {
+        await discordRetry(() => interaction.editReply(payload));
+        return true;
+    } catch (e1) {
+        try {
+            await discordRetry(() => interaction.channel.messages.edit(messageId, payload), 2);
+            return true;
+        } catch (e2) {
+            console.error(`❌ Gagal kirim invoice (${commandName}):`, e1?.message, '|', e2?.message);
+            await interaction.channel.messages.delete(messageId).catch(() => {});
+            await interaction.followUp({
+                content: `❌ Invoice gagal dibuat karena gangguan koneksi Discord. Silakan jalankan \`${commandName}\` lagi.`,
+                flags: MessageFlags.Ephemeral
+            }).catch(() => {});
+            return false;
+        }
+    }
+}
+
+// =====================================================================
+// === ANTREAN AKUN DUMMY ROBLOX ===
+// =====================================================================
+// SEMUA request yang memakai akun dummy (cookie) lewat 1 antrean ini, satu per satu, dengan jeda:
+//   - prioritas 'high'   : saldo Group Funds untuk Panel Stock (cepat, ±1 detik)
+//   - prioritas 'normal' : /cek-eligible & /cek-transaksi pelanggan (urut sesuai waktu masuk)
+//   - prioritas 'low'    : scan pending Robux (background, mengalah ke pelanggan)
+// Jadi akun dummy TIDAK PERNAH dipakai 2 proses bersamaan.
+const RBX_GAP_MS = 2000;                       // jeda setelah 1 pengecekan pelanggan selesai
+const RBX_MAX_WAIT_MS = 10 * 60 * 1000;        // token interaksi Discord cuma hidup 15 menit
+const RBX_MAX_CUSTOMER_JOBS = 30;              // maks antrean pelanggan sekaligus
+const RBX_MAX_JOBS_PER_USER = 3;               // maks pengecekan per orang yang sedang antre
+const RBX_PRIORITY = { high: 0, normal: 1, low: 2 };
+
+const rbxQueue = [];
+let rbxActive = null;
+let rbxNextAllowedAt = 0;
+let rbxWorkerRunning = false;
+let rbxWake = null;
+const rbxLastCheckByKey = new Map();           // cooldownKey -> waktu pengecekan terakhir selesai
+const rbxAvgDuration = { elig: 7000, tx: 20000 }; // rata-rata durasi (ms), diperbarui otomatis
+
+function rbxWakeUp() {
+    if (rbxWake) { const wake = rbxWake; rbxWake = null; wake(); }
+}
+
+// Waktu paling cepat job boleh jalan (jeda per-orang, pengganti pesan "tunggu X detik")
+function rbxJobReadyAt(job) {
+    if (!job.cooldownKey) return 0;
+    return (rbxLastCheckByKey.get(job.cooldownKey) || 0) + (job.cooldownMs || 0);
+}
+
+function rbxPickNext(now) {
+    const seenKeys = new Set();
+    let best = null;
+    for (const job of rbxQueue) {
+        if (job.cooldownKey) {
+            if (seenKeys.has(job.cooldownKey)) continue; // pengecekan dia sebelumnya harus jalan duluan
+            seenKeys.add(job.cooldownKey);
+            if (rbxJobReadyAt(job) > now) continue;      // masih dalam jeda per-orang
+        }
+        if (!best || RBX_PRIORITY[job.priority] < RBX_PRIORITY[best.priority]) best = job;
+    }
+    return best;
+}
+
+async function rbxWorker() {
+    if (rbxWorkerRunning) return;
+    rbxWorkerRunning = true;
+    try {
+        while (rbxQueue.length > 0) {
+            const now = Date.now();
+
+            // Pelanggan yang menunggu terlalu lama dikeluarkan (token Discord hampir habis)
+            for (const job of [...rbxQueue]) {
+                if (job.maxWaitMs && now - job.enqueuedAt > job.maxWaitMs) {
+                    rbxQueue.splice(rbxQueue.indexOf(job), 1);
+                    job.reject(new Error('RBX_TIMEOUT'));
+                }
+            }
+            if (rbxQueue.length === 0) break;
+
+            const job = rbxPickNext(now);
+            const gapLeft = rbxNextAllowedAt - now;
+            if (!job || gapLeft > 0) {
+                rbxNotifyAll();
+                let waitMs = 5000;
+                if (gapLeft > 0) waitMs = Math.min(waitMs, gapLeft);
+                if (!job) {
+                    const soonest = Math.min(...rbxQueue.map(rbxJobReadyAt));
+                    if (Number.isFinite(soonest)) waitMs = Math.min(waitMs, soonest - now);
+                }
+                await new Promise(resolve => { rbxWake = resolve; setTimeout(resolve, Math.max(waitMs, 50)); });
+                rbxWake = null;
+                continue;
+            }
+
+            rbxQueue.splice(rbxQueue.indexOf(job), 1);
+            rbxActive = job;
+            job.startedAt = Date.now();
+            rbxNotifyAll();
+            try {
+                job.resolve(await job.run());
+            } catch (e) {
+                job.reject(e);
+            } finally {
+                const duration = Date.now() - job.startedAt;
+                if (job.kind && rbxAvgDuration[job.kind]) {
+                    rbxAvgDuration[job.kind] = Math.round(rbxAvgDuration[job.kind] * 0.7 + duration * 0.3);
+                }
+                if (job.cooldownKey) rbxLastCheckByKey.set(job.cooldownKey, Date.now());
+                rbxNextAllowedAt = Date.now() + (job.gapAfter ?? RBX_GAP_MS);
+                rbxActive = null;
+            }
+        }
+    } finally {
+        rbxWorkerRunning = false;
+    }
+}
+
+// Masukkan 1 pekerjaan ke antrean. Mengembalikan job (job.promise = hasilnya).
+function rbxCreateJob({ priority = 'normal', run, gapAfter, kind, cooldownKey, cooldownMs, maxWaitMs }) {
+    const job = { priority, run, gapAfter, kind, cooldownKey, cooldownMs, maxWaitMs, enqueuedAt: Date.now() };
+    job.promise = new Promise((resolve, reject) => { job.resolve = resolve; job.reject = reject; });
+    rbxQueue.push(job);
+    rbxWakeUp();
+    rbxWorker();
+    return job;
+}
+
+// Versi singkat untuk proses internal bot (panel stock & scan pending)
+function rbxRun(options) {
+    return rbxCreateJob(options).promise;
+}
+
+// --- Tampilan "loading antrean" untuk pelanggan ---
+function rbxCustomerJobsInOrder() {
+    const list = [];
+    if (rbxActive?.customer) list.push(rbxActive);
+    for (const job of rbxQueue) if (job.customer) list.push(job);
+    return list;
+}
+
+function rbxFormatEta(ms) {
+    const sec = Math.max(5, Math.round(ms / 5000) * 5);
+    return sec < 60 ? `± ${sec} detik` : `± ${Math.round(sec / 60)} menit`;
+}
+
+function rbxBuildLoadingText(job, phase, position, etaMs, readyAt) {
+    const title = job.kind === 'tx' ? 'cek transaksi' : 'cek eligible';
+    const user = `👤 Username: \`${job.label}\``;
+    const hint = '-# Tidak perlu ketik ulang command. Hasil akan muncul otomatis di pesan ini.';
+    if (phase === 'running') {
+        return `🔍 **Sedang ${title}...**\n${user}\n-# Biasanya selesai dalam beberapa detik.`;
+    }
+    if (phase === 'behindOwn') {
+        return `⏳ **Menunggu pengecekan kamu sebelumnya selesai**\n${user}\n-# Pengecekan dijalankan satu per satu. Tidak perlu ketik ulang command, hasil akan muncul otomatis di pesan ini.`;
+    }
+    if (phase === 'cooldown') {
+        return `⏳ **Menunggu jeda antar pengecekan**\n${user}\n🕐 Mulai otomatis <t:${Math.ceil(readyAt / 1000)}:R>\n-# Jeda ini menjaga sistem tetap aman. Tidak perlu ketik ulang command, hasil akan muncul otomatis di pesan ini.`;
+    }
+    return `⏳ **Kamu masuk antrean ${title}**\n${user}\n📍 Posisi antrean: **#${position}**\n🕐 Perkiraan mulai: ${rbxFormatEta(etaMs)}\n${hint}`;
+}
+
+// Kirim edit ke pesan pelanggan secara BERURUTAN (edit lama tidak bisa menimpa hasil akhir)
+function rbxQueueEdit(sub, payloadFn) {
+    sub.chain = sub.chain.then(async () => {
+        if (sub.dead) return;
+        const payload = payloadFn();
+        if (!payload) return;
+        await sub.interaction.editReply(payload);
+    }).catch(() => {});
+}
+
+function rbxNotifyAll() {
+    const now = Date.now();
+    const jobs = rbxCustomerJobsInOrder();
+    let etaMs = 0;
+    if (rbxActive) {
+        const avg = rbxAvgDuration[rbxActive.kind] || 5000;
+        etaMs = Math.max(avg - (now - rbxActive.startedAt), 1000) + (rbxActive.gapAfter ?? RBX_GAP_MS);
+    } else {
+        etaMs = Math.max(rbxNextAllowedAt - now, 0);
+    }
+
+    const seenOwners = new Set();
+    jobs.forEach((job, index) => {
+        // Tampilan dibuat STABIL: selama masih dalam jeda per-orang -> selalu tampil "menunggu jeda",
+        // setelah jeda selesai -> tampil posisi antrean. Tidak bolak-balik.
+        let phase = 'queued';
+        const readyAt = rbxJobReadyAt(job);
+        if (job === rbxActive) phase = 'running';
+        else if (job.cooldownKey && seenOwners.has(job.cooldownKey)) phase = 'behindOwn'; // pengecekan dia sebelumnya belum selesai
+        else if (readyAt > now) phase = 'cooldown';
+        if (job.cooldownKey) seenOwners.add(job.cooldownKey);
+
+        const key = phase === 'cooldown' ? `cooldown|${readyAt}` : (phase === 'behindOwn' ? 'behindOwn' : `${phase}|${index + 1}`);
+        const text = rbxBuildLoadingText(job, phase, index + 1, etaMs, readyAt);
+        for (const sub of job.subscribers) {
+            if (sub.done || sub.lastKey === key) continue;
+            sub.lastKey = key;
+            rbxQueueEdit(sub, () => (sub.done ? null : { content: text, embeds: [] }));
+        }
+
+        if (job !== rbxActive) etaMs += (rbxAvgDuration[job.kind] || 5000) + RBX_GAP_MS;
+    });
+}
+
+// Job tertahan oleh pemiliknya sendiri (jeda per-orang / pengecekan dia sebelumnya belum selesai)?
+function rbxIsBlockedByOwner(job) {
+    if (job === rbxActive || !job.cooldownKey) return false;
+    if (rbxActive && rbxActive.cooldownKey === job.cooldownKey) return true;
+    const idx = rbxQueue.indexOf(job);
+    if (rbxQueue.some((j, i) => i < idx && j.cooldownKey === job.cooldownKey)) return true;
+    return rbxJobReadyAt(job) > Date.now();
+}
+
+function rbxMakeSubscriber(interaction) {
+    const sub = { interaction, userId: interaction.user.id, done: false, dead: false, lastKey: null };
+    sub.chain = interaction.deferReply().then(() => {}).catch(err => {
+        sub.dead = true;
+        console.error('Gagal defer interaksi antrean:', err?.message);
+    });
+    return sub;
+}
+
+function rbxDeliver(job, payload) {
+    job.delivered = true;
+    for (const sub of job.subscribers) {
+        sub.done = true;
+        rbxQueueEdit(sub, () => ({ content: payload.content ?? '', embeds: payload.embeds ?? [] }));
+    }
+}
+
+// Pintu masuk untuk /cek-eligible & /cek-transaksi
+async function enqueueCustomerCheck({ interaction, kind, label, dedupeKey, cooldownKey, cooldownMs, run }) {
+    const userId = interaction.user.id;
+    const customerJobs = rbxCustomerJobsInOrder().filter(j => !j.delivered);
+
+    // a) Username yang SAMA sedang diantre/dicek -> ikut dapat hasilnya, akun dummy tidak mengecek 2x.
+    //    (Tidak ikut menumpang kalau pengecekan itu sedang tertahan jeda milik orang lain.)
+    const sameUsernameJobs = customerJobs.filter(j => j.dedupeKey === dedupeKey);
+    if (sameUsernameJobs.some(j => j.subscribers.some(s => s.userId === userId))) {
+        return interaction.reply({ content: `⏳ Username \`${label}\` sudah ada di antrean kamu. Hasilnya akan muncul di pesan sebelumnya.`, flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+    const existing = sameUsernameJobs.find(j => !rbxIsBlockedByOwner(j));
+    if (existing) {
+        existing.subscribers.push(rbxMakeSubscriber(interaction));
+        rbxNotifyAll();
+        return;
+    }
+
+    // b) Batas antrean per orang & total
+    const mine = customerJobs.filter(j => j.ownerId === userId).length;
+    if (mine >= RBX_MAX_JOBS_PER_USER) {
+        return interaction.reply({ content: `⏳ Kamu masih punya **${mine} pengecekan** di antrean. Tunggu salah satunya selesai dulu, ya.`, flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+    if (customerJobs.length >= RBX_MAX_CUSTOMER_JOBS) {
+        return interaction.reply({ content: '⏳ Antrean pengecekan sedang penuh. Silakan coba lagi 1-2 menit lagi.', flags: MessageFlags.Ephemeral }).catch(() => {});
+    }
+
+    const subscriber = rbxMakeSubscriber(interaction); // defer langsung (wajib < 3 detik)
+    const job = rbxCreateJob({ priority: 'normal', kind, cooldownKey, cooldownMs, maxWaitMs: RBX_MAX_WAIT_MS, run });
+    job.customer = true;
+    job.label = label;
+    job.dedupeKey = dedupeKey;
+    job.ownerId = userId;
+    job.subscribers = [subscriber];
+
+    job.promise
+        .then(payload => rbxDeliver(job, payload))
+        .catch(err => {
+            if (err?.message === 'RBX_TIMEOUT') {
+                rbxDeliver(job, { content: '⌛ Antrean sedang sangat ramai dan pengecekan kamu belum sempat diproses. Silakan jalankan command-nya lagi.' });
+            } else {
+                console.error('Error antrean pengecekan:', err?.response?.data || err?.message);
+                rbxDeliver(job, { content: '❌ Terjadi gangguan komunikasi dengan server Roblox saat ini. Coba beberapa saat lagi.' });
+            }
+        });
+
+    rbxNotifyAll();
+}
+
+// =====================================================================
+// === PENGECEKAN ELIGIBLE (dijalankan oleh antrean) ===
+// =====================================================================
+async function runEligibilityCheck(targetUsername, cacheKey) {
+    // Sudah ada hasil segar (dicek pelanggan lain barusan) -> pakai itu, tidak perlu ke Roblox lagi
+    const fresh = eligibilityCache.get(cacheKey);
+    if (fresh && Date.now() - fresh.timestamp < (fresh.ttl || 3600000)) {
+        return { embeds: [EmbedBuilder.from(fresh.embed).setFooter({ text: 'Roblox Eligibility Checker • (Data Cached)' })] };
+    }
+    try {
+        // Dapatkan User ID Roblox
+        let userRes;
+        try {
+            userRes = await axios.post('https://users.roblox.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
+        } catch (err) {
+            console.log("API Asli Gagal (ID), mencoba RoProxy...");
+            userRes = await axios.post('https://users.roproxy.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
+        }
+
+        if (!userRes.data?.data?.length) {
+            return { content: `❌ Username **${targetUsername}** tidak ditemukan di Roblox.` };
+        }
+
+        const userId = userRes.data.data[0].id;
+        const actualUsername = userRes.data.data[0].name;
+        const actualDisplayName = String(userRes.data.data[0].displayName || actualUsername).replace(/`/g, "'");
+
+        await sleep(500);
+
+        // Ambil Avatar
+        let avatarUrl = null;
+        try {
+            const avaRes = await axios.get(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`);
+            avatarUrl = avaRes.data.data[0].imageUrl;
+        } catch (e) {}
+
+        await sleep(500);
+
+        // Cek Daftar Grup User
+        let groupsRes;
+        try {
+            groupsRes = await axios.get(`https://groups.roblox.com/v2/users/${userId}/groups/roles`);
+        } catch (err) {
+            console.log("API Asli Gagal (Grup), mencoba RoProxy...");
+            groupsRes = await axios.get(`https://groups.roproxy.com/v2/users/${userId}/groups/roles`);
+        }
+
+        const userGroups = groupsRes.data.data.map(g => g.group.id.toString());
+
+        const targetGroups = [
+            { id: '1064667246', shortName: 'BEJIRLAH', url: 'https://www.roblox.com/communities/1064667246/BEJIRLAH-Community' },
+            { id: '1108229986', shortName: 'Vandamoy', url: 'https://www.roblox.com/id/communities/1108229986/Vandamoy' },
+            { id: '653724099', shortName: 'Maycomn', url: 'https://www.roblox.com/communities/653724099/Maycomn' },
+            { id: '617301345', shortName: 'Vibies', url: 'https://www.roblox.com/id/communities/617301345/VibeBlox-Community' }
+        ];
+
+        const formatWaktu = (isoString) => {
+            const d = new Date(isoString);
+            return d.toLocaleString('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Jakarta' }).replace(/\./g, ':') + ' WIB';
+        };
+
+        const getRemainingTime = (targetDate) => {
+            const diff = targetDate.getTime() - Date.now();
+            if (diff <= 0) return "0 Detik";
+            const d = Math.floor(diff / (1000 * 60 * 60 * 24));
+            const h = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+            const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+            const s = Math.floor((diff % (1000 * 60)) / 1000);
+            const res = [];
+            if (d > 0) res.push(`${d} Hari`);
+            if (h > 0) res.push(`${h} Jam`);
+            if (m > 0) res.push(`${m} Menit`);
+            if (s > 0 || res.length === 0) res.push(`${s} Detik`);
+            return res.join(' ');
+        };
+
+        const embed = new EmbedBuilder()
+            .setTitle(`⏳ Eligibility Status`)
+            .addFields(
+                { name: '👤 Username', value: `\`${actualUsername}\``, inline: true },
+                { name: '🏷️ Display Name', value: `\`${actualDisplayName}\``, inline: true }
+            )
+            .setFooter({ text: 'Roblox Eligibility Checker' })
+            .setTimestamp();
+
+        if (avatarUrl) embed.setThumbnail(avatarUrl);
+
+        let overallColor = 0xFF0000; // Merah (belum join sama sekali)
+        let hasEligible = false;
+        let hasPending = false;
+
+        const emojiNotJoin = '<:notjoin:1530931902985277521>';
+        const emojiEligible = '<a:eligible:1502074502228738098>';
+        const emojiPending = '<:pending:1530933220726804603>';
+
+        for (let i = 0; i < targetGroups.length; i++) {
+            const grp = targetGroups[i];
+            let fieldValue;
+
+            if (!userGroups.includes(grp.id)) {
+                fieldValue = `${emojiNotJoin} Belum Bergabung`;
+            } else {
+                await sleep(400);
+                try {
+                    const auditRes = await axios.get(`https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=JoinGroup&userId=${userId}&limit=10`, {
+                        headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
+                    });
+
+                    if (auditRes.data && auditRes.data.data && auditRes.data.data.length > 0) {
+                        const rawJoin = auditRes.data.data[0].created;
+                        const joinDate = new Date(rawJoin);
+                        const eligibleDate = new Date(joinDate.getTime() + (14 * 24 * 60 * 60 * 1000));
+                        if (new Date() >= eligibleDate) {
+                            hasEligible = true;
+                            fieldValue = `📆 Join: \`${formatWaktu(rawJoin)}\`\n${emojiEligible} **ELIGIBLE** *(sejak ${formatWaktu(eligibleDate)})*`;
+                        } else {
+                            hasPending = true;
+                            fieldValue = `📆 Join: \`${formatWaktu(rawJoin)}\`\n${emojiPending} **PENDING** — Sisa \`${getRemainingTime(eligibleDate)}\``;
+                        }
+                    } else {
+                        hasEligible = true; // tertimbun = otomatis eligible
+                        fieldValue = `${emojiEligible} **ELIGIBLE** *(tergabung > 14 hari)*`;
+                    }
+                } catch (e) {
+                    hasEligible = true; // asumsi positif jika API Roblox nyangkut tapi user ada di grup
+                    fieldValue = `⚠️ **User ada di dalam grup** *(Gagal narik tanggal. Silakan cek manual).*`;
+                }
+            }
+
+            embed.addFields({ name: `🏢 Community ${i + 1}`, value: `[**${grp.shortName}**](${grp.url})\n${fieldValue}\n\u200b`, inline: false });
+        }
+
+        if (hasEligible) overallColor = 0x57F287;      // Hijau
+        else if (hasPending) overallColor = 0xFFA500;  // Orange
+        embed.setColor(overallColor);
+
+        // Cache: 1 jam. Kalau ada status PENDING, cukup 10 menit (sisa waktunya berubah terus)
+        eligibilityCache.set(cacheKey, {
+            embed: embed.toJSON(),
+            timestamp: Date.now(),
+            ttl: hasPending ? 600000 : 3600000
+        });
+
+        return { embeds: [embed] };
+    } catch (error) {
+        console.error("Eligible Check Error ASLI:", error.response?.data || error.message);
+        return { content: '❌ Terjadi gangguan komunikasi dengan server Roblox saat ini. Coba beberapa saat lagi.' };
+    }
+}
+
+// =====================================================================
+// === PENGECEKAN TRANSAKSI PAYOUT (dijalankan oleh antrean) ===
+// =====================================================================
+async function runTransactionCheck(targetUsername, cacheKey, requesterTag) {
+    const fresh = transaksiCache.get(cacheKey);
+    if (fresh && Date.now() - fresh.timestamp < 900000) {
+        return { embeds: [EmbedBuilder.from(fresh.embed).setFooter({ text: 'Roblox Transaction Checker • (Data Cached)' })] };
+    }
+    try {
+        let userRes;
+        try {
+            userRes = await axios.post('https://users.roblox.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
+        } catch (err) {
+            userRes = await axios.post('https://users.roproxy.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
+        }
+
+        if (!userRes.data?.data?.length) {
+            return { content: `❌ Username **${targetUsername}** tidak ditemukan di Roblox.` };
+        }
+
+        const userId = userRes.data.data[0].id;
+        const actualUsername = userRes.data.data[0].name;
+        const actualDisplayName = userRes.data.data[0].displayName || actualUsername;
+
+        await sleep(500);
+
+        let avatarUrl = null;
+        try {
+            const avaRes = await axios.get(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`);
+            avatarUrl = avaRes.data.data[0].imageUrl;
+        } catch (e) {}
+
+        const targetGroups = [
+            { id: '1064667246', name: 'Community 1 (BEJIRLAH)' },
+            { id: '1108229986', name: 'Community 2 (Vandamoy)' },
+            { id: '653724099', name: 'Community 3 (Maycomn)' },
+            { id: '617301345', name: 'Community 4 (Vibies)' }
+        ];
+        const now = Date.now();
+        const cutoffOldest = now - (10 * 24 * 60 * 60 * 1000); // batas 10 hari ke belakang
+
+        const embed = new EmbedBuilder()
+            .setTitle('🧾 Transaksi Robux Checker')
+            .addFields({ name: '👤 Username', value: `\`${actualUsername}\``, inline: false })
+            .setColor(0x5865F2)
+            .setFooter({ text: `Diminta oleh ${requesterTag} • Roblox Transaction Checker` })
+            .setTimestamp();
+        if (avatarUrl) embed.setThumbnail(avatarUrl);
+
+        let grandTotal = 0;
+        const namesToMatch = [actualUsername.toLowerCase(), actualDisplayName.toLowerCase()];
+
+        for (const grp of targetGroups) {
+            await sleep(500);
+
+            const totals = { p1_3: 0, p4_6: 0, p7_10: 0 };
+            let fetchFailed = false;
+            let reachedPageLimit = false;
+
+            try {
+                let cursor = '';
+                let page = 0;
+                const maxPages = 40;
+
+                while (page < maxPages) {
+                    const url = `https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=${encodeURIComponent('Spend Group Funds')}&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
+                    const auditRes = await axios.get(url, {
+                        headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
+                    });
+
+                    const entries = auditRes.data?.data || [];
+                    if (entries.length === 0) break;
+
+                    let stop = false;
+                    for (const entry of entries) {
+                        const createdTime = new Date(entry.created).getTime();
+                        if (createdTime < cutoffOldest) { stop = true; break; }
+
+                        // Format: "one-time payout of Robux from group funds to Nama1 (1,000), Nama2 (2,000)"
+                        const itemDesc = entry.description?.ItemDescription || '';
+                        const pairRegex = /([A-Za-z0-9_]+)\s*\(([\d,]+)\)/g;
+                        let match;
+                        while ((match = pairRegex.exec(itemDesc)) !== null) {
+                            const recipientName = match[1].toLowerCase();
+                            const recipientAmount = parseInt(match[2].replace(/,/g, ''), 10) || 0;
+                            if (namesToMatch.includes(recipientName)) {
+                                const ageDays = (now - createdTime) / (1000 * 60 * 60 * 24);
+                                if (ageDays <= 3) totals.p1_3 += recipientAmount;
+                                else if (ageDays <= 6) totals.p4_6 += recipientAmount;
+                                else if (ageDays <= 10) totals.p7_10 += recipientAmount;
+                            }
+                        }
+                    }
+
+                    if (stop) break;
+                    cursor = auditRes.data?.nextPageCursor;
+                    if (!cursor) break;
+
+                    page++;
+                    if (page >= maxPages) reachedPageLimit = true;
+                    await sleep(350);
+                }
+            } catch (e) {
+                console.error(`Gagal ambil audit log payout ${grp.name}:`, e.response?.data || e.message);
+                fetchFailed = true;
+            }
+
+            if (fetchFailed) {
+                embed.addFields({ name: `🏢 ${grp.name}`, value: '⚠️ Gagal mengambil data (cek console log bot).\n\u200b', inline: false });
+            } else {
+                const totalGrp = totals.p1_3 + totals.p4_6 + totals.p7_10;
+                grandTotal += totalGrp;
+                const warning = reachedPageLimit ? '\n⚠️ *Data mungkin belum lengkap (terpotong di halaman ke-40).*' : '';
+                embed.addFields({
+                    name: `🏢 ${grp.name}`,
+                    value: `📅 **1-3 Hari:** \`${totals.p1_3.toLocaleString('id-ID')} Robux\`\n📅 **4-6 Hari:** \`${totals.p4_6.toLocaleString('id-ID')} Robux\`\n📅 **7-10 Hari:** \`${totals.p7_10.toLocaleString('id-ID')} Robux\`\n📊 **Total: \`${totalGrp.toLocaleString('id-ID')} Robux\`**${warning}\n\u200b`,
+                    inline: false
+                });
+            }
+        }
+
+        embed.addFields({ name: '📊 Total Keseluruhan (10 Hari)', value: `\`${grandTotal.toLocaleString('id-ID')} Robux\``, inline: false });
+
+        transaksiCache.set(cacheKey, { embed: embed.toJSON(), timestamp: Date.now() });
+        return { embeds: [embed] };
+    } catch (error) {
+        console.error("Transaksi Check Error:", error.response?.data || error.message);
+        return { content: '❌ Terjadi gangguan komunikasi dengan server Roblox saat ini. Coba beberapa saat lagi.' };
+    }
+}
+
 // ==================================================
 // --- RESTOCK: KONSTANTA & HELPER ---
 // ==================================================
@@ -970,21 +1556,12 @@ const pendingErrorLogged = new Set(); // cegah log error yang sama muncul tiap 5
 
 async function refreshPendingCache() {
     if (isPendingScanRunning) return; // jangan dobel kalau scan sebelumnya belum selesai
-    // Akun dummy dipakai bersama /cek-eligible & /cek-transaksi -> jangan rebutan, biar mereka tidak kena rate limit
-    if (isCheckingEligible || isCheckingTransaksi) {
-        setTimeout(refreshPendingCache, 60 * 1000); // coba lagi 1 menit lagi
-        return;
-    }
     isPendingScanRunning = true;
     try {
         for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
-            // Kalau di tengah scan ada yang pakai /cek-eligible atau /cek-transaksi, mundur dulu
-            if (isCheckingEligible || isCheckingTransaksi) {
-                setTimeout(refreshPendingCache, 60 * 1000);
-                return;
-            }
             try {
-                const info = await fetchGroupPendingInfo(grp.groupId);
+                // Lewat ANTREAN akun dummy (prioritas rendah): otomatis mengalah ke pelanggan /cek-eligible & /cek-transaksi
+                const info = await rbxRun({ priority: 'low', gapAfter: 1000, run: () => fetchGroupPendingInfo(grp.groupId) });
                 pendingCache[num] = { ...info, ok: true };
                 if (pendingErrorLogged.delete(num)) console.log(`✅ [PENDING] Community ${num} (${grp.name}) kembali normal.`);
             } catch (e) {
@@ -1000,7 +1577,6 @@ async function refreshPendingCache() {
                 // Data lama tetap dipakai (ditandai), jangan langsung jadi 0
                 pendingCache[num] = pendingCache[num] ? { ...pendingCache[num], ok: false } : { ok: false };
             }
-            await sleepMs(800); // jeda antar community
         }
         pendingLastUpdated = new Date();
         schedulePanelStockUpdate();
@@ -1008,7 +1584,6 @@ async function refreshPendingCache() {
         isPendingScanRunning = false;
     }
 }
-
 // Catatan: markdown heading (#) Discord CUMA render besar kalau ditaruh di description embed,
 // TIDAK bekerja di dalam field value. Makanya build via description (bukan addFields) biar tulisan
 // amount/countdown bisa besar seperti versi lama, dan gak perlu backtick (`) yang bikin kotak kecil jelek.
@@ -1069,18 +1644,42 @@ function buildRestockCompletedEmbed(restock) {
 }
 
 // ==================================================
-// --- PANEL STOCK: BANGUN EMBED (2 SECTION) ---
+// --- PANEL STOCK: BANGUN HALAMAN (BISA LEBIH DARI 1 PESAN) ---
 // ==================================================
-async function buildPanelStockEmbed() {
-    // Section 2 (data): saldo live tiap community
-    const fundsPerCommunity = {};
+// Discord membatasi 1 pesan maks 6000 karakter. Kalau tiket banyak, daftar invoice OTOMATIS
+// disambung ke pesan berikutnya (tanpa diringkas), dan Stock Overview selalu di pesan paling bawah.
+const PANEL_TITLE = '📊 VibeBlox Stock Tracking Panel';
+const PANEL_PAGE_BUDGET = 5500; // batas aman karakter per pesan (maks Discord 6000)
+const PANEL_MAX_PAGES = 8;      // maks 8 pesan (±800 tiket) — jauh di atas kebutuhan normal
+
+async function buildPanelStockPages() {
+    const fmt = (n) => Number(n).toLocaleString('id-ID');
+
+    // Saldo live tiap community — lewat ANTREAN akun dummy (prioritas tinggi, tidak tabrakan dengan cek pelanggan)
+    let fundsPerCommunity = {};
+    try {
+        fundsPerCommunity = await rbxRun({
+            priority: 'high',
+            gapAfter: 500,
+            run: async () => {
+                const result = {};
+                for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
+                    result[num] = await fetchGroupFunds(grp.groupId);
+                    await sleep(250);
+                }
+                return result;
+            }
+        });
+    } catch (e) {
+        console.error('Gagal ambil saldo Group Funds:', e.message);
+    }
+
     let totalStock = 0;
     let anyFundsFailed = false;
-    for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
-        const funds = await fetchGroupFunds(grp.groupId);
-        fundsPerCommunity[num] = funds;
-        if (funds !== null) totalStock += funds;
-        else anyFundsFailed = true;
+    for (const num of Object.keys(RESTOCK_COMMUNITIES)) {
+        const funds = fundsPerCommunity[num];
+        if (typeof funds === 'number') totalStock += funds;
+        else { fundsPerCommunity[num] = null; anyFundsFailed = true; }
     }
 
     // Ambil semua invoice Community yang masih AKTIF (belum done/cancel/dihapus)
@@ -1092,14 +1691,9 @@ async function buildPanelStockEmbed() {
     }
     const totalInvoiced = activeInvoices.reduce((sum, inv) => sum + inv.amount, 0);
     const sisaStock = totalStock - totalInvoiced;
+    const color = sisaStock < 0 ? 0xED4245 : 0x5865F2;
 
-    const embed = new EmbedBuilder()
-        .setColor(sisaStock < 0 ? 0xED4245 : 0x5865F2)
-        .setTitle('📊 VibeBlox Stock Tracking Panel')
-        .setTimestamp();
-
-    // --- Section 2: stock overview (dibangun duluan supaya tahu sisa jatah karakter untuk daftar tiket) ---
-    const fmt = (n) => Number(n).toLocaleString('id-ID');
+    // --- Stock Overview ---
     let totalPending = 0;
     let anyPendingFailed = false;
     const communityLines = [];
@@ -1130,13 +1724,15 @@ async function buildPanelStockEmbed() {
         `🧾 **Ter-invoice:** \`${fmt(totalInvoiced)} Robux\` *(${activeInvoices.length} invoice)*`,
         `${sisaStock < 0 ? '🔴' : '🟢'} **Sisa Stock:** \`${fmt(sisaStock)} Robux\``
     ];
-    if (sisaStock < 0) summaryLines.push('⚠️ **PERINGATAN: Total invoice sudah MELEBIHI stock!**');
+    if (sisaStock < 0) {
+        summaryLines.push(''); // baris kosong -> peringatan diberi jarak dari ringkasan di atasnya
+        summaryLines.push('⚠️ **PERINGATAN: Total invoice sudah MELEBIHI stock!**');
+    }
     if (anyFundsFailed || anyPendingFailed) summaryLines.push('*(Sebagian data gagal ditarik, kemungkinan sementara — akan otomatis re-sync)*');
     if (pendingLastUpdated) {
         summaryLines.push(`*Pending dicek tiap 5 menit · terakhir <t:${Math.floor(pendingLastUpdated.getTime() / 1000)}:R> · refund = ${PENDING_LOOKBACK_DAYS} hari terakhir*`);
     }
 
-    // Limit Discord: 1 field maks 1024 karakter -> kalau kepanjangan, pecah jadi 2 field (per-community & ringkasan)
     const overviewFields = [];
     const fullOverview = `${communityLines.join('\n')}\n\n${summaryLines.join('\n')}`;
     if (fullOverview.length <= 1024) {
@@ -1145,9 +1741,9 @@ async function buildPanelStockEmbed() {
         overviewFields.push({ name: '📦 Stock Overview', value: communityLines.join('\n').slice(0, 1024), inline: false });
         overviewFields.push({ name: '\u200b', value: summaryLines.join('\n').slice(0, 1024), inline: false });
     }
+    const overviewSize = overviewFields.reduce((s, f) => s + f.name.length + f.value.length, 0);
 
-    // --- Section 1: daftar per-tiket, dipecah ke beberapa FIELD (maks 1024 karakter/field) ---
-    // (Daftar panjang di description terbukti terpotong saat dirender Discord, jadi pakai field seperti versi lama.)
+    // --- Daftar invoice per tiket (format lengkap, SEMUA tiket ditampilkan) ---
     const grouped = {};
     for (const inv of activeInvoices) {
         if (!grouped[inv.channelId]) grouped[inv.channelId] = { channelName: inv.channelName, total: 0, count: 0 };
@@ -1155,66 +1751,66 @@ async function buildPanelStockEmbed() {
         grouped[inv.channelId].count += 1;
     }
     const groupedArr = Object.values(grouped);
+    const listHeader = `🎫 Invoice Aktif per Ticket (${groupedArr.length} tiket)`;
 
-    // Batas total 1 embed = 6000 karakter (title + semua field). Kalau lewat, Discord MENOLAK update -> panel macet.
-    const overviewSize = overviewFields.reduce((s, f) => s + f.name.length + f.value.length, 0);
-    const listBudget = 6000 - 40 /* title */ - overviewSize - 150 /* cadangan */;
+    const lines = groupedArr.map((g, i) => `${i + 1}. **${g.channelName}** — \`${fmt(g.total)} Robux\` — ${g.count} invoice`);
 
-    // Format normal (sama seperti versi lama). Format padat dipakai OTOMATIS hanya kalau tiket terlalu banyak.
-    // Jumlah invoice per tiket SELALU tampil di kedua format.
-    const normalLine = (g, i) => `${i + 1}. **${g.channelName}** — \`${fmt(g.total)} Robux\` — ${g.count} invoice`;
-    const compactLine = (g, i) => `${i + 1}. **${g.channelName}** — \`${fmt(g.total)}\` — ${g.count} invoice`;
+    // Potong jadi blok maks ±1000 karakter (batas 1 field = 1024)
+    const chunks = [];
+    let chunk = '';
+    for (const line of lines) {
+        if (chunk && chunk.length + 1 + line.length > 1000) { chunks.push(chunk); chunk = line; }
+        else chunk = chunk ? `${chunk}\n${line}` : line;
+    }
+    if (chunk) chunks.push(chunk);
+    if (chunks.length === 0) chunks.push('*Belum ada invoice Community yang aktif saat ini.*');
 
-    // Susun baris jadi beberapa field. Field pertama memakai judul section (tanpa gap kosong di bawah judul).
-    const buildListFields = (header, lineFn) => {
-        const fields = [];
-        let chunk = '';
-        let used = header.length;
-        let shown = 0;
-        const reserve = 80; // ruang untuk baris "...dan N tiket lainnya"
-        for (let i = 0; i < groupedArr.length; i++) {
-            const line = lineFn(groupedArr[i], i);
-            if (used + line.length + 2 > listBudget - reserve) break;
-            if (chunk && (chunk.length + 1 + line.length) > 1000) {
-                fields.push(chunk);
-                used += 1; // nama field kosong (\u200b)
-                chunk = line;
-            } else {
-                chunk = chunk ? `${chunk}\n${line}` : line;
+    // Susun blok ke dalam halaman (1 halaman = 1 pesan Discord)
+    const packPages = (listChunks) => {
+        const pages = [];
+        let fields = [];
+        let size = PANEL_TITLE.length;
+        listChunks.forEach((value, idx) => {
+            const isPageStart = fields.length === 0;
+            let name = idx === 0 ? listHeader : (isPageStart ? '🎫 Invoice Aktif (lanjutan)' : '\u200b');
+            if (fields.length && (size + name.length + value.length > PANEL_PAGE_BUDGET || fields.length >= 24)) {
+                pages.push(fields);
+                fields = [];
+                size = 0;
+                name = '🎫 Invoice Aktif (lanjutan)';
             }
-            used += line.length + 1;
-            shown++;
+            fields.push({ name, value, inline: false });
+            size += name.length + value.length;
+        });
+        // Stock Overview ikut di halaman terakhir kalau muat, kalau tidak -> pesan sendiri
+        if (fields.length && size + overviewSize <= PANEL_PAGE_BUDGET && fields.length + overviewFields.length <= 25) {
+            fields.push(...overviewFields);
+            pages.push(fields);
+        } else {
+            if (fields.length) pages.push(fields);
+            pages.push([...overviewFields]);
         }
-        if (chunk) fields.push(chunk);
-        return { fields, shown };
+        return pages;
     };
 
-    const listHeaderNormal = `🎫 Invoice Aktif per Ticket (${groupedArr.length} tiket)`;
-    let listFields = [];
-    if (groupedArr.length === 0) {
-        listFields.push({ name: listHeaderNormal, value: '*Belum ada invoice Community yang aktif saat ini.*', inline: false });
-    } else {
-        let header = listHeaderNormal;
-        let built = buildListFields(header, normalLine);
-        if (built.shown < groupedArr.length) {
-            header = `🎫 Invoice Aktif per Ticket (${groupedArr.length} tiket) · angka dalam Robux`;
-            built = buildListFields(header, compactLine);
+    let pages = packPages(chunks);
+    if (pages.length > PANEL_MAX_PAGES) {
+        // Sangat jarang (ratusan tiket). Potong dari belakang sampai muat, sisanya diberi keterangan.
+        let keep = chunks.length;
+        while (keep > 1 && pages.length > PANEL_MAX_PAGES) {
+            keep--;
+            const shownLines = chunks.slice(0, keep).join('\n').split('\n').length;
+            const note = `*…dan ${groupedArr.length - shownLines} tiket lainnya (total tetap dihitung di Stock Overview)*`;
+            pages = packPages([...chunks.slice(0, keep), note]);
         }
-        const chunks = built.fields;
-        if (built.shown < groupedArr.length) {
-            const rest = groupedArr.slice(built.shown);
-            const restTotal = rest.reduce((s, g) => s + g.total, 0);
-            const restInv = rest.reduce((s, g) => s + g.count, 0);
-            const note = `*…dan ${rest.length} tiket lainnya (${fmt(restTotal)} Robux · ${restInv} invoice)*`;
-            if (chunks.length && chunks[chunks.length - 1].length + 1 + note.length <= 1024) chunks[chunks.length - 1] += `\n${note}`;
-            else chunks.push(note);
-        }
-        chunks.forEach((value, idx) => listFields.push({ name: idx === 0 ? header : '\u200b', value, inline: false }));
     }
 
-    embed.addFields(listFields);
-    embed.addFields(overviewFields);
-    return embed;
+    return pages.map((fields, idx) => {
+        const embed = new EmbedBuilder().setColor(color).addFields(fields);
+        if (idx === 0) embed.setTitle(PANEL_TITLE);
+        if (idx === pages.length - 1) embed.setTimestamp();
+        return embed;
+    });
 }
 
 // Update pesan panel yang tersimpan di DB. Self-healing: kalau channel/pesan sudah tidak ada, DB dibersihkan.
@@ -1245,12 +1841,58 @@ async function updatePanelStockMessage() {
             }
             const msg = await channel.messages.fetch(panel.messageId).catch(err => { fetchError = err; return null; });
             if (!msg) {
-                if (fetchError?.code === 10008) await PanelStock.deleteOne({ _id: panel._id });
+                if (fetchError?.code === 10008) {
+                    // Pesan utama dihapus -> bersihkan juga pesan lanjutannya
+                    for (const id of (panel.extraMessageIds || [])) await channel.messages.delete(id).catch(() => {});
+                    await PanelStock.deleteOne({ _id: panel._id });
+                }
                 return;
             }
 
-            const embed = await buildPanelStockEmbed();
-            await msg.edit({ embeds: [embed] });
+            const pages = await buildPanelStockPages();
+            await msg.edit({ embeds: [pages[0]] });
+
+            // Pesan lanjutan (dibuat/diedit/dihapus otomatis sesuai jumlah halaman).
+            // ID pesan SELALU disimpan (di blok finally) walau Discord error di tengah jalan,
+            // supaya tidak ada pesan "yatim" yang tidak terupdate / dobel.
+            const oldIds = [...(panel.extraMessageIds || [])];
+            const newIds = [];
+            let consumed = 0; // jumlah ID lama yang sudah diproses
+            try {
+                for (let i = 1; i < pages.length; i++) {
+                    if (consumed < oldIds.length) {
+                        const existingId = oldIds[consumed];
+                        try {
+                            await channel.messages.edit(existingId, { embeds: [pages[i]] });
+                            newIds.push(existingId);
+                            consumed++;
+                            continue;
+                        } catch (err) {
+                            if (err?.code !== 10008) throw err; // gangguan sementara -> coba lagi di update berikutnya
+                            // Pesan lanjutan ini dihapus manual -> hapus juga yang di bawahnya supaya urutan tetap benar
+                            for (const id of oldIds.slice(consumed + 1)) await channel.messages.delete(id).catch(() => {});
+                            consumed = oldIds.length;
+                        }
+                    }
+                    const sent = await channel.send({ embeds: [pages[i]] });
+                    newIds.push(sent.id);
+                }
+                // Halaman berkurang (banyak tiket selesai) -> hapus pesan lanjutan yang tidak terpakai
+                while (consumed < oldIds.length) {
+                    try {
+                        await channel.messages.delete(oldIds[consumed]);
+                    } catch (err) {
+                        if (err?.code !== 10008) throw err; // gagal sementara -> dicoba lagi di update berikutnya
+                    }
+                    consumed++;
+                }
+            } finally {
+                const finalIds = [...newIds, ...oldIds.slice(consumed)];
+                if ((panel.extraMessageIds || []).join(',') !== finalIds.join(',')) {
+                    panel.extraMessageIds = finalIds;
+                    await panel.save().catch(e => console.error('Gagal simpan pesan lanjutan panel:', e.message));
+                }
+            }
         } catch (e) {
             console.error('Gagal update Panel Stock:', e.message);
         }
@@ -2888,10 +3530,8 @@ Jumlah Robux: `;
         return;
     }
 
-    
-
-// --- CEK ELIGIBLE (ANTI-SPAM, CACHING & DYNAMIC EMBED) ---
-       if (command === 'cek-eligible') {
+// --- CEK ELIGIBLE (ANTREAN OTOMATIS, CACHING & DYNAMIC EMBED) ---
+    if (command === 'cek-eligible') {
         // 0. LARANGAN CHANNEL — tidak boleh dipakai di channel chit-chat
         const chitChatChannelId = '1488782137149624442';
         const botCmdChannelId = '1504349336559947818';
@@ -2902,366 +3542,57 @@ Jumlah Robux: `;
         const targetUsername = interaction.options.getString('username').trim();
         const cacheKey = targetUsername.toLowerCase();
 
-        // 1. SISTEM COOLDOWN USER (Mencegah pelanggan spam command)
-        const cooldownTime = 30000; // 30 detik jeda per-user
-        if (userCooldowns.has(interaction.user.id)) {
-            const expiration = userCooldowns.get(interaction.user.id) + cooldownTime;
-            if (Date.now() < expiration) {
-                const timeLeft = Math.round((expiration - Date.now()) / 1000);
-                return interaction.reply({ content: `⏳ Santai dulu bos! Tunggu **${timeLeft} detik** lagi untuk mengecek.`, flags: MessageFlags.Ephemeral });
-            }
-        }
-
-        // 2. SISTEM CACHE MEMORY
-        if (eligibilityCache.has(cacheKey)) {
-            const cachedData = eligibilityCache.get(cacheKey);
-            if (Date.now() - cachedData.timestamp < 3600000) { // 1 Jam
-                userCooldowns.set(interaction.user.id, Date.now());
+        // 1. CACHE: username yang baru saja dicek langsung dijawab (tanpa antre, tanpa menyentuh akun dummy)
+        const cachedData = eligibilityCache.get(cacheKey);
+        if (cachedData) {
+            if (Date.now() - cachedData.timestamp < (cachedData.ttl || 3600000)) {
                 const cachedEmbed = EmbedBuilder.from(cachedData.embed)
                     .setFooter({ text: 'Roblox Eligibility Checker • (Data Cached)' });
                 return interaction.reply({ embeds: [cachedEmbed] });
-            } else {
-                eligibilityCache.delete(cacheKey);
             }
+            eligibilityCache.delete(cacheKey);
         }
 
-        // 3. SISTEM ANTREAN GLOBAL
-        if (isCheckingEligible) {
-            return interaction.reply({ content: '⏳ Sistem sedang memproses pengecekan lain. Mohon antre beberapa detik...', flags: MessageFlags.Ephemeral });
-        }
-        
-        isCheckingEligible = true;
-        await interaction.deferReply(); 
-
-        try {
-            // Dapatkan User ID Roblox
-            let userRes;
-            try {
-                userRes = await axios.post('https://users.roblox.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
-            } catch (err) {
-                console.log("API Asli Gagal (ID), mencoba RoProxy...");
-                userRes = await axios.post('https://users.roproxy.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
-            }
-
-            if (!userRes.data.data.length) {
-                isCheckingEligible = false;
-                return interaction.editReply(`❌ Username **${targetUsername}** tidak ditemukan di Roblox.`);
-            }
-            
-            const userId = userRes.data.data[0].id;
-            const actualUsername = userRes.data.data[0].name;
-
-            await sleep(500);
-
-            // Ambil Avatar
-            let avatarUrl = null;
-            try {
-                const avaRes = await axios.get(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`);
-                avatarUrl = avaRes.data.data[0].imageUrl;
-            } catch(e) {}
-
-            await sleep(500);
-
-            // Cek Daftar Grup User
-            let groupsRes;
-            try {
-                groupsRes = await axios.get(`https://groups.roblox.com/v2/users/${userId}/groups/roles`);
-            } catch (err) {
-                 console.log("API Asli Gagal (Grup), mencoba RoProxy...");
-                 groupsRes = await axios.get(`https://groups.roproxy.com/v2/users/${userId}/groups/roles`);
-            }
-
-            const userGroups = groupsRes.data.data.map(g => g.group.id.toString());
-
-            const targetGroups = [
-                { id: '1064667246', shortName: 'BEJIRLAH', url: 'https://www.roblox.com/communities/1064667246/BEJIRLAH-Community' },
-                { id: '1108229986', shortName: 'Vandamoy', url: 'https://www.roblox.com/id/communities/1108229986/Vandamoy' },
-                { id: '653724099', shortName: 'Maycomn', url: 'https://www.roblox.com/communities/653724099/Maycomn' },
-                { id: '617301345', shortName: 'Vibies', url: 'https://www.roblox.com/id/communities/617301345/VibeBlox-Community' }
-            ];
-
-            // Helper Waktu (Format Teks & Kalkulasi Remaining)
-            const formatWaktu = (isoString) => {
-                const d = new Date(isoString);
-                return d.toLocaleString('id-ID', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: 'Asia/Jakarta' }).replace(/\./g, ':') + ' WIB';
-            };
-
-            const getRemainingTime = (targetDate) => {
-                const now = new Date();
-                const diff = targetDate.getTime() - now.getTime();
-                if (diff <= 0) return "0 Detik";
-
-                const d = Math.floor(diff / (1000 * 60 * 60 * 24));
-                const h = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-                const m = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-                const s = Math.floor((diff % (1000 * 60)) / 1000);
-
-                let res = [];
-                if (d > 0) res.push(`${d} Hari`);
-                if (h > 0) res.push(`${h} Jam`);
-                if (m > 0) res.push(`${m} Menit`);
-                if (s > 0 || res.length === 0) res.push(`${s} Detik`);
-                return res.join(' ');
-            };
-
-            const embed = new EmbedBuilder()
-                .setTitle(`⏳ Eligibility Status`)
-                .addFields({ name: '👤 Username', value: `\`${actualUsername}\``, inline: false })
-                .setFooter({ text: 'Roblox Eligibility Checker' })
-                .setTimestamp();
-            
-            if (avatarUrl) embed.setThumbnail(avatarUrl);
-
-            // Logika Penentuan Warna Global (Merah -> Orange -> Hijau)
-            let overallColor = 0xFF0000; // Default Red (Belum join sama sekali)
-            let hasEligible = false;
-            let hasPending = false;
-
-            // Emoji status kustom (biar layout ringkas & konsisten untuk 3 community)
-            const emojiNotJoin = '<:notjoin:1530931902985277521>';
-            const emojiEligible = '<a:eligible:1502074502228738098>';
-            const emojiPending = '<:pending:1530933220726804603>';
-
-for (let i = 0; i < targetGroups.length; i++) {
-                const grp = targetGroups[i];
-                let fieldValue;
-
-                if (!userGroups.includes(grp.id)) {
-                    // KONDISI 1: Belum Join
-                    fieldValue = `${emojiNotJoin} Belum Bergabung`;
-                } else {
-                    // KONDISI 2: Sudah Join (Cek Audit Log)
-                    await sleep(400);
-                    try {
-                        const auditRes = await axios.get(`https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=JoinGroup&userId=${userId}&limit=10`, {
-                            headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
-                        });
-
-                        if (auditRes.data && auditRes.data.data && auditRes.data.data.length > 0) {
-                            const rawJoin = auditRes.data.data[0].created;
-                            const joinDate = new Date(rawJoin);
-                            const eligibleDate = new Date(joinDate.getTime() + (14 * 24 * 60 * 60 * 1000));
-                            const now = new Date();
-                            const isElig = now >= eligibleDate;
-
-                            if (isElig) {
-                                hasEligible = true;
-                                fieldValue = `📆 Join: \`${formatWaktu(rawJoin)}\`\n${emojiEligible} **ELIGIBLE** *(sejak ${formatWaktu(eligibleDate)})*`;
-                            } else {
-                                hasPending = true;
-                                fieldValue = `📆 Join: \`${formatWaktu(rawJoin)}\`\n${emojiPending} **PENDING** — Sisa \`${getRemainingTime(eligibleDate)}\``;
-                            }
-                        } else {
-                            // Tertimbun = Otomatis Eligible
-                            hasEligible = true;
-                            fieldValue = `${emojiEligible} **ELIGIBLE** *(tergabung > 14 hari)*`;
-                        }
-                    } catch (e) {
-                        hasEligible = true; // Asumsi positif jika API Roblox nyangkut tapi user ada di grup
-                        fieldValue = `⚠️ **User ada di dalam grup** *(Gagal narik tanggal. Silakan cek manual).*`;
-                    }
-                }
-
-                embed.addFields({ name: `🏢 Community ${i + 1}`, value: `[**${grp.shortName}**](${grp.url})\n${fieldValue}\n\u200b`, inline: false });
-            }
-
-            // Terapkan Warna Prioritas
-            if (hasEligible) {
-                overallColor = 0x57F287; // Hijau
-            } else if (hasPending) {
-                overallColor = 0xFFA500; // Orange
-            }
-            embed.setColor(overallColor);
-
-            // Simpan ke Cache
-            eligibilityCache.set(cacheKey, {
-                embed: embed.toJSON(),
-                timestamp: Date.now()
-            });
-            userCooldowns.set(interaction.user.id, Date.now());
-
-            await interaction.editReply({ embeds: [embed] });
-
-        } catch (error) {
-            console.error("Eligible Check Error ASLI:", error.response?.data || error.message);
-            await interaction.editReply('❌ Terjadi gangguan komunikasi dengan server Roblox saat ini. Coba beberapa saat lagi.');
-        } finally {
-            isCheckingEligible = false; 
-        }
+        // 2. MASUK ANTREAN — menggantikan pesan "tunggu X detik" & "mohon antre".
+        //    Pelanggan cukup 1x ketik command, hasilnya muncul otomatis saat gilirannya tiba.
+        await enqueueCustomerCheck({
+            interaction,
+            kind: 'elig',
+            label: targetUsername,
+            dedupeKey: `elig:${cacheKey}`,
+            cooldownKey: `elig_${interaction.user.id}`,
+            cooldownMs: 30000, // jeda 30 detik antar pengecekan dari orang yang sama
+            run: () => runEligibilityCheck(targetUsername, cacheKey)
+        });
         return;
     }
 
-        // --- CEK TRANSAKSI PAYOUT ---
+    // --- CEK TRANSAKSI PAYOUT (ANTREAN OTOMATIS) ---
     if (command === 'cek-transaksi') {
-
         const targetUsername = interaction.options.getString('username').trim();
         const cacheKey = `tx_${targetUsername.toLowerCase()}`;
-        const txCooldownKey = `tx_${interaction.user.id}`;
 
-        // 2. COOLDOWN per-user (terpisah dari cooldown /cek-eligible, lebih panjang karena command sensitif)
-        const txCooldownTime = 45000; // 45 detik
-        if (userCooldowns.has(txCooldownKey)) {
-            const expiration = userCooldowns.get(txCooldownKey) + txCooldownTime;
-            if (Date.now() < expiration) {
-                const timeLeft = Math.round((expiration - Date.now()) / 1000);
-                return interaction.reply({ content: `⏳ Tunggu **${timeLeft} detik** lagi sebelum cek transaksi lagi.`, flags: MessageFlags.Ephemeral });
-            }
-        }
-
-        // 3. CACHE 15 menit — kurangi beban akun dummy kalau username yang sama dicek berulang
-        if (transaksiCache.has(cacheKey)) {
-            const cached = transaksiCache.get(cacheKey);
-            if (Date.now() - cached.timestamp < 900000) { // 15 menit
-                userCooldowns.set(txCooldownKey, Date.now());
+        // CACHE 15 menit — username yang sama langsung dijawab tanpa antre
+        const cached = transaksiCache.get(cacheKey);
+        if (cached) {
+            if (Date.now() - cached.timestamp < 900000) {
                 const cachedEmbed = EmbedBuilder.from(cached.embed).setFooter({ text: 'Roblox Transaction Checker • (Data Cached)' });
                 return interaction.reply({ embeds: [cachedEmbed] });
-            } else {
-                transaksiCache.delete(cacheKey);
             }
+            transaksiCache.delete(cacheKey);
         }
 
-        // 4. ANTREAN GLOBAL — pakai lock BERSAMA dengan /cek-eligible supaya akun dummy TIDAK PERNAH
-        //    dipakai 2 request bersamaan (biar tidak dianggap pola "hacker API" oleh Roblox)
-        if (isCheckingEligible || isCheckingTransaksi) {
-            return interaction.reply({ content: '⏳ Sistem sedang memproses pengecekan lain. Mohon antre beberapa detik...', flags: MessageFlags.Ephemeral });
-        }
-
-        isCheckingTransaksi = true;
-        await interaction.deferReply();
-
-        try {
-            // Dapatkan User ID Roblox (pola sama seperti /cek-eligible)
-            let userRes;
-            try {
-                userRes = await axios.post('https://users.roblox.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
-            } catch (err) {
-                userRes = await axios.post('https://users.roproxy.com/v1/usernames/users', { usernames: [targetUsername], excludeBannedUsers: true });
-            }
-
-            if (!userRes.data.data.length) {
-                return interaction.editReply(`❌ Username **${targetUsername}** tidak ditemukan di Roblox.`);
-            }
-
-            const userId = userRes.data.data[0].id;
-            const actualUsername = userRes.data.data[0].name;
-            const actualDisplayName = userRes.data.data[0].displayName || actualUsername;
-
-            await sleep(500);
-
-            let avatarUrl = null;
-            try {
-                const avaRes = await axios.get(`https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${userId}&size=150x150&format=Png&isCircular=false`);
-                avatarUrl = avaRes.data.data[0].imageUrl;
-            } catch (e) {}
-
-            const targetGroups = [
-                { id: '1064667246', name: 'Community 1 (BEJIRLAH)' },
-                { id: '1108229986', name: 'Community 2 (Vandamoy)' },
-                { id: '653724099', name: 'Community 3 (Maycomn)' },
-                { id: '617301345', name: 'Community 4 (Vibies)' }
-            ];
-            const now = Date.now();
-            const cutoffOldest = now - (10 * 24 * 60 * 60 * 1000); // batas 10 hari ke belakang
-
-            const embed = new EmbedBuilder()
-                .setTitle('🧾 Transaksi Robux Checker')
-                .addFields({ name: '👤 Username', value: `\`${actualUsername}\``, inline: false })
-                .setColor(0x5865F2)
-                .setFooter({ text: `Diminta oleh ${interaction.user.tag} • Roblox Transaction Checker` })
-                .setTimestamp();
-            if (avatarUrl) embed.setThumbnail(avatarUrl);
-
-            let grandTotal = 0;
-
-            for (let gi = 0; gi < targetGroups.length; gi++) {
-                const grp = targetGroups[gi];
-                await sleep(500); // jeda antar-grup (disamakan gaya /cek-eligible)
-
-                const totals = { p1_3: 0, p4_6: 0, p7_10: 0 };
-                let fetchFailed = false;
-                let reachedPageLimit = false;
-
-                try {
-                    let cursor = '';
-                    let page = 0;
-                    const maxPages = 40;
-
-                    // Nama target yang dicari di teks log — cocokkan ke Username ATAU Display Name (case-insensitive)
-                    const namesToMatch = [actualUsername.toLowerCase(), actualDisplayName.toLowerCase()];
-
-                    while (page < maxPages) {
-                        const url = `https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=${encodeURIComponent('Spend Group Funds')}&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
-                        const auditRes = await axios.get(url, {
-                            headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
-                        });
-
-                        const entries = auditRes.data?.data || [];
-                        if (entries.length === 0) break;
-
-                        let stop = false;
-                        for (const entry of entries) {
-                            const createdTime = new Date(entry.created).getTime();
-                            if (createdTime < cutoffOldest) { stop = true; break; }
-
-                            // Format asli: "one-time payout of Robux from group funds to Nama1 (1,000), Nama2 (2,000)"
-                            // 1 entri bisa berisi BANYAK penerima berbeda, jadi Amount total TIDAK dijumlah langsung —
-                            // di-parse per-nama dari teksnya.
-                            const itemDesc = entry.description?.ItemDescription || '';
-                            const pairRegex = /([A-Za-z0-9_]+)\s*\(([\d,]+)\)/g;
-                            let match;
-                            while ((match = pairRegex.exec(itemDesc)) !== null) {
-                                const recipientName = match[1].toLowerCase();
-                                const recipientAmount = parseInt(match[2].replace(/,/g, ''), 10) || 0;
-
-                                if (namesToMatch.includes(recipientName)) {
-                                    const ageDays = (now - createdTime) / (1000 * 60 * 60 * 24);
-                                    if (ageDays <= 3) totals.p1_3 += recipientAmount;
-                                    else if (ageDays <= 6) totals.p4_6 += recipientAmount;
-                                    else if (ageDays <= 10) totals.p7_10 += recipientAmount;
-                                }
-                            }
-                        }
-
-                        if (stop) break;
-                        cursor = auditRes.data?.nextPageCursor;
-                        if (!cursor) break;
-
-                        page++;
-                        if (page >= maxPages) reachedPageLimit = true;
-                        await sleep(350);
-                    }
-                } catch (e) {
-                    console.error(`Gagal ambil audit log payout ${grp.name}:`, e.response?.data || e.message);
-                    fetchFailed = true;
-                }
-
-                if (fetchFailed) {
-                    embed.addFields({ name: `🏢 ${grp.name}`, value: '⚠️ Gagal mengambil data (cek console log bot).\n\u200b', inline: false });
-                } else {
-                    const totalGrp = totals.p1_3 + totals.p4_6 + totals.p7_10; // total 10 hari khusus grup ini
-                    grandTotal += totalGrp;
-                    const warning = reachedPageLimit ? '\n⚠️ *Data mungkin belum lengkap (terpotong di halaman ke-40).*' : '';
-                    embed.addFields({
-                        name: `🏢 ${grp.name}`,
-                        value: `📅 **1-3 Hari:** \`${totals.p1_3.toLocaleString('id-ID')} Robux\`\n📅 **4-6 Hari:** \`${totals.p4_6.toLocaleString('id-ID')} Robux\`\n📅 **7-10 Hari:** \`${totals.p7_10.toLocaleString('id-ID')} Robux\`\n📊 **Total: \`${totalGrp.toLocaleString('id-ID')} Robux\`**${warning}\n\u200b`,
-                        inline: false
-                    });
-                }
-            }
-
-           embed.addFields({ name: '📊 Total Keseluruhan (10 Hari)', value: `\`${grandTotal.toLocaleString('id-ID')} Robux\``, inline: false });
-
-            transaksiCache.set(cacheKey, { embed: embed.toJSON(), timestamp: Date.now() });
-            userCooldowns.set(txCooldownKey, Date.now());
-
-            await interaction.editReply({ embeds: [embed] });
-
-        } catch (error) {
-            console.error("Transaksi Check Error:", error.response?.data || error.message);
-            await interaction.editReply('❌ Terjadi gangguan komunikasi dengan server Roblox saat ini. Coba beberapa saat lagi.');
-        } finally {
-            isCheckingTransaksi = false;
-        }
+        // ANTREAN BERSAMA /cek-eligible — akun dummy tidak pernah dipakai 2 proses bersamaan
+        const requesterTag = interaction.user.tag;
+        await enqueueCustomerCheck({
+            interaction,
+            kind: 'tx',
+            label: targetUsername,
+            dedupeKey: `tx:${targetUsername.toLowerCase()}`,
+            cooldownKey: `tx_${interaction.user.id}`,
+            cooldownMs: 45000, // jeda 45 detik antar pengecekan dari orang yang sama
+            run: () => runTransactionCheck(targetUsername, cacheKey, requesterTag)
+        });
         return;
     }
     
@@ -3562,15 +3893,17 @@ for (let i = 0; i < targetGroups.length; i++) {
 
         await interaction.deferReply();
 
-        // Hapus panel lama kalau ada (biar cuma 1 panel aktif, tidak ada yang tertinggal double-update)
+        // Hapus panel lama + semua pesan lanjutannya (biar cuma 1 panel aktif, tidak ada yang tertinggal double-update)
         try {
             const oldPanel = await PanelStock.findOne();
             if (oldPanel) {
                 try {
                     const oldChannel = await client.channels.fetch(oldPanel.channelId).catch(() => null);
                     if (oldChannel) {
-                        const oldMsg = await oldChannel.messages.fetch(oldPanel.messageId).catch(() => null);
-                        if (oldMsg) await oldMsg.delete().catch(() => {});
+                        await oldChannel.messages.delete(oldPanel.messageId).catch(() => {});
+                        for (const id of (oldPanel.extraMessageIds || [])) {
+                            await oldChannel.messages.delete(id).catch(() => {});
+                        }
                     }
                 } catch (e) {}
                 await PanelStock.deleteMany({});
@@ -3579,19 +3912,22 @@ for (let i = 0; i < targetGroups.length; i++) {
             console.error('Gagal bersihkan panel stock lama:', e.message);
         }
 
-        const embed = await buildPanelStockEmbed();
-        await interaction.editReply({ embeds: [embed] });
+        const pages = await buildPanelStockPages();
+        await interaction.editReply({ embeds: [pages[0]] });
         const panelMsg = await interaction.fetchReply();
 
         await PanelStock.create({
             messageId: panelMsg.id,
             channelId: interaction.channel.id,
-            guildId: interaction.guild.id
+            guildId: interaction.guild.id,
+            extraMessageIds: []
         });
 
+        // Kalau tiket banyak, pesan lanjutan dibuat otomatis oleh update berikutnya
+        if (pages.length > 1) schedulePanelStockUpdate();
         return;
     }
-
+    
     // ==================================================
     // --- COMMAND: INVOICE (UTAMA) ---
     // ==================================================
@@ -3658,10 +3994,18 @@ for (let i = 0; i < targetGroups.length; i++) {
             .setFooter({ text: '⏳ Belum Selesai • VibeBlox Invoice' })
             .setTimestamp();
 
-        const sentReply = await interaction.editReply({ embeds: [invoiceEmbed], components: [] });
-        const invoiceMsgId = sentReply.id;
+        // Ambil ID pesan invoice DULU (pesan "VibeBlox is thinking..." dari deferReply),
+        // lalu embed + tombol dikirim SEKALIGUS dalam 1 edit -> tidak ada lagi invoice tanpa tombol.
+        let invoiceMsgId;
+        try {
+            invoiceMsgId = (await discordRetry(() => interaction.fetchReply())).id;
+        } catch (e) {
+            console.error('Gagal ambil ID pesan invoice:', e.message);
+            await interaction.deleteReply().catch(() => {});
+            return interaction.followUp({ content: '❌ Invoice gagal dibuat karena gangguan koneksi Discord. Silakan jalankan `/invoice` lagi.', flags: MessageFlags.Ephemeral }).catch(() => {});
+        }
 
-       const row1 = new ActionRowBuilder().addComponents(
+        const row1 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`inv_bca_${invoiceMsgId}`).setLabel('BCA').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`inv_qris_${invoiceMsgId}`).setLabel('QRIS').setStyle(ButtonStyle.Secondary),
             new ButtonBuilder().setCustomId(`inv_dana_${invoiceMsgId}`).setLabel('DANA').setStyle(ButtonStyle.Secondary),
@@ -3672,7 +4016,8 @@ for (let i = 0; i < targetGroups.length; i++) {
             new ButtonBuilder().setCustomId(`inv_done_${type}_${invoiceMsgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
         );
 
-        await interaction.editReply({ embeds: [invoiceEmbed], components: [row1, row2] });
+        const invoiceSent = await sendInvoiceMessage(interaction, invoiceMsgId, { embeds: [invoiceEmbed], components: [row1, row2] }, '/invoice');
+        if (!invoiceSent) return; // gagal total -> pesan sudah dihapus & staf sudah diberi tahu, jangan dicatat ke panel
 
         // --- PANEL STOCK: catat invoice ini kalau tipenya Community ---
         if (type === 'community') {
@@ -3751,15 +4096,22 @@ for (let i = 0; i < targetGroups.length; i++) {
             .setFooter({ text: '⏳ Menunggu Konfirmasi Partner' })
             .setTimestamp();
 
-        const sentReply = await interaction.editReply({ embeds: [invoiceEmbed], components: [] });
-        const msgId = sentReply.id;
+        // Ambil ID pesan DULU, lalu embed + tombol dikirim SEKALIGUS dalam 1 edit -> tidak ada lagi invoice tanpa tombol.
+        let msgId;
+        try {
+            msgId = (await discordRetry(() => interaction.fetchReply())).id;
+        } catch (e) {
+            console.error('Gagal ambil ID pesan partner invoice:', e.message);
+            await interaction.deleteReply().catch(() => {});
+            return interaction.followUp({ content: '❌ Invoice gagal dibuat karena gangguan koneksi Discord. Silakan jalankan `/partnerinvoice` lagi.', flags: MessageFlags.Ephemeral }).catch(() => {});
+        }
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`pinv_cancel_${msgId}`).setLabel('❌ Cancel').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId(`pinv_done_${type}_${msgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
         );
 
-        await interaction.editReply({ embeds: [invoiceEmbed], components: [row] });
+        await sendInvoiceMessage(interaction, msgId, { embeds: [invoiceEmbed], components: [row] }, '/partnerinvoice');
         return;
     }
 
