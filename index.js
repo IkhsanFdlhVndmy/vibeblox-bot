@@ -577,8 +577,8 @@ client.once('ready', async () => {
 
     // --- PANEL STOCK: refresh berkala (jaga-jaga kalau saldo Group Funds berubah dari luar bot,
     // dan sebagai self-heal kalau ada event yang sempat terlewat pas bot offline) ---
-    updatePanelStockMessage();
-    setInterval(updatePanelStockMessage, 20000);
+    refreshPanelFunds(); // ambil saldo sekali saat bot online (panel ikut terupdate setelahnya)
+    setInterval(refreshPanelFunds, 30000);
     // --- PANEL STOCK: scan PENDING ROBUX tiap community (lebih jarang, tiap 5 menit) ---
     refreshPendingCache();
     setInterval(refreshPendingCache, PENDING_REFRESH_MS);
@@ -858,7 +858,7 @@ async function sendInvoiceMessage(interaction, messageId, payload, commandName) 
 //   - prioritas 'normal' : /cek-eligible & /cek-transaksi pelanggan (urut sesuai waktu masuk)
 //   - prioritas 'low'    : scan pending Robux (background, mengalah ke pelanggan)
 // Jadi akun dummy TIDAK PERNAH dipakai 2 proses bersamaan.
-const RBX_GAP_MS = 2000;                       // jeda setelah 1 pengecekan pelanggan selesai
+const RBX_GAP_MS = 1200;                       // jeda setelah 1 pengecekan pelanggan selesai
 const RBX_MAX_WAIT_MS = 10 * 60 * 1000;        // token interaksi Discord cuma hidup 15 menit
 const RBX_MAX_CUSTOMER_JOBS = 30;              // maks antrean pelanggan sekaligus
 const RBX_MAX_JOBS_PER_USER = 3;               // maks pengecekan per orang yang sedang antre
@@ -870,7 +870,7 @@ let rbxNextAllowedAt = 0;
 let rbxWorkerRunning = false;
 let rbxWake = null;
 const rbxLastCheckByKey = new Map();           // cooldownKey -> waktu pengecekan terakhir selesai
-const rbxAvgDuration = { elig: 7000, tx: 20000 }; // rata-rata durasi (ms), diperbarui otomatis
+const rbxAvgDuration = { elig: 4000, tx: 15000 }; // rata-rata durasi (ms), diperbarui otomatis
 
 function rbxWakeUp() {
     if (rbxWake) { const wake = rbxWake; rbxWake = null; wake(); }
@@ -913,7 +913,7 @@ async function rbxWorker() {
             if (rbxQueue.length === 0) break;
 
             const job = rbxPickNext(now);
-            const gapLeft = rbxNextAllowedAt - now;
+            const gapLeft = Math.max(rbxNextAllowedAt, rbxPauseUntil) - now; // jeda normal / rem darurat 429
             if (!job || gapLeft > 0) {
                 rbxNotifyAll();
                 let waitMs = 5000;
@@ -965,6 +965,33 @@ function rbxRun(options) {
     return rbxCreateJob(options).promise;
 }
 
+// --- REM DARURAT: kalau Roblox membalas 429 ("terlalu banyak request"), SEMUA pemakaian akun dummy
+//     otomatis istirahat (sesuai header retry-after dari Roblox, default 30 detik, maks 2 menit) ---
+let rbxPauseUntil = 0;
+function rbxIsPaused() {
+    return Date.now() < rbxPauseUntil;
+}
+axios.interceptors.response.use(res => res, err => {
+    const status = err?.response?.status;
+    const url = String(err?.config?.url || '');
+    if (status === 429 && /roblox\.com|roproxy\.com/.test(url)) {
+        const retryAfter = Number(err.response.headers?.['retry-after']);
+        const pauseMs = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.min(retryAfter * 1000, 120000) : 30000;
+        if (!rbxIsPaused()) console.warn(`⚠️ [ROBLOX] Kena rate limit (429). Antrean akun dummy istirahat ${Math.round(pauseMs / 1000)} detik.`);
+        rbxPauseUntil = Math.max(rbxPauseUntil, Date.now() + pauseMs);
+        rbxNotifyAll();
+    }
+    return Promise.reject(err);
+});
+
+// --- PEMBERSIH MEMORI (penting untuk VPS RAM kecil): buang cache & catatan jeda yang sudah kedaluwarsa ---
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, val] of eligibilityCache) if (now - val.timestamp > (val.ttl || 3600000)) eligibilityCache.delete(key);
+    for (const [key, val] of transaksiCache) if (now - val.timestamp > 900000) transaksiCache.delete(key);
+    for (const [key, at] of rbxLastCheckByKey) if (now - at > 10 * 60 * 1000) rbxLastCheckByKey.delete(key);
+}, 10 * 60 * 1000);
+
 // --- Tampilan "loading antrean" untuk pelanggan ---
 function rbxCustomerJobsInOrder() {
     const list = [];
@@ -1012,7 +1039,7 @@ function rbxNotifyAll() {
         const avg = rbxAvgDuration[rbxActive.kind] || 5000;
         etaMs = Math.max(avg - (now - rbxActive.startedAt), 1000) + (rbxActive.gapAfter ?? RBX_GAP_MS);
     } else {
-        etaMs = Math.max(rbxNextAllowedAt - now, 0);
+        etaMs = Math.max(Math.max(rbxNextAllowedAt, rbxPauseUntil) - now, 0);
     }
 
     const seenOwners = new Set();
@@ -1140,7 +1167,7 @@ async function runEligibilityCheck(targetUsername, cacheKey) {
         const actualUsername = userRes.data.data[0].name;
         const actualDisplayName = String(userRes.data.data[0].displayName || actualUsername).replace(/`/g, "'");
 
-        await sleep(500);
+        await sleep(200); // request publik (tanpa cookie akun dummy)
 
         // Ambil Avatar
         let avatarUrl = null;
@@ -1149,7 +1176,7 @@ async function runEligibilityCheck(targetUsername, cacheKey) {
             avatarUrl = avaRes.data.data[0].imageUrl;
         } catch (e) {}
 
-        await sleep(500);
+        await sleep(200); // request publik (tanpa cookie akun dummy)
 
         // Cek Daftar Grup User
         let groupsRes;
@@ -1203,6 +1230,7 @@ async function runEligibilityCheck(targetUsername, cacheKey) {
         let overallColor = 0xFF0000; // Merah (belum join sama sekali)
         let hasEligible = false;
         let hasPending = false;
+        let hadLookupError = false; // ada data yang gagal ditarik -> hasil TIDAK disimpan ke cache
 
         const emojiNotJoin = '<:notjoin:1530931902985277521>';
         const emojiEligible = '<a:eligible:1502074502228738098>';
@@ -1215,8 +1243,9 @@ async function runEligibilityCheck(targetUsername, cacheKey) {
             if (!userGroups.includes(grp.id)) {
                 fieldValue = `${emojiNotJoin} Belum Bergabung`;
             } else {
-                await sleep(400);
+                await sleep(350); // request audit-log (pakai cookie akun dummy)
                 try {
+                    if (rbxIsPaused()) throw new Error('RBX_PAUSED'); // sedang kena rate limit -> jangan tambah request
                     const auditRes = await axios.get(`https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=JoinGroup&userId=${userId}&limit=10`, {
                         headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
                     });
@@ -1237,6 +1266,7 @@ async function runEligibilityCheck(targetUsername, cacheKey) {
                         fieldValue = `${emojiEligible} **ELIGIBLE** *(tergabung > 14 hari)*`;
                     }
                 } catch (e) {
+                    hadLookupError = true;
                     hasEligible = true; // asumsi positif jika API Roblox nyangkut tapi user ada di grup
                     fieldValue = `⚠️ **User ada di dalam grup** *(Gagal narik tanggal. Silakan cek manual).*`;
                 }
@@ -1249,12 +1279,15 @@ async function runEligibilityCheck(targetUsername, cacheKey) {
         else if (hasPending) overallColor = 0xFFA500;  // Orange
         embed.setColor(overallColor);
 
-        // Cache: 1 jam. Kalau ada status PENDING, cukup 10 menit (sisa waktunya berubah terus)
-        eligibilityCache.set(cacheKey, {
-            embed: embed.toJSON(),
-            timestamp: Date.now(),
-            ttl: hasPending ? 600000 : 3600000
-        });
+        // Cache: 1 jam. Kalau ada status PENDING, cukup 10 menit (sisa waktunya berubah terus).
+        // Kalau ada data yang GAGAL ditarik, jangan di-cache -> pengecekan berikutnya ambil data baru.
+        if (!hadLookupError) {
+            eligibilityCache.set(cacheKey, {
+                embed: embed.toJSON(),
+                timestamp: Date.now(),
+                ttl: hasPending ? 600000 : 3600000
+            });
+        }
 
         return { embeds: [embed] };
     } catch (error) {
@@ -1287,7 +1320,7 @@ async function runTransactionCheck(targetUsername, cacheKey, requesterTag) {
         const actualUsername = userRes.data.data[0].name;
         const actualDisplayName = userRes.data.data[0].displayName || actualUsername;
 
-        await sleep(500);
+        await sleep(200); // request publik (tanpa cookie akun dummy)
 
         let avatarUrl = null;
         try {
@@ -1313,10 +1346,11 @@ async function runTransactionCheck(targetUsername, cacheKey, requesterTag) {
         if (avatarUrl) embed.setThumbnail(avatarUrl);
 
         let grandTotal = 0;
+        let anyFetchFailed = false; // ada community yang gagal -> hasil TIDAK disimpan ke cache
         const namesToMatch = [actualUsername.toLowerCase(), actualDisplayName.toLowerCase()];
 
         for (const grp of targetGroups) {
-            await sleep(500);
+            await sleep(400); // jeda antar community (pakai cookie akun dummy)
 
             const totals = { p1_3: 0, p4_6: 0, p7_10: 0 };
             let fetchFailed = false;
@@ -1328,6 +1362,7 @@ async function runTransactionCheck(targetUsername, cacheKey, requesterTag) {
                 const maxPages = 40;
 
                 while (page < maxPages) {
+                    if (rbxIsPaused()) throw new Error('RBX_PAUSED'); // sedang kena rate limit -> berhenti
                     const url = `https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=${encodeURIComponent('Spend Group Funds')}&limit=100${cursor ? `&cursor=${cursor}` : ''}`;
                     const auditRes = await axios.get(url, {
                         headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
@@ -1371,6 +1406,7 @@ async function runTransactionCheck(targetUsername, cacheKey, requesterTag) {
             }
 
             if (fetchFailed) {
+                anyFetchFailed = true;
                 embed.addFields({ name: `🏢 ${grp.name}`, value: '⚠️ Gagal mengambil data (cek console log bot).\n\u200b', inline: false });
             } else {
                 const totalGrp = totals.p1_3 + totals.p4_6 + totals.p7_10;
@@ -1386,7 +1422,7 @@ async function runTransactionCheck(targetUsername, cacheKey, requesterTag) {
 
         embed.addFields({ name: '📊 Total Keseluruhan (10 Hari)', value: `\`${grandTotal.toLocaleString('id-ID')} Robux\``, inline: false });
 
-        transaksiCache.set(cacheKey, { embed: embed.toJSON(), timestamp: Date.now() });
+        if (!anyFetchFailed) transaksiCache.set(cacheKey, { embed: embed.toJSON(), timestamp: Date.now() });
         return { embeds: [embed] };
     } catch (error) {
         console.error("Transaksi Check Error:", error.response?.data || error.message);
@@ -1652,34 +1688,61 @@ const PANEL_TITLE = '📊 VibeBlox Stock Tracking Panel';
 const PANEL_PAGE_BUDGET = 5500; // batas aman karakter per pesan (maks Discord 6000)
 const PANEL_MAX_PAGES = 8;      // maks 8 pesan (±800 tiket) — jauh di atas kebutuhan normal
 
-async function buildPanelStockPages() {
-    const fmt = (n) => Number(n).toLocaleString('id-ID');
 
-    // Saldo live tiap community — lewat ANTREAN akun dummy (prioritas tinggi, tidak tabrakan dengan cek pelanggan)
-    let fundsPerCommunity = {};
+// --- SALDO GROUP FUNDS: diambil dari Roblox HANYA oleh timer-nya sendiri (tiap 30 detik) ---
+// Update panel karena invoice baru / done / cancel cukup pakai saldo tersimpan ini -> 0 request ke Roblox.
+const panelFunds = { data: {}, failed: new Set(), at: 0 };
+let isFundsRefreshing = false;
+async function refreshPanelFunds() {
+    if (isFundsRefreshing) return;
+    isFundsRefreshing = true;
     try {
-        fundsPerCommunity = await rbxRun({
+        const result = await rbxRun({
             priority: 'high',
             gapAfter: 500,
             run: async () => {
-                const result = {};
+                const out = {};
                 for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
-                    result[num] = await fetchGroupFunds(grp.groupId);
+                    out[num] = await fetchGroupFunds(grp.groupId);
                     await sleep(250);
                 }
-                return result;
+                return out;
             }
         });
+        for (const num of Object.keys(RESTOCK_COMMUNITIES)) {
+            if (typeof result[num] === 'number') {
+                panelFunds.data[num] = result[num];
+                panelFunds.failed.delete(num);
+            } else {
+                panelFunds.failed.add(num); // gagal -> saldo lama tetap dipakai, ditandai
+            }
+        }
+        panelFunds.at = Date.now();
+        schedulePanelStockUpdate(); // tampilkan saldo terbaru di panel
     } catch (e) {
         console.error('Gagal ambil saldo Group Funds:', e.message);
+    } finally {
+        isFundsRefreshing = false;
     }
+}
 
+async function buildPanelStockPages() {
+    const fmt = (n) => Number(n).toLocaleString('id-ID');
+
+    // Saldo Group Funds diambil dari data TERSIMPAN (diperbarui tiap 30 detik oleh refreshPanelFunds),
+    // jadi menyusun panel TIDAK PERNAH memanggil API Roblox.
+    const fundsPerCommunity = {};
+    for (const num of Object.keys(RESTOCK_COMMUNITIES)) {
+        fundsPerCommunity[num] = typeof panelFunds.data[num] === 'number' ? panelFunds.data[num] : null;
+    }
+    
     let totalStock = 0;
     let anyFundsFailed = false;
     for (const num of Object.keys(RESTOCK_COMMUNITIES)) {
         const funds = fundsPerCommunity[num];
         if (typeof funds === 'number') totalStock += funds;
-        else { fundsPerCommunity[num] = null; anyFundsFailed = true; }
+        else if (panelFunds.at) anyFundsFailed = true; // (sebelum saldo pertama terambil = masih memuat, bukan gagal)
+        if (panelFunds.failed.has(num)) anyFundsFailed = true; // saldo lama karena tarikan terakhir gagal
     }
 
     // Ambil semua invoice Community yang masih AKTIF (belum done/cancel/dihapus)
@@ -1699,7 +1762,7 @@ async function buildPanelStockPages() {
     const communityLines = [];
     for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
         const val = fundsPerCommunity[num];
-        communityLines.push(`🏢 **Community ${num} (${grp.name}):** ${val !== null ? `\`${fmt(val)} Robux\`` : '⚠️ *Gagal ambil data*'}`);
+        communityLines.push(`🏢 **Community ${num} (${grp.name}):** ${val !== null ? `\`${fmt(val)} Robux\`` : (panelFunds.at ? '⚠️ *Gagal ambil data*' : '*memuat...*')}`);
 
         const p = pendingCache[num];
         if (!p) {
@@ -3561,7 +3624,7 @@ Jumlah Robux: `;
             label: targetUsername,
             dedupeKey: `elig:${cacheKey}`,
             cooldownKey: `elig_${interaction.user.id}`,
-            cooldownMs: 30000, // jeda 30 detik antar pengecekan dari orang yang sama
+            cooldownMs: 5000, // jeda 5 detik antar pengecekan dari orang yang sama (keamanan akun dummy dijaga antrean global)
             run: () => runEligibilityCheck(targetUsername, cacheKey)
         });
         return;
@@ -3590,7 +3653,7 @@ Jumlah Robux: `;
             label: targetUsername,
             dedupeKey: `tx:${targetUsername.toLowerCase()}`,
             cooldownKey: `tx_${interaction.user.id}`,
-            cooldownMs: 45000, // jeda 45 detik antar pengecekan dari orang yang sama
+            cooldownMs: 20000, // jeda 20 detik (cek transaksi jauh lebih berat: bisa ratusan request)
             run: () => runTransactionCheck(targetUsername, cacheKey, requesterTag)
         });
         return;
