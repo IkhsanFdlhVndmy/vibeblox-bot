@@ -841,6 +841,7 @@ async function processVouchMessage(message) {
             // 3. Update tampilan form (dengan percobaan ulang). Kalau tetap gagal,
             //    diulang otomatis tiap 2 menit — vouch TIDAK pindah ke tiket lain.
             await syncVouchEmbed(tv, ch);
+            evaluateAutoClose(tv.channelId, true).catch(() => {}); // AUTO-CLOSE: cek apakah tiket siap ditutup
             break; // 1 pesan vouch hanya untuk 1 tiket
         }
     } catch (e) {
@@ -852,6 +853,7 @@ async function processVouchMessage(message) {
 
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
+    handleAutoCloseActivity(message); // AUTO-CLOSE: pantau aktivitas di tiket yang sedang hitung mundur
     if (message.channel.id !== VOUCH_CHANNEL_ID) return;
 
     try {
@@ -896,6 +898,645 @@ async function catchUpMissedVouches() {
     }
 }
 client.once('ready', () => setTimeout(catchUpMissedVouches, 15000)); // tunggu cache channel siap
+
+// =====================================================================
+// === AUTO-CLOSE TICKET (validasi berlapis) + TRANSCRIPT LENGKAP ===
+// =====================================================================
+// ALUR:
+//  1. Syarat aktif   : invoice terakhir sudah DONE (dibaca dari database, BUKAN dari nama channel -done)
+//                      + pembeli sudah VOUCH untuk invoice tsb + TIDAK ada invoice yang masih berjalan
+//                      + tidak ada invoice baru setelah transaksi yang di-vouch + bukan tiket Pre-Order.
+//  2. Pengumuman     : bot tag pembeli, tiket tutup otomatis 30 menit lagi (tombol "Jangan Tutup").
+//  3. Hitung mundur  : - pesan biasa (siapa pun)                 -> diulang 30 menit dari pesan terakhir
+//                      - pelanggan bertanya (?) / kirim lampiran /
+//                        bahas bayar / order lagi / komplain      -> DITUNDA sampai staf membalas
+//                      - "Jangan Tutup" / tombol                  -> DIBATALKAN untuk transaksi ini
+//                      - invoice baru / Done baru / Pre-Order     -> dibatalkan, siklus diulang dari awal
+//                        (Done -> vouch -> auto-close lagi)
+//  4. Sebelum tutup  : SEMUA syarat dicek ULANG langsung dari Discord & database (termasuk pesan yang
+//                      terlewat saat bot mati / Discord gangguan).
+//  5. Transcript     : isi invoice (embed) + semua lampiran (bukti bayar dll) WAJIB tersimpan di channel log
+//                      dulu. Gagal simpan = tiket TIDAK ditutup. Dicek sekali lagi tepat sebelum channel dihapus.
+const AUTO_CLOSE_ENABLED = true;                     // SAKLAR UTAMA: false = auto-close mati (tutup manual tetap pakai transcript baru)
+const AUTO_CLOSE_DELAY_MS = 30 * 60 * 1000;          // hitung mundur
+const AUTO_CLOSE_WARN_MS = 5 * 60 * 1000;            // pengingat 5 menit sebelum tutup
+const AUTO_CLOSE_GRACE_MS = 10 * 60 * 1000;          // tambahan waktu kalau bot sempat mati / gagal
+const AUTO_CLOSE_MAX_FAILS = 3;                      // gagal simpan transcript 3x -> auto-close dibatalkan
+const AUTO_CLOSE_REEVAL_MS = 10 * 60 * 1000;         // tiket yang belum memenuhi syarat dicek ulang maks tiap 10 menit
+const AUTO_CLOSE_MAX_PER_TICK = 3;                   // maks tiket ditutup per putaran (30 detik) -> tidak membanjiri Discord
+const AUTO_CLOSE_GAP_MS = 3000;                      // jeda antar penutupan tiket
+const TRANSCRIPT_LOG_CHANNEL_ID = '1490236117293862962';
+const TRANSCRIPT_MAX_MESSAGES = 3000;
+const TRANSCRIPT_MAX_FILE_BYTES = 8 * 1024 * 1024;   // batas aman upload bot Discord
+const TRANSCRIPT_MAX_BATCH_BYTES = 8 * 1024 * 1024;
+
+const AC_CANCEL_WORDS = /\b(jangan|jgn|jngn|gausah|ga usah|gak usah|nggak usah|ngga usah)\s*(di)?\s*(tutup|close)/i;
+const AC_ATTENTION_WORDS = /(\?|bayar|payment|transfer|\btf\b|qris|\bdana\b|gopay|\bbca\b|bukti|order lagi|beli lagi|mau order|mau beli|tambah|nambah|invoice|refund|belum masuk|blm masuk|belom masuk|belum nyampe|blm nyampe|belum sampai|kurang|komplain|masalah|pending|salah)/i;
+
+const acLocks = new Set();                 // 1 proses auto-close per tiket dalam 1 waktu
+const acActiveChannels = new Set();        // tiket berstatus armed/paused (cek cepat tanpa query DB)
+const acLastEval = new Map();              // channelId -> waktu evaluasi terakhir
+const acStaffCache = new Map();            // userId -> { v, at }
+const ticketsBeingClosed = new Set();      // kunci proses tutup (manual & otomatis)
+
+async function acWithLock(channelId, fn) {
+    if (acLocks.has(channelId)) return;
+    acLocks.add(channelId);
+    try { return await fn(); } finally { acLocks.delete(channelId); }
+}
+
+async function acIsStaffUser(guild, member, userId) {
+    if (member?.roles?.cache) return member.roles.cache.some(r => TICKET_STAFF_ROLES.includes(r.id));
+    const cached = acStaffCache.get(userId);
+    if (cached && Date.now() - cached.at < 10 * 60 * 1000) return cached.v;
+    const m = guild ? await guild.members.fetch(userId).catch(() => null) : null;
+    const v = !!m?.roles?.cache?.some(r => TICKET_STAFF_ROLES.includes(r.id));
+    acStaffCache.set(userId, { v, at: Date.now() });
+    return v;
+}
+
+function acIsPreOrder(ticket, channel) {
+    return !!ticket?.isPreOrder || /(^|-)po(-|$)/i.test(channel?.name || '');
+}
+
+async function acFetchChannel(channelId) {
+    let gone = false;
+    const channel = await client.channels.fetch(channelId).catch(err => { if (err?.code === 10003) gone = true; return null; });
+    return { channel, gone };
+}
+
+// Ambil SEMUA pesan tiket (urut lama -> baru), maks TRANSCRIPT_MAX_MESSAGES
+async function acFetchAllMessages(channel) {
+    const all = [];
+    let before;
+    while (all.length < TRANSCRIPT_MAX_MESSAGES) {
+        const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}), cache: false });
+        if (!batch.size) break;
+        all.push(...batch.values());
+        if (batch.size < 100) break;
+        before = batch.last().id;
+    }
+    // urut waktu; kalau detiknya sama, pakai ID pesan Discord (selalu berurutan)
+    return all.sort((a, b) => a.createdTimestamp - b.createdTimestamp || (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+}
+
+function acIsInvoiceMessage(m) {
+    return m.author?.id === client.user.id && /invoice/i.test(m.embeds?.[0]?.title || '');
+}
+function acIsInvoiceDone(m) {
+    const footer = m.embeds?.[0]?.footer?.text || '';
+    return /^✅/.test(footer) || /invoice selesai/i.test(footer);
+}
+// Invoice yang masih berjalan (belum Done / sedang diproses Done) -> TIDAK boleh ditutup
+function acFindActiveInvoice(messages) {
+    for (const m of messages) {
+        if (m.author?.id !== client.user.id) continue;
+        if (isUpdating.has(`inv_done_${m.id}`) || isUpdating.has(`pinv_done_${m.id}`)) return m;
+        if (acIsInvoiceMessage(m) && !acIsInvoiceDone(m)) return m;
+    }
+    return null;
+}
+
+// Baca pesan manusia setelah waktu tertentu: siapa terakhir, ada "Jangan Tutup"?, perlu dibalas staf?
+async function acClassifyActivity(guild, messages, sinceTs) {
+    let last = null, cancelBy = null, pauseReason = null;
+    for (const m of messages) {
+        if (m.author?.bot || m.createdTimestamp <= sinceTs) continue;
+        last = m;
+        const text = m.content || '';
+        if (AC_CANCEL_WORDS.test(text)) cancelBy = m.author.id;
+        const staff = await acIsStaffUser(guild, m.member, m.author.id);
+        if (staff) pauseReason = null;
+        else if (m.attachments?.size > 0) pauseReason = 'pelanggan mengirim lampiran (kemungkinan bukti pembayaran)';
+        else if (AC_ATTENTION_WORDS.test(text)) pauseReason = 'pelanggan mengirim pesan yang perlu dibalas staf';
+    }
+    return { last, cancelBy, pauseReason };
+}
+
+// --- Tampilan pengumuman auto-close ---
+function acBuildNotice(buyerId, state, { closeAt = null, reason = null } = {}) {
+    const ts = closeAt ? Math.floor(new Date(closeAt).getTime() / 1000) : null;
+    const embed = new EmbedBuilder().setTimestamp();
+    let buttonDisabled = false;
+    if (state === 'armed') {
+        embed.setColor(0xFEE75C).setTitle('🔒 AUTO-CLOSE TICKET').setDescription(
+            `Transaksi di tiket ini sudah **selesai** dan **vouch sudah diterima**. Terima kasih! 🙏\n\n` +
+            `Tiket akan **ditutup otomatis <t:${ts}:R>** (pukul <t:${ts}:t>).\n\n` +
+            `• Masih ada keperluan? Ketik **Jangan Tutup** atau tekan tombol di bawah.\n` +
+            `• Mengirim pesan akan menunda penutupan 30 menit.\n` +
+            `• Mau order lagi, kirim bukti bayar, atau ada pertanyaan? Penutupan otomatis ditunda sampai staf membalas.` +
+            (reason ? `\n\n-# ${reason}` : '') +
+            `\n-# Seluruh percakapan & lampiran disimpan otomatis sebelum tiket ditutup.`
+        );
+    } else if (state === 'paused') {
+        embed.setColor(0x5865F2).setTitle('⏸️ AUTO-CLOSE DITUNDA').setDescription(
+            `Penutupan otomatis **ditunda**: ${reason || 'menunggu balasan staf'}.\n\n` +
+            `Hitung mundur 30 menit akan dimulai lagi setelah staf membalas.\n` +
+            `Ketik **Jangan Tutup** jika tiket ini harus tetap terbuka.`
+        );
+    } else {
+        buttonDisabled = true;
+        embed.setColor(0x99AAB5).setTitle('❌ AUTO-CLOSE DIBATALKAN').setDescription(
+            `Penutupan otomatis **dibatalkan**: ${reason || '-'}.\n\nTiket tetap terbuka. Staf bisa menutup tiket secara manual.`
+        );
+    }
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('ac_cancel').setLabel('✋ Jangan Tutup').setStyle(ButtonStyle.Secondary).setDisabled(buttonDisabled)
+    );
+    return { content: `<@${buyerId}>`, embeds: [embed], components: [row], allowedMentions: { users: [buyerId] } };
+}
+
+async function acEditNotice(ticket, state, opts = {}) {
+    const noticeId = ticket?.autoClose?.noticeMessageId;
+    if (!noticeId) return;
+    const { channel } = await acFetchChannel(ticket.channelId);
+    if (!channel) return;
+    const buyerId = opts.buyerId || ticket.autoClose.buyerId || ticket.creatorId;
+    const payload = acBuildNotice(buyerId, state, opts);
+    delete payload.allowedMentions; // edit tidak perlu ping ulang
+    await discordRetry(() => channel.messages.edit(noticeId, payload)).catch(() => {});
+}
+
+// --- Ubah status (atomik: hanya berlaku kalau status saat ini sesuai) ---
+async function acTransition(channelId, fromStates, set) {
+    return Ticket.findOneAndUpdate(
+        { channelId, 'autoClose.state': { $in: fromStates } },
+        { $set: Object.fromEntries(Object.entries(set).map(([k, v]) => [`autoClose.${k}`, v])) },
+        { new: true }
+    );
+}
+
+async function acCancel(channelId, reason) {
+    const t = await acTransition(channelId, ['armed', 'paused'], { state: 'cancelled', reason, closeAt: null });
+    acActiveChannels.delete(channelId);
+    if (t) await acEditNotice(t, 'cancelled', { reason });
+    return !!t;
+}
+
+async function acPause(channelId, reason) {
+    const t = await acTransition(channelId, ['armed'], { state: 'paused', reason, closeAt: null, warned: false });
+    if (t) await acEditNotice(t, 'paused', { reason });
+}
+
+// Edit pengumuman digabung (maks 1x per 5 detik per tiket) supaya chat ramai tidak kena batas edit Discord.
+// Selalu membaca status TERBARU dari database saat edit dijalankan.
+const acNoticeTimers = new Map();
+function acScheduleNoticeRefresh(channelId) {
+    if (acNoticeTimers.has(channelId)) return;
+    acNoticeTimers.set(channelId, setTimeout(async () => {
+        acNoticeTimers.delete(channelId);
+        try {
+            const t = await Ticket.findOne({ channelId });
+            const st = t?.autoClose?.state;
+            if (st === 'armed') await acEditNotice(t, 'armed', { closeAt: t.autoClose.closeAt });
+            else if (st === 'paused') await acEditNotice(t, 'paused', { reason: t.autoClose.reason });
+        } catch (e) {}
+    }, 5000));
+}
+
+async function acRestartTimer(channelId, fromTs) {
+    const closeAt = new Date(fromTs + AUTO_CLOSE_DELAY_MS);
+    const t = await acTransition(channelId, ['armed', 'paused'], { state: 'armed', armedAt: new Date(fromTs), closeAt, warned: false, reason: null });
+    if (t) { acActiveChannels.add(channelId); acScheduleNoticeRefresh(channelId); }
+}
+
+// HOOK: dipanggil saat ada invoice baru / Done baru / Pre-Order -> batalkan hitung mundur.
+// Status kembali kosong, jadi siklus bisa berjalan lagi (Done -> vouch -> auto-close).
+async function autoCloseDisarm(channelId, reason) {
+    acLastEval.delete(channelId);
+    const before = await Ticket.findOneAndUpdate(
+        { channelId, 'autoClose.state': { $in: ['armed', 'paused', 'closing'] } },
+        { $set: { 'autoClose.state': null, 'autoClose.reason': reason, 'autoClose.closeAt': null } },
+        { new: false }
+    ).catch(() => null);
+    acActiveChannels.delete(channelId);
+    if (before) await acEditNotice(before, 'cancelled', { reason });
+}
+
+// --- 1. CEK SYARAT & AKTIFKAN HITUNG MUNDUR ---
+async function evaluateAutoClose(channelId, force = false) {
+    if (!AUTO_CLOSE_ENABLED || !client.isReady()) return;
+    if (!force && Date.now() - (acLastEval.get(channelId) || 0) < AUTO_CLOSE_REEVAL_MS) return;
+    return acWithLock(channelId, async () => {
+        acLastEval.set(channelId, Date.now());
+        const ticket = await Ticket.findOne({ channelId });
+        if (!ticket) return;
+        const st = ticket.autoClose?.state;
+        if (['armed', 'paused', 'closing'].includes(st) || ticketsBeingClosed.has(channelId)) return;
+
+        const tv = await TicketVouch.findOne({ channelId, vouched: true });
+        if (!tv) return; // belum Done atau belum vouch
+        if (st === 'cancelled' && ticket.autoClose?.forDoneAt && +ticket.autoClose.forDoneAt === +tv.doneAt) return;
+
+        const { channel } = await acFetchChannel(channelId);
+        if (!channel || acIsPreOrder(ticket, channel)) return;
+
+        const messages = await acFetchAllMessages(channel);
+        if (acFindActiveInvoice(messages)) return;                                       // ada invoice berjalan
+        if (messages.some(m => acIsInvoiceMessage(m) && m.createdTimestamp > +tv.doneAt)) return; // invoice baru setelah transaksi yang di-vouch
+
+        const activity = await acClassifyActivity(channel.guild, messages, +tv.doneAt);
+        const buyerId = tv.buyerId || ticket.creatorId;
+        const base = { forDoneAt: tv.doneAt, buyerId, warned: false, failCount: 0, noticeMessageId: null };
+
+        if (activity.cancelBy) {
+            ticket.autoClose = { ...base, state: 'cancelled', reason: `dibatalkan oleh <@${activity.cancelBy}> ("Jangan Tutup")` };
+            await ticket.save();
+            return;
+        }
+
+        const paused = !!activity.pauseReason;
+        const closeAt = paused ? null : new Date(Date.now() + AUTO_CLOSE_DELAY_MS);
+        const notice = await discordRetry(() => channel.send(acBuildNotice(buyerId, paused ? 'paused' : 'armed', { closeAt, reason: activity.pauseReason })));
+        ticket.autoClose = { ...base, state: paused ? 'paused' : 'armed', armedAt: new Date(), closeAt, reason: activity.pauseReason, noticeMessageId: notice.id };
+        try {
+            await ticket.save();
+        } catch (e) {
+            await notice.delete().catch(() => {}); // jangan tinggalkan pengumuman tanpa data
+            throw e;
+        }
+        acActiveChannels.add(channelId);
+    });
+}
+
+// --- 2. AKTIVITAS DI TIKET SELAMA HITUNG MUNDUR (dipanggil dari messageCreate) ---
+async function handleAutoCloseActivity(message) {
+    try {
+        if (!acActiveChannels.has(message.channel.id) || message.author.bot) return;
+        const channelId = message.channel.id;
+        const text = message.content || '';
+
+        if (AC_CANCEL_WORDS.test(text)) {
+            if (await acCancel(channelId, `dibatalkan oleh <@${message.author.id}> ("Jangan Tutup")`)) {
+                await message.react('✅').catch(() => {});
+            }
+            return;
+        }
+
+        const staff = await acIsStaffUser(message.guild, message.member, message.author.id);
+        if (!staff && message.attachments.size > 0) return acPause(channelId, 'pelanggan mengirim lampiran (kemungkinan bukti pembayaran)');
+        if (!staff && AC_ATTENTION_WORDS.test(text)) return acPause(channelId, 'pelanggan mengirim pesan yang perlu dibalas staf');
+
+        if (staff) return acRestartTimer(channelId, message.createdTimestamp);          // staf membalas -> lanjut / ulang 30 menit
+        const t = await Ticket.findOne({ channelId, 'autoClose.state': 'armed' });       // pesan biasa pelanggan -> ulang 30 menit
+        if (t) await acRestartTimer(channelId, message.createdTimestamp);
+    } catch (e) {
+        console.error('Auto-close activity error:', e.message);
+    }
+}
+
+// --- 3. TOMBOL "JANGAN TUTUP" ---
+async function handleAutoCloseCancelButton(interaction) {
+    const channelId = interaction.channel.id;
+    const ticket = await Ticket.findOne({ channelId });
+    const staff = await acIsStaffUser(interaction.guild, interaction.member, interaction.user.id);
+    const allowed = staff || [ticket?.autoClose?.buyerId, ticket?.creatorId].includes(interaction.user.id);
+    if (!allowed) {
+        return interaction.reply({ content: '❌ Hanya pembeli tiket ini atau staf yang bisa membatalkan.', flags: MessageFlags.Ephemeral });
+    }
+    await interaction.deferUpdate().catch(() => {});
+    const ok = await acCancel(channelId, `dibatalkan oleh <@${interaction.user.id}> (tombol)`);
+    await interaction.followUp({
+        content: ok ? '✅ Penutupan otomatis dibatalkan. Tiket tetap terbuka.' : 'ℹ️ Penutupan otomatis sudah tidak aktif.',
+        flags: MessageFlags.Ephemeral
+    }).catch(() => {});
+}
+
+// --- 4. PENUTUPAN (dengan validasi ulang menyeluruh) ---
+async function finalizeAutoClose(channelId) {
+    return acWithLock(channelId, async () => {
+        const ticket = await Ticket.findOneAndUpdate(
+            { channelId, 'autoClose.state': 'armed', 'autoClose.closeAt': { $lte: new Date() } },
+            { $set: { 'autoClose.state': 'closing' } },
+            { new: true }
+        );
+        if (!ticket) return;
+        const backToArmed = (ms, extra = {}) => acTransition(channelId, ['closing'], { state: 'armed', closeAt: new Date(Date.now() + ms), warned: false, ...extra });
+
+        try {
+            const { channel, gone } = await acFetchChannel(channelId);
+            if (gone) { acActiveChannels.delete(channelId); await acTransition(channelId, ['closing'], { state: null }); return; }
+            if (!channel) { await backToArmed(2 * 60 * 1000); return; } // Discord gangguan -> coba lagi 2 menit
+
+            const disarm = async (reason) => {
+                await acTransition(channelId, ['closing'], { state: null, reason, closeAt: null });
+                acActiveChannels.delete(channelId);
+                await acEditNotice(ticket, 'cancelled', { reason: `${reason}. Auto-close akan aktif lagi setelah transaksi selesai & di-vouch` });
+            };
+
+            // a. Vouch masih untuk transaksi yang sama?
+            const tv = await TicketVouch.findOne({ channelId });
+            if (!tv || !tv.vouched || +tv.doneAt !== +ticket.autoClose.forDoneAt) return disarm('ada transaksi baru yang belum di-vouch');
+            // b. Pre-Order?
+            if (acIsPreOrder(ticket, channel)) return disarm('tiket ditandai Pre-Order');
+            // c. Invoice berjalan / invoice baru?
+            const messages = await acFetchAllMessages(channel);
+            if (acFindActiveInvoice(messages)) return disarm('ada invoice yang masih berjalan');
+            if (messages.some(m => acIsInvoiceMessage(m) && m.createdTimestamp > +tv.doneAt)) return disarm('ada invoice baru');
+            // d. Aktivitas yang mungkin terlewat (bot mati / Discord gangguan)
+            const activity = await acClassifyActivity(channel.guild, messages, +ticket.autoClose.armedAt);
+            if (activity.cancelBy) {
+                await acTransition(channelId, ['closing'], { state: 'cancelled', reason: 'dibatalkan ("Jangan Tutup")', closeAt: null });
+                acActiveChannels.delete(channelId);
+                await acEditNotice(ticket, 'cancelled', { reason: `dibatalkan oleh <@${activity.cancelBy}> ("Jangan Tutup")` });
+                return;
+            }
+            if (activity.pauseReason) {
+                await acTransition(channelId, ['closing'], { state: 'paused', reason: activity.pauseReason, closeAt: null });
+                await acEditNotice(ticket, 'paused', { reason: activity.pauseReason });
+                return;
+            }
+            if (activity.last && Date.now() < activity.last.createdTimestamp + AUTO_CLOSE_DELAY_MS) {
+                const closeAt = new Date(activity.last.createdTimestamp + AUTO_CLOSE_DELAY_MS);
+                await acTransition(channelId, ['closing'], { state: 'armed', closeAt, armedAt: activity.last.createdAt, warned: false });
+                await acEditNotice(ticket, 'armed', { closeAt });
+                return;
+            }
+
+            // e. Pengingat WAJIB sudah terkirim sebelum tutup (penjadwal bisa tertunda saat banyak tiket ditutup)
+            if (!ticket.autoClose.warned) {
+                const closeAt = new Date(Date.now() + AUTO_CLOSE_WARN_MS);
+                await acTransition(channelId, ['closing'], { state: 'armed', closeAt, warned: true });
+                await acSendWarning(channel, ticket, +closeAt);
+                await acEditNotice(ticket, 'armed', { closeAt });
+                return;
+            }
+
+            // f. Semua aman -> simpan transcript lalu tutup
+            const result = await closeTicketWithTranscript(channel, ticket, {
+                closedByText: '🤖 Otomatis (Auto-Close)',
+                messages,
+                strictAttachments: true,
+                beforeDelete: async (lastMessageId) => {
+                    const fresh = await Ticket.findOne({ channelId });
+                    if (fresh?.autoClose?.state !== 'closing') return 'status auto-close berubah';
+                    const newer = [...(await channel.messages.fetch({ limit: 50, after: lastMessageId, cache: false })).values()];
+                    if (newer.some(m => !m.author.bot)) return 'ada pesan baru di tiket';
+                    if (newer.some(m => acIsInvoiceMessage(m))) return 'ada invoice baru';
+                    return null;
+                }
+            });
+
+            if (!result.ok) {
+                if (result.activity) { await backToArmed(AUTO_CLOSE_DELAY_MS, { armedAt: new Date() }); await acEditNotice(ticket, 'armed', { closeAt: new Date(Date.now() + AUTO_CLOSE_DELAY_MS) }); return; }
+                const fails = (ticket.autoClose.failCount || 0) + 1;
+                if (fails >= AUTO_CLOSE_MAX_FAILS) {
+                    await acTransition(channelId, ['closing'], { state: 'cancelled', failCount: fails, reason: 'gagal menyimpan transcript' });
+                    acActiveChannels.delete(channelId);
+                    await acEditNotice(ticket, 'cancelled', { reason: `transcript gagal disimpan ${fails}x (${result.reason}) — mohon tutup manual oleh staf` });
+                } else {
+                    await backToArmed(AUTO_CLOSE_GRACE_MS, { failCount: fails });
+                }
+            }
+        } catch (e) {
+            console.error(`Auto-close gagal di ${channelId}:`, e.message);
+            await backToArmed(AUTO_CLOSE_GRACE_MS).catch(() => {});
+        }
+    });
+}
+
+// --- 5. TRANSCRIPT LENGKAP + TUTUP TIKET (dipakai tutup MANUAL & OTOMATIS) ---
+function acFmtTime(d) {
+    return new Date(d).toLocaleString('id-ID', { timeZone: 'Asia/Jakarta', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+function acFmtSize(bytes) {
+    return bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+function buildTicketTranscript(channel, ticketData, messages, closedByText) {
+    const names = new Map();
+    for (const m of messages) names.set(m.author.id, m.author.username);
+    const resolve = (txt) => String(txt || '')
+        .replace(/<@!?(\d+)>/g, (s, id) => `@${names.get(id) || client.users.cache.get(id)?.username || `user(${id})`}`)
+        .replace(/<@&(\d+)>/g, (s, id) => `@${channel.guild.roles.cache.get(id)?.name || 'role'}`)
+        .replace(/<#(\d+)>/g, (s, id) => `#${channel.guild.channels.cache.get(id)?.name || id}`)
+        .replace(/<a?:(\w+):\d+>/g, ':$1:')
+        .replace(/<t:(\d+)(:\w)?>/g, (s, t) => acFmtTime(Number(t) * 1000));
+
+    const files = [];
+    const lines = [];
+    const bar = '='.repeat(64);
+    lines.push(bar, ` TRANSCRIPT TIKET: #${channel.name}`, bar);
+    lines.push(`Pembuat tiket : @${names.get(ticketData.creatorId) || client.users.cache.get(ticketData.creatorId)?.username || '-'} (${ticketData.creatorId})`);
+    lines.push(`Tipe          : ${String(ticketData.ticketType || '-').toUpperCase()}`);
+    lines.push(`Diklaim oleh  : ${ticketData.claimedBy ? `@${names.get(ticketData.claimedBy) || client.users.cache.get(ticketData.claimedBy)?.username || ticketData.claimedBy}` : '-'}`);
+    lines.push(`Dibuka        : ${acFmtTime(ticketData.createdAt || channel.createdAt)}`);
+    lines.push(`Ditutup       : ${acFmtTime(Date.now())}`);
+    lines.push(`Ditutup oleh  : ${resolve(closedByText).replace(/[🤖]/gu, '').trim()}`);
+    const attachCount = messages.reduce((n, m) => n + (m.attachments?.size || 0), 0);
+    lines.push(`Jumlah pesan  : ${messages.length} | Lampiran: ${attachCount}`);
+    lines.push(bar, '');
+
+    for (const m of messages) {
+        const body = [];
+        if (m.content) body.push(...resolve(m.content).split('\n'));
+        for (const e of m.embeds || []) {
+            body.push(`┌─ [EMBED] ${resolve(e.title || e.author?.name || '')}`);
+            if (e.description) body.push(...resolve(e.description).split('\n').map(l => `│ ${l}`));
+            for (const f of e.fields || []) body.push(`│ ${resolve(f.name)}: ${resolve(f.value).replace(/\n/g, ' / ')}`);
+            if (e.image?.url) body.push(`│ 🖼️ Gambar: ${e.image.url}`);
+            if (e.footer?.text) body.push(`│ (${resolve(e.footer.text)})`);
+            body.push('└─');
+        }
+        for (const a of m.attachments?.values?.() || []) {
+            const num = String(files.length + 1).padStart(3, '0');
+            const safeName = String(a.name || 'file').replace(/[^\w.\-]+/g, '_').slice(-80);
+            const tooBig = (a.size || 0) > TRANSCRIPT_MAX_FILE_BYTES;
+            files.push({ num, url: a.url, name: `${num}_${safeName}`, size: a.size || 0, tooBig });
+            body.push(`📎 [Lampiran #${num}] ${a.name} (${acFmtSize(a.size || 0)})${tooBig ? ` — TERLALU BESAR untuk diunggah ulang, link asli: ${a.url}` : ' — salinan ada di channel log'}`);
+        }
+        for (const s of m.stickers?.values?.() || []) body.push(`[Sticker: ${s.name}]`);
+        if (m.editedTimestamp) body.push('(diedit)');
+        if (!body.length) body.push('[pesan sistem / kosong]');
+        lines.push(`[${acFmtTime(m.createdAt)}] ${m.author.username}${m.author.bot ? ' [BOT]' : ''}: ${body[0]}`);
+        for (const l of body.slice(1)) lines.push(`    ${l}`);
+    }
+    return { text: lines.join('\n'), files, attachCount };
+}
+
+async function closeTicketWithTranscript(channel, ticketData, { closedByText, messages = null, strictAttachments = false, beforeDelete = null }) {
+    const channelId = channel.id;
+    if (ticketsBeingClosed.has(channelId)) return { ok: false, reason: 'tiket sedang dalam proses ditutup' };
+    ticketsBeingClosed.add(channelId);
+    closingTicketChannels.add(channelId); // jangan dipindah kategori saat sedang ditutup
+    try {
+        const logChannel = await client.channels.fetch(TRANSCRIPT_LOG_CHANNEL_ID).catch(() => null);
+        if (!logChannel) return { ok: false, reason: 'channel log transcript tidak bisa diakses' };
+
+        const msgs = messages || await acFetchAllMessages(channel);
+        const lastMessageId = msgs.length ? msgs[msgs.length - 1].id : channelId;
+        const { text, files, attachCount } = buildTicketTranscript(channel, ticketData, msgs, closedByText);
+
+        const created = ticketData.createdAt ? new Date(ticketData.createdAt).getTime() : channel.createdTimestamp;
+        const durasiMs = Date.now() - created;
+        const logEmbed = new EmbedBuilder()
+            .setColor(0xED4245)
+            .setTitle(`📑 Transcript: ${channel.name}`)
+            .addFields(
+                { name: '👤 Pembuat Tiket', value: `<@${ticketData.creatorId}>`, inline: true },
+                { name: '🛠️ Ditangani Oleh', value: ticketData.claimedBy ? `<@${ticketData.claimedBy}>` : '*Tidak ada yang claim*', inline: true },
+                { name: '🔒 Ditutup Oleh', value: closedByText, inline: true },
+                { name: '⏱️ Durasi Tiket', value: `${Math.floor(durasiMs / 3600000)} Jam, ${Math.floor((durasiMs % 3600000) / 60000)} Menit`, inline: true },
+                { name: '📜 Tipe Via', value: `**${String(ticketData.ticketType || '-').toUpperCase()}**`, inline: true },
+                { name: '💬 Isi', value: `${msgs.length} pesan · ${attachCount} lampiran`, inline: true }
+            )
+            .setFooter({ text: 'VibeBlox Auto-Transcript' })
+            .setTimestamp();
+
+        // a. Transcript WAJIB tersimpan
+        const txt = new AttachmentBuilder(Buffer.from(text, 'utf-8'), { name: `${channel.name}-transcript.txt` });
+        const logMsg = await discordRetry(() => logChannel.send({ embeds: [logEmbed], files: [txt] }));
+
+        // b. Salin semua lampiran (bukti bayar, dll) — diunduh satu per satu, dikirim per batch (hemat RAM)
+        const failed = [];
+        let batch = [], batchBytes = 0, batchFrom = null;
+        const flush = async () => {
+            if (!batch.length) return;
+            const label = `📎 Lampiran **${channel.name}** #${batchFrom}–#${batch[batch.length - 1].num}`;
+            const payloadFiles = batch.map(b => new AttachmentBuilder(b.buf, { name: b.name }));
+            await discordRetry(() => logChannel.send({ content: label, files: payloadFiles, reply: { messageReference: logMsg.id, failIfNotExists: false } }));
+            batch = []; batchBytes = 0; batchFrom = null;
+        };
+        for (const f of files) {
+            if (f.tooBig) continue;
+            let buf = null;
+            for (let i = 0; i < 2 && !buf; i++) {
+                buf = await axios.get(f.url, { responseType: 'arraybuffer', timeout: 30000, maxContentLength: TRANSCRIPT_MAX_FILE_BYTES + 1024 })
+                    .then(r => Buffer.from(r.data)).catch(() => null);
+            }
+            if (!buf) { failed.push(f); continue; }
+            if (batch.length >= 10 || batchBytes + buf.length > TRANSCRIPT_MAX_BATCH_BYTES) {
+                try { await flush(); } catch (e) { failed.push(...batch); batch = []; batchBytes = 0; batchFrom = null; }
+            }
+            if (!batchFrom) batchFrom = f.num;
+            batch.push({ ...f, buf });
+            batchBytes += buf.length;
+        }
+        try { await flush(); } catch (e) { failed.push(...batch); }
+
+        if (failed.length) {
+            const list = failed.map(f => `#${f.num} ${f.url}`).join('\n').slice(0, 1800);
+            await logChannel.send({ content: `⚠️ ${failed.length} lampiran **${channel.name}** gagal disalin. Link asli (bisa kedaluwarsa):\n${list}` }).catch(() => {});
+            if (strictAttachments) {
+                await logChannel.send({ content: `ℹ️ Auto-close **${channel.name}** dibatalkan sementara karena lampiran belum tersalin. Transcript di atas hanya cadangan.` }).catch(() => {});
+                return { ok: false, reason: `${failed.length} lampiran gagal disalin` };
+            }
+        }
+
+        // c. Cek terakhir sebelum hapus (khusus auto-close): ada pesan/invoice baru selama transcript dibuat?
+        if (beforeDelete) {
+            const blocker = await beforeDelete(lastMessageId);
+            if (blocker) {
+                await logChannel.send({ content: `ℹ️ Auto-close **${channel.name}** dibatalkan (${blocker}). Transcript di atas hanya cadangan, tiket masih terbuka.` }).catch(() => {});
+                return { ok: false, reason: blocker, activity: true };
+            }
+        }
+
+        // d. Hapus channel DULU, baru data database (kalau hapus channel gagal, data tiket tetap utuh)
+        await discordRetry(() => channel.delete());
+        acActiveChannels.delete(channelId);
+        try {
+            const removed = await InvoiceTracker.deleteMany({ channelId });
+            if (removed.deletedCount > 0) schedulePanelStockUpdate();
+        } catch (e) {}
+        await TicketVouch.deleteOne({ channelId }).catch(() => {});
+        await Ticket.deleteOne({ channelId }).catch(() => {});
+        return { ok: true };
+    } catch (e) {
+        console.error(`Gagal menutup tiket ${channel?.name}:`, e.message);
+        return { ok: false, reason: e.message };
+    } finally {
+        ticketsBeingClosed.delete(channelId);
+        closingTicketChannels.delete(channelId);
+    }
+}
+
+async function acSendWarning(channel, ticket, closeAtMs) {
+    const buyerId = ticket.autoClose?.buyerId || ticket.creatorId;
+    await channel.send({ content: `<@${buyerId}> ⏰ Tiket ini akan **ditutup otomatis <t:${Math.floor(closeAtMs / 1000)}:R>**. Ketik **Jangan Tutup** jika masih ada keperluan.`, allowedMentions: { users: [buyerId] } }).catch(() => {});
+}
+
+// --- 6. PENJADWAL (tahan restart: semua status ada di database) ---
+let acTickRunning = false;
+async function autoCloseTick() {
+    if (!client.isReady() || acTickRunning) return;
+    acTickRunning = true;
+    try {
+        const now = Date.now();
+        const armed = await Ticket.find({ 'autoClose.state': 'armed' });
+        const due = [];
+        // 1) Pengingat dulu (ringan) untuk SEMUA tiket, supaya tidak tertahan antrean penutupan
+        for (const t of armed) {
+            acActiveChannels.add(t.channelId);
+            const closeAt = t.autoClose.closeAt ? +t.autoClose.closeAt : 0;
+            if (!closeAt || !AUTO_CLOSE_ENABLED) continue; // saklar dimatikan -> tidak ada tiket yang ditutup otomatis
+            if (closeAt <= now) { due.push({ channelId: t.channelId, closeAt }); continue; }
+            if (!t.autoClose.warned && closeAt - now <= AUTO_CLOSE_WARN_MS) {
+                const upd = await Ticket.findOneAndUpdate({ channelId: t.channelId, 'autoClose.state': 'armed', 'autoClose.warned': false }, { $set: { 'autoClose.warned': true } }, { new: true });
+                if (upd) {
+                    const { channel } = await acFetchChannel(t.channelId);
+                    if (channel) await acSendWarning(channel, t, closeAt);
+                }
+            }
+        }
+        // 2) Tutup satu per satu, maks AUTO_CLOSE_MAX_PER_TICK per putaran (sisanya putaran berikutnya)
+        due.sort((a, b) => a.closeAt - b.closeAt);
+        for (const d of due.slice(0, AUTO_CLOSE_MAX_PER_TICK)) {
+            await finalizeAutoClose(d.channelId);
+            await sleep(AUTO_CLOSE_GAP_MS);
+        }
+        for (const [id, c] of acStaffCache) if (now - c.at > 60 * 60 * 1000) acStaffCache.delete(id);
+    } catch (e) {
+        console.error('Auto-close tick error:', e.message);
+    } finally {
+        acTickRunning = false;
+    }
+}
+
+let acSweepRunning = false;
+async function autoCloseSweep() {
+    if (!client.isReady() || acSweepRunning) return;
+    acSweepRunning = true;
+    try {
+        const vouched = await TicketVouch.find({ vouched: true }).select('channelId').lean();
+        for (const v of vouched) await evaluateAutoClose(v.channelId);
+        for (const [id, at] of acLastEval) if (Date.now() - at > 60 * 60 * 1000) acLastEval.delete(id);
+    } catch (e) {
+        console.error('Auto-close sweep error:', e.message);
+    } finally {
+        acSweepRunning = false;
+    }
+}
+
+// Saat bot online: pulihkan status. Hitung mundur yang "terlewat" saat bot mati TIDAK langsung ditutup,
+// tapi diberi tambahan 10 menit + pengumuman diperbarui (semua dicek ulang sebelum tutup).
+async function autoCloseRecover() {
+    try {
+        const list = await Ticket.find({ 'autoClose.state': { $in: ['armed', 'paused', 'closing'] } });
+        for (const t of list) {
+            acActiveChannels.add(t.channelId);
+            const st = t.autoClose.state;
+            const overdue = st === 'armed' && t.autoClose.closeAt && +t.autoClose.closeAt < Date.now() + 60 * 1000;
+            if (st === 'closing' || overdue) {
+                const closeAt = new Date(Date.now() + AUTO_CLOSE_GRACE_MS);
+                const upd = await acTransition(t.channelId, ['armed', 'closing'], { state: 'armed', closeAt, warned: false });
+                if (upd) await acEditNotice(upd, 'armed', { closeAt, reason: 'Bot sempat offline, jadwal penutupan diperpanjang.' });
+            }
+        }
+        if (list.length) console.log(`✅ Auto-close: ${list.length} tiket dipulihkan setelah bot online.`);
+    } catch (e) {
+        console.error('Auto-close recover error:', e.message);
+    }
+}
+
+client.once('ready', () => {
+    setTimeout(async () => {
+        await autoCloseRecover();
+        setInterval(autoCloseTick, 30 * 1000);
+        setInterval(autoCloseSweep, 2 * 60 * 1000);
+        autoCloseSweep();
+    }, 20000); // tunggu cache & pemindaian vouch selesai
+});
 
 // === EVENT: INTERAKSI SLASH COMMANDS & BUTTON ===
 const isUpdating = new Set();
@@ -2610,6 +3251,10 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
+    // --- AUTO-CLOSE: TOMBOL "JANGAN TUTUP" ---
+    if (interaction.isButton() && interaction.customId === 'ac_cancel') {
+        return handleAutoCloseCancelButton(interaction);
+    }
     // --- TICKET ACTION BUTTONS (CLAIM / CLOSE / UNCLAIM) ---
     if (interaction.isButton() && interaction.customId.startsWith('ta_')) {
         const action = interaction.customId;
@@ -2680,51 +3325,16 @@ client.on('interactionCreate', async (interaction) => {
             await interaction.reply({ content: '🔒 Menyiapkan data dan menutup tiket... Channel akan terhapus sebentar lagi.' });
             
             try {
-                // 1. Buat Text Transcript Hemat RAM (Max 100 pesan)
-                const msgs = await interaction.channel.messages.fetch({ limit: 100 });
-                const transcriptData = msgs.reverse().map(m => `[${m.createdAt.toLocaleString('id-ID')}] ${m.author.tag}: ${m.content ? m.content : '[Ada Embed/Attachment/Sticker]'}`).join('\n');
-                
-                const buffer = Buffer.from(transcriptData, 'utf-8');
-                const fileAttachment = new AttachmentBuilder(buffer, { name: `${interaction.channel.name}-transcript.txt` });
-
-                // 2. Kirim Embed ke Log Channel
-                const logChannelId = '1490236117293862962';
-                const logChannel = await interaction.guild.channels.fetch(logChannelId).catch(() => null);
-
-                if (logChannel) {
-                    const durasiInMs = Date.now() - ticketData.createdAt.getTime();
-                    const durasiJam = Math.floor(durasiInMs / 3600000);
-                    const durasiMenit = Math.floor((durasiInMs % 3600000) / 60000);
-
-                    const claimText = ticketData.claimedBy ? `<@${ticketData.claimedBy}>` : '*Tidak ada yang claim*';
-
-                    const logEmbed = new EmbedBuilder()
-                        .setColor(0xED4245)
-                        .setTitle(`📑 Transcript: ${interaction.channel.name}`)
-                        .addFields(
-                            { name: '👤 Pembuat Tiket', value: `<@${ticketData.creatorId}>`, inline: true },
-                            { name: '🛠️ Ditangani Oleh', value: claimText, inline: true },
-                            { name: '⏱️ Durasi Tiket', value: `${durasiJam} Jam, ${durasiMenit} Menit`, inline: false },
-                            { name: '📜 Tipe Via', value: `**${ticketData.ticketType.toUpperCase()}**`, inline: false }
-                        )
-                        .setFooter({ text: 'VibeBlox Auto-Transcript' })
-                        .setTimestamp();
-
-                    await logChannel.send({ embeds: [logEmbed], files: [fileAttachment] });
+                // Transcript lengkap (isi invoice + semua lampiran disalin ke channel log) WAJIB tersimpan dulu.
+                // Kalau gagal tersimpan, tiket TIDAK dihapus.
+                const result = await closeTicketWithTranscript(interaction.channel, ticketData, {
+                    closedByText: `<@${interaction.user.id}>`,
+                    strictAttachments: false // tutup manual: lampiran yang gagal disalin tetap dicatat linknya
+                });
+                if (!result.ok) {
+                    closingTicketChannels.delete(interaction.channel.id);
+                    await interaction.followUp({ content: `❌ Tiket **tidak** ditutup: ${result.reason}. Silakan coba lagi.`, flags: MessageFlags.Ephemeral }).catch(() => {});
                 }
-
-                // --- PANEL STOCK: lepas semua invoice yang masih nyangkut di tiket ini ---
-                try {
-                    const removed = await InvoiceTracker.deleteMany({ channelId: interaction.channel.id });
-                    if (removed.deletedCount > 0) schedulePanelStockUpdate();
-                } catch (e) {}
-
-                // --- VOUCH TRACKING: bersihkan data vouch tiket ini juga ---
-                try { await TicketVouch.deleteOne({ channelId: interaction.channel.id }); } catch (e) {}
-
-                // 3. Hapus DB dan Channel
-                await Ticket.deleteOne({ channelId: interaction.channel.id });
-                await interaction.channel.delete();
             } catch (err) {
                 console.error("Gagal saat close tiket:", err);
                 closingTicketChannels.delete(interaction.channel.id); // gagal hapus -> boleh dipindah lagi
@@ -3166,6 +3776,8 @@ client.on('interactionCreate', async (interaction) => {
                     console.error('Gagal setup vouch tracking:', e.message);
                 }
 
+                // AUTO-CLOSE: transaksi baru selesai -> hitung mundur lama dibatalkan, tunggu vouch untuk transaksi ini
+                autoCloseDisarm(interaction.channel.id, 'ada transaksi baru yang selesai, menunggu vouch').catch(() => {});
                 // [UBAH NAMA CHANNEL JADI -DONE]
                 if (!interaction.channel.name.endsWith('-done')) {
                     interaction.channel.setName(`${interaction.channel.name}-done`).catch(e => console.log("Abaikan: Rate limit rename (Tambah done)"));
@@ -3968,6 +4580,10 @@ Jumlah Robux: `;
 
         await interaction.deferReply(); // cegah interaction expired (>3 detik) kalau proses rename lambat
 
+        // AUTO-CLOSE: tandai Pre-Order di DATABASE (tetap berlaku walau rename channel kena batas Discord)
+        await Ticket.updateOne({ channelId: interaction.channel.id }, { $set: { isPreOrder: true } }).catch(() => {});
+        autoCloseDisarm(interaction.channel.id, 'tiket ditandai Pre-Order').catch(() => {}); 
+
         const newNamePO = `${interaction.channel.name}-po`;
 
         try {
@@ -4182,6 +4798,7 @@ Jumlah Robux: `;
 
         const invoiceSent = await sendInvoiceMessage(interaction, invoiceMsgId, { embeds: [invoiceEmbed], components: [row1, row2] }, '/invoice');
         if (!invoiceSent) return; // gagal total -> pesan sudah dihapus & staf sudah diberi tahu, jangan dicatat ke panel
+        autoCloseDisarm(interaction.channel.id, 'ada invoice baru').catch(() => {}); // AUTO-CLOSE: ada transaksi baru
 
         // --- PANEL STOCK: catat invoice ini kalau tipenya Community ---
         if (type === 'community') {
@@ -4275,7 +4892,9 @@ Jumlah Robux: `;
             new ButtonBuilder().setCustomId(`pinv_done_${type}_${msgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
         );
 
-        await sendInvoiceMessage(interaction, msgId, { embeds: [invoiceEmbed], components: [row] }, '/partnerinvoice');
+        if (await sendInvoiceMessage(interaction, msgId, { embeds: [invoiceEmbed], components: [row] }, '/partnerinvoice')) {
+            autoCloseDisarm(interaction.channel.id, 'ada invoice partner baru').catch(() => {}); // AUTO-CLOSE: ada transaksi baru
+        }
         return;
     }
 
