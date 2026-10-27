@@ -1012,13 +1012,17 @@ async function acClassifyActivity(guild, messages, sinceTs) {
 }
 
 // --- Tampilan pengumuman auto-close ---
-function acBuildNotice(buyerId, state, { closeAt = null, reason = null } = {}) {
+// viaReminder = true -> tiket ditutup karena belum vouch setelah 2x pengingat (bukan karena sudah vouch)
+function acBuildNotice(buyerId, state, { closeAt = null, reason = null, viaReminder = false } = {}) {
     const ts = closeAt ? Math.floor(new Date(closeAt).getTime() / 1000) : null;
     const embed = new EmbedBuilder().setTimestamp();
     let buttonDisabled = false;
     if (state === 'armed') {
+        const opening = viaReminder
+            ? `Transaksi di tiket ini sudah **selesai**. Belum ada vouch setelah **2x pengingat**, jadi tiket akan ditutup otomatis. Vouch tetap bisa dikirim di <#${VOUCH_CHANNEL_ID}> kapan saja. 🙏\n\n`
+            : `Transaksi di tiket ini sudah **selesai** dan **vouch sudah diterima**. Terima kasih! 🙏\n\n`;
         embed.setColor(0xFEE75C).setTitle('🔒 AUTO-CLOSE TICKET').setDescription(
-            `Transaksi di tiket ini sudah **selesai** dan **vouch sudah diterima**. Terima kasih! 🙏\n\n` +
+            opening +
             `Tiket akan **ditutup otomatis <t:${ts}:R>** (pukul <t:${ts}:t>).\n\n` +
             `• Masih ada keperluan? Ketik **Jangan Tutup** atau tekan tombol di bawah.\n` +
             `• Mengirim pesan akan menunda penutupan 30 menit.\n` +
@@ -1050,7 +1054,7 @@ async function acEditNotice(ticket, state, opts = {}) {
     const { channel } = await acFetchChannel(ticket.channelId);
     if (!channel) return;
     const buyerId = opts.buyerId || ticket.autoClose.buyerId || ticket.creatorId;
-    const payload = acBuildNotice(buyerId, state, opts);
+    const payload = acBuildNotice(buyerId, state, { viaReminder: !!ticket.autoClose.viaReminder, ...opts });
     delete payload.allowedMentions; // edit tidak perlu ping ulang
     await discordRetry(() => channel.messages.edit(noticeId, payload)).catch(() => {});
 }
@@ -1112,6 +1116,7 @@ async function autoCloseDisarm(channelId, reason) {
 }
 
 // --- 1. CEK SYARAT & AKTIFKAN HITUNG MUNDUR ---
+// Syarat: sudah Done DAN (sudah vouch ATAU sudah lewat 2 jam sejak pengingat vouch terakhir)
 async function evaluateAutoClose(channelId, force = false) {
     if (!AUTO_CLOSE_ENABLED || !client.isReady()) return;
     if (!force && Date.now() - (acLastEval.get(channelId) || 0) < AUTO_CLOSE_REEVAL_MS) return;
@@ -1122,8 +1127,10 @@ async function evaluateAutoClose(channelId, force = false) {
         const st = ticket.autoClose?.state;
         if (['armed', 'paused', 'closing'].includes(st) || ticketsBeingClosed.has(channelId)) return;
 
-        const tv = await TicketVouch.findOne({ channelId, vouched: true });
-        if (!tv) return; // belum Done atau belum vouch
+        const tv = await TicketVouch.findOne({ channelId });
+        if (!tv) return; // belum Done
+        const viaReminder = !tv.vouched && vrReminderExpired(tv);
+        if (!tv.vouched && !viaReminder) return; // belum vouch & pengingat belum selesai
         if (st === 'cancelled' && ticket.autoClose?.forDoneAt && +ticket.autoClose.forDoneAt === +tv.doneAt) return;
 
         const { channel } = await acFetchChannel(channelId);
@@ -1136,7 +1143,7 @@ async function evaluateAutoClose(channelId, force = false) {
 
         const activity = await acClassifyActivity(channel.guild, messages, +tv.doneAt);
         const buyerId = tv.buyerId || ticket.creatorId;
-        const base = { forDoneAt: tv.doneAt, buyerId, warned: false, failCount: 0, noticeMessageId: null };
+        const base = { forDoneAt: tv.doneAt, buyerId, warned: false, failCount: 0, noticeMessageId: null, viaReminder };
 
         if (activity.cancelBy) {
             ticket.autoClose = { ...base, state: 'cancelled', reason: `dibatalkan oleh <@${activity.cancelBy}> ("Jangan Tutup")` };
@@ -1146,7 +1153,7 @@ async function evaluateAutoClose(channelId, force = false) {
 
         const paused = !!activity.pauseReason;
         const closeAt = paused ? null : new Date(Date.now() + AUTO_CLOSE_DELAY_MS);
-        const notice = await discordRetry(() => channel.send(acBuildNotice(buyerId, paused ? 'paused' : 'armed', { closeAt, reason: activity.pauseReason })));
+        const notice = await discordRetry(() => channel.send(acBuildNotice(buyerId, paused ? 'paused' : 'armed', { closeAt, reason: activity.pauseReason, viaReminder })));
         ticket.autoClose = { ...base, state: paused ? 'paused' : 'armed', armedAt: new Date(), closeAt, reason: activity.pauseReason, noticeMessageId: notice.id };
         try {
             await ticket.save();
@@ -1156,6 +1163,97 @@ async function evaluateAutoClose(channelId, force = false) {
         }
         acActiveChannels.add(channelId);
     });
+}
+
+// =====================================================================
+// --- PENGINGAT VOUCH (tiket sudah Done tapi belum vouch) ---
+// =====================================================================
+// Jadwal (dihitung dari waktu kirim yang SEBENARNYA, disimpan di database):
+//   Done + 2 jam                -> pengingat vouch ke-1
+//   pengingat ke-1 + 24 jam     -> pengingat vouch TERAKHIR
+//   pengingat terakhir + 2 jam  -> auto-close aktif (hitung mundur 30 menit + pengingat 5 menit + validasi ulang)
+// Bot mati? Tahap yang tertunda dikirim saat bot online, lalu tahap berikutnya menunggu PENUH dari waktu kirim
+// tersebut -> tidak ada tahap yang dilompati & tiket TIDAK pernah langsung tertutup saat bot baru nyala.
+// Invoice baru selesai (Done baru) -> jadwal otomatis mulai dari awal lagi.
+const VOUCH_REMINDER_ENABLED = true;                 // SAKLAR: false = pengingat vouch mati
+const VOUCH_REMINDER_1_MS = 2 * 60 * 60 * 1000;      // Done -> pengingat ke-1
+const VOUCH_REMINDER_2_MS = 24 * 60 * 60 * 1000;     // pengingat ke-1 -> pengingat terakhir
+const VOUCH_REMINDER_CLOSE_MS = 2 * 60 * 60 * 1000;  // pengingat terakhir -> auto-close aktif
+const vrLastCheck = new Map();                       // hemat request: tiket dengan invoice berjalan dicek ulang maks tiap 10 menit
+
+// Pengingat untuk transaksi INI (bukan transaksi sebelumnya di tiket yang sama)
+function vrStage(tv) {
+    const same = tv.reminderDoneAt && +tv.reminderDoneAt === +tv.doneAt;
+    return { r1: same ? tv.reminder1At : null, r2: same ? tv.reminder2At : null };
+}
+function vrReminderExpired(tv) {
+    const { r2 } = vrStage(tv);
+    return !!r2 && Date.now() >= +r2 + VOUCH_REMINDER_CLOSE_MS;
+}
+
+function vrBuildReminder(buyerId, final) {
+    const autoCloseLine = AUTO_CLOSE_ENABLED
+        ? (final
+            ? `Jika belum ada vouch, tiket ini akan **ditutup otomatis sekitar <t:${Math.floor((Date.now() + VOUCH_REMINDER_CLOSE_MS) / 1000)}:R>** (dengan pemberitahuan 30 menit sebelumnya).`
+            : 'Setelah vouch, tiket ini akan ditutup otomatis.')
+        : '';
+    const embed = new EmbedBuilder()
+        .setColor(final ? 0xED4245 : 0xFEE75C)
+        .setTitle(final ? '⏰ PENGINGAT TERAKHIR: VOUCH' : '📣 PENGINGAT VOUCH')
+        .setDescription(
+            `Halo <@${buyerId}>! Pesanan kamu sudah **selesai** ✅\n\n` +
+            `Bantu kami dengan mengirim vouch di <#${VOUCH_CHANNEL_ID}> ya. Teks vouch-nya sudah ada di atas, tinggal salin & kirim. 🙏\n\n` +
+            (autoCloseLine ? `${autoCloseLine}\n` : '') +
+            `-# Masih ada keperluan di tiket ini? Ketik **Jangan Tutup**.`
+        )
+        .setTimestamp();
+    return { content: `<@${buyerId}>`, embeds: [embed], allowedMentions: { users: [buyerId] } };
+}
+
+async function processVouchReminder(tvLean) {
+    if (!VOUCH_REMINDER_ENABLED || !client.isReady() || tvLean.vouched) return;
+    const channelId = tvLean.channelId;
+    let triggerAutoClose = false;
+
+    await acWithLock(channelId, async () => {
+        const tv = await TicketVouch.findOne({ channelId });          // data terbaru
+        if (!tv || tv.vouched) return;
+        const { r1, r2 } = vrStage(tv);
+        const now = Date.now();
+
+        // Tahap 3: pengingat terakhir sudah lewat 2 jam -> serahkan ke auto-close
+        if (r2) { if (now >= +r2 + VOUCH_REMINDER_CLOSE_MS) triggerAutoClose = true; return; }
+
+        const dueAt = r1 ? +r1 + VOUCH_REMINDER_2_MS : +tv.doneAt + VOUCH_REMINDER_1_MS;
+        if (now < dueAt) return;                                     // belum waktunya
+        if (now - (vrLastCheck.get(channelId) || 0) < 10 * 60 * 1000) return;
+        vrLastCheck.set(channelId, now);
+
+        const ticket = await Ticket.findOne({ channelId });
+        if (!ticket) return;
+        // Pelanggan/staf sudah minta "Jangan Tutup" untuk transaksi ini -> tidak perlu diingatkan
+        if (ticket.autoClose?.state === 'cancelled' && +ticket.autoClose.forDoneAt === +tv.doneAt) return;
+
+        const { channel, gone } = await acFetchChannel(channelId);
+        if (gone) { await TicketVouch.deleteOne({ channelId }).catch(() => {}); return; }
+        if (!channel) return;                                        // Discord gangguan -> coba lagi nanti
+
+        // Hanya untuk tiket yang invoicenya SUDAH Done: ada invoice berjalan / invoice baru -> jangan kirim
+        const messages = await acFetchAllMessages(channel);
+        if (acFindActiveInvoice(messages)) return;
+        if (messages.some(m => acIsInvoiceMessage(m) && m.createdTimestamp > +tv.doneAt)) return;
+
+        const buyerId = tv.buyerId || ticket.creatorId;
+        const final = !!r1;
+        // Kirim DULU, baru simpan. Kalau bot mati di antaranya, paling buruk pengingat terkirim 2x (bukan terlewat).
+        await discordRetry(() => channel.send(vrBuildReminder(buyerId, final)));
+        const set = final
+            ? { reminderDoneAt: tv.doneAt, reminder2At: new Date() }
+            : { reminderDoneAt: tv.doneAt, reminder1At: new Date(), reminder2At: null };
+        await TicketVouch.updateOne({ channelId, doneAt: tv.doneAt }, { $set: set });
+    });
+
+    if (triggerAutoClose) await evaluateAutoClose(channelId);
 }
 
 // --- 2. AKTIVITAS DI TIKET SELAMA HITUNG MUNDUR (dipanggil dari messageCreate) ---
@@ -1225,7 +1323,7 @@ async function finalizeAutoClose(channelId) {
 
             // a. Vouch masih untuk transaksi yang sama?
             const tv = await TicketVouch.findOne({ channelId });
-            if (!tv || !tv.vouched || +tv.doneAt !== +ticket.autoClose.forDoneAt) return disarm('ada transaksi baru yang belum di-vouch');
+            if (!tv || +tv.doneAt !== +ticket.autoClose.forDoneAt || (!tv.vouched && !vrReminderExpired(tv))) return disarm('ada transaksi baru yang belum di-vouch');
             // c. Invoice berjalan / invoice baru?
             const messages = await acFetchAllMessages(channel);
             if (messages.truncated) return disarm('riwayat tiket terlalu panjang (>3000 pesan), mohon tutup manual');
@@ -1497,16 +1595,24 @@ async function autoCloseSweep() {
     if (!client.isReady() || acSweepRunning) return;
     acSweepRunning = true;
     try {
-        const vouched = await TicketVouch.find({ vouched: true }).select('channelId').lean();
-        for (const v of vouched) await evaluateAutoClose(v.channelId);
+        // Semua tiket yang sudah Done: yang sudah vouch -> cek auto-close; yang belum -> proses pengingat vouch
+        const list = await TicketVouch.find({}).lean();
+        for (const v of list) {
+            try {
+                if (v.vouched) await evaluateAutoClose(v.channelId);
+                else await processVouchReminder(v);
+            } catch (e) {
+                console.error(`Auto-close/pengingat vouch gagal di ${v.channelId}:`, e.message); // 1 tiket error tidak menghentikan tiket lain
+            }
+        }
         for (const [id, at] of acLastEval) if (Date.now() - at > 60 * 60 * 1000) acLastEval.delete(id);
+        for (const [id, at] of vrLastCheck) if (Date.now() - at > 60 * 60 * 1000) vrLastCheck.delete(id);
     } catch (e) {
         console.error('Auto-close sweep error:', e.message);
     } finally {
         acSweepRunning = false;
     }
 }
-
 // Saat bot online: pulihkan status. Hitung mundur yang "terlewat" saat bot mati TIDAK langsung ditutup,
 // tapi diberi tambahan 10 menit + pengumuman diperbarui (semua dicek ulang sebelum tutup).
 async function autoCloseRecover() {
