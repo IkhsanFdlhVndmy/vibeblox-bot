@@ -796,57 +796,106 @@ setInterval(async () => {
 }, 2 * 60 * 1000);
 
 // === EVENT: BACA CHAT TEXT BIASA (KHUSUS VOUCH) ===
+const VOUCH_CHANNEL_ID = '1488903383963406507';
+const vouchMsgInProcess = new Set(); // cegah 1 pesan diproses 2x bersamaan (live + pemindaian ulang)
+
+// Proses 1 pesan vouch: dihitung SAH untuk 1 tiket milik pembeli yang sama, yang masih pending
+// DAN invoice-nya di-done SEBELUM pesan ini dikirim (doneAt <= waktu pesan).
+// Vouch lama (sebelum invoice terkait selesai) otomatis tidak ikut dihitung.
+async function processVouchMessage(message) {
+    if (!message || message.author?.bot) return;
+    if (vouchMsgInProcess.has(message.id)) return;
+    vouchMsgInProcess.add(message.id);
+    try {
+        // Pesan ini sudah pernah dipakai untuk mencentang tiket -> jangan dihitung lagi
+        if (await TicketVouch.exists({ vouchMessageId: message.id })) return;
+
+        const pendingTickets = await TicketVouch.find({
+            buyerId: message.author.id,
+            vouched: false,
+            doneAt: { $lte: message.createdAt }
+        }).sort({ doneAt: 1 }); // tiket yang invoicenya paling dulu selesai didahulukan
+
+        for (const tv of pendingTickets) {
+            // 1. Pastikan tiket & form-nya masih ada. Data dihapus HANYA kalau Discord memastikan
+            //    sudah tidak ada (10003/10008), BUKAN karena gangguan koneksi sesaat.
+            let gone = false;
+            const ch = await client.channels.fetch(tv.channelId).catch(err => { if (err?.code === 10003) gone = true; return null; });
+            if (!gone && ch) {
+                await ch.messages.fetch(tv.messageId).catch(err => { if (err?.code === 10008) gone = true; });
+            }
+            if (gone) { await TicketVouch.deleteOne({ _id: tv._id }).catch(() => {}); continue; }
+
+            // 2. Kunci vouch ke tiket ini di DATABASE dulu (sumber kebenaran).
+            //    Kalau database gagal -> berhenti, jangan dialihkan ke tiket lain.
+            try {
+                tv.vouched = true;
+                tv.embedSynced = false;
+                tv.vouchMessageId = message.id;
+                await tv.save();
+            } catch (e) {
+                console.error(`Gagal simpan vouch ticket ${tv.channelId}:`, e.message);
+                break;
+            }
+
+            // 3. Update tampilan form (dengan percobaan ulang). Kalau tetap gagal,
+            //    diulang otomatis tiap 2 menit — vouch TIDAK pindah ke tiket lain.
+            await syncVouchEmbed(tv, ch);
+            break; // 1 pesan vouch hanya untuk 1 tiket
+        }
+    } catch (e) {
+        console.error('Gagal proses vouch tracking:', e.message);
+    } finally {
+        vouchMsgInProcess.delete(message.id);
+    }
+}
+
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
+    if (message.channel.id !== VOUCH_CHANNEL_ID) return;
 
-    const vouchChannelId = '1488903383963406507';
-    if (message.channel.id === vouchChannelId) {
-        try {
-            await message.react('1502074502228738098');
-        } catch (err) {}
+    try {
+        await message.react('1502074502228738098');
+    } catch (err) {}
 
-        // --- VOUCH TRACKING: pesan ini dihitung SAH buat ticket manapun milik buyer yang sama
-        // yang masih pending DAN invoice-nya di-done SEBELUM pesan ini dikirim (doneAt <= waktu pesan).
-        // Vouch lama (sebelum invoice terkait selesai) otomatis gak ikut kehitung. ---
-        try {
-            const msgTime = message.createdAt;
-            const pendingTickets = await TicketVouch.find({
-                buyerId: message.author.id,
-                vouched: false,
-                doneAt: { $lte: msgTime }
-            }).sort({ doneAt: 1 }); // tiket yang invoicenya paling dulu selesai didahulukan
-
-            for (const tv of pendingTickets) {
-                // 1. Pastikan tiket & form-nya masih ada. Data dihapus HANYA kalau Discord memastikan
-                //    sudah tidak ada (10003/10008), BUKAN karena gangguan koneksi sesaat.
-                let gone = false;
-                const ch = await client.channels.fetch(tv.channelId).catch(err => { if (err?.code === 10003) gone = true; return null; });
-                if (!gone && ch) {
-                    await ch.messages.fetch(tv.messageId).catch(err => { if (err?.code === 10008) gone = true; });
-                }
-                if (gone) { await TicketVouch.deleteOne({ _id: tv._id }).catch(() => {}); continue; }
-
-                // 2. Kunci vouch ke tiket ini di DATABASE dulu (sumber kebenaran).
-                //    Kalau database gagal -> berhenti, jangan dialihkan ke tiket lain.
-                try {
-                    tv.vouched = true;
-                    tv.embedSynced = false;
-                    await tv.save();
-                } catch (e) {
-                    console.error(`Gagal simpan vouch ticket ${tv.channelId}:`, e.message);
-                    break;
-                }
-
-                // 3. Update tampilan form (dengan percobaan ulang). Kalau tetap gagal,
-                //    diulang otomatis tiap 2 menit — vouch TIDAK pindah ke tiket lain.
-                await syncVouchEmbed(tv, ch);
-                break; // 1 pesan vouch hanya untuk 1 tiket
-            }
-        } catch (e) {
-            console.error('Gagal proses vouch tracking:', e.message);
-        }
-    }
+    await processVouchMessage(message);
 });
+
+// --- PEMINDAIAN ULANG: vouch yang dikirim saat bot mati/restart tetap terhitung ---
+// Saat bot online, baca ulang pesan di channel vouch sejak invoice pending paling lama di-done
+// (maks 500 pesan terakhir). Pesan yang sudah pernah dipakai otomatis dilewati.
+async function catchUpMissedVouches() {
+    try {
+        const oldestPending = await TicketVouch.findOne({ vouched: false }).sort({ doneAt: 1 });
+        if (!oldestPending) return;
+
+        const channel = await client.channels.fetch(VOUCH_CHANNEL_ID).catch(() => null);
+        if (!channel) return;
+
+        const collected = [];
+        let before;
+        for (let page = 0; page < 5; page++) {
+            const batch = await channel.messages.fetch({ limit: 100, ...(before ? { before } : {}) });
+            if (batch.size === 0) break;
+            let reachedOld = false;
+            for (const msg of batch.values()) {
+                if (msg.createdAt < oldestPending.doneAt) { reachedOld = true; continue; }
+                if (!msg.author.bot) collected.push(msg);
+            }
+            if (reachedOld || batch.size < 100) break;
+            before = batch.last().id;
+            await sleep(1000);
+        }
+
+        // Proses dari yang paling lama, supaya urutan vouch tetap benar
+        collected.sort((a, b) => a.createdTimestamp - b.createdTimestamp);
+        for (const msg of collected) await processVouchMessage(msg);
+        if (collected.length) console.log(`✅ Pemindaian ulang vouch: ${collected.length} pesan dicek.`);
+    } catch (e) {
+        console.error('Gagal pemindaian ulang vouch:', e.message);
+    }
+}
+client.once('ready', () => setTimeout(catchUpMissedVouches, 15000)); // tunggu cache channel siap
 
 // === EVENT: INTERAKSI SLASH COMMANDS & BUTTON ===
 const isUpdating = new Set();
@@ -3073,11 +3122,13 @@ client.on('interactionCreate', async (interaction) => {
                 try {
                     const existingVouchDoc = await TicketVouch.findOne({ channelId: interaction.channel.id });
                     const ticketDoc = await Ticket.findOne({ channelId: interaction.channel.id });
-                    const buyerId = ticketDoc ? ticketDoc.creatorId : (existingVouchDoc ? existingVouchDoc.buyerId : null);
+                    // Pembeli = user di kolom "Pembeli" invoice (orang yang menerima teks vouch),
+                    // bukan sekadar pembuat tiket (bisa beda, misal tiket middleman / dibukakan teman)
+                    const buyerId = targetUserId || (ticketDoc ? ticketDoc.creatorId : (existingVouchDoc ? existingVouchDoc.buyerId : null));
 
                     if (buyerId) {
                         const formMessages = await interaction.channel.messages.fetch({ limit: 5, after: interaction.channel.id });
-                        const formMsg = formMessages.find(m => m.author.id === '1490582060308369479' && m.embeds[0]?.title?.startsWith('🎫 Order Tiket'));
+                        const formMsg = formMessages.find(m => m.author.id === client.user.id && m.embeds[0]?.title?.startsWith('🎫 Order Tiket'));
 
                         if (formMsg) {
                             const oldFormEmbed = formMsg.embeds[0];
@@ -3095,6 +3146,7 @@ client.on('interactionCreate', async (interaction) => {
                             if (existingVouchDoc) {
                                 // Invoice ke-2/ke-3+ di ticket yang sama -> reset, bukan skip
                                 existingVouchDoc.vouched = false;
+                                existingVouchDoc.buyerId = buyerId; // invoice baru bisa untuk pembeli berbeda
                                 existingVouchDoc.doneAt = new Date();
                                 existingVouchDoc.messageId = formMsg.id;
                                 await existingVouchDoc.save();
@@ -3953,7 +4005,7 @@ Jumlah Robux: `;
 
         try {
             const messages = await interaction.channel.messages.fetch({ limit: 5, after: interaction.channel.id });
-            const formMsg = messages.find(m => m.author.id === '1490582060308369479' && m.embeds[0]?.title?.startsWith('🎫 Order Tiket'));
+            const formMsg = messages.find(m => m.author.id === client.user.id && m.embeds[0]?.title?.startsWith('🎫 Order Tiket'));
 
             if (!formMsg) {
                 return interaction.editReply({ content: '❌ Form tiket tidak ditemukan di channel ini (bukan channel tiket, atau form-nya sudah dihapus).' });
