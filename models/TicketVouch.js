@@ -13,7 +13,11 @@ const TicketVouchSchema = new mongoose.Schema({
     // (akan diulang otomatis tiap 2 menit)
     embedSynced: { type: Boolean, default: true },
     // ID pesan vouch yang dipakai untuk mencentang tiket ini (1 pesan hanya boleh dipakai 1x)
-    vouchMessageId: { type: String, default: null, index: true }
+    vouchMessageId: { type: String, default: null, index: true },
+    // Pengingat vouch: dicatat per transaksi (reminderDoneAt = doneAt transaksi yang diingatkan)
+    reminderDoneAt: { type: Date, default: null },
+    reminder1At: { type: Date, default: null },   // waktu pengingat ke-1 BENAR-BENAR terkirim
+    reminder2At: { type: Date, default: null }    // waktu pengingat terakhir BENAR-BENAR terkirim
 }, { timestamps: true });
 
 module.exports = mongoose.model('TicketVouch', TicketVouchSchema);
