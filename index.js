@@ -750,6 +750,51 @@ async function updateLiveLeaderboard() {
     }
 }
 
+// =====================================================================
+// === VOUCH TRACKING: UPDATE TAMPILAN FORM TIKET (dengan percobaan ulang) ===
+// =====================================================================
+// Database = sumber kebenaran. Tampilan form tiket disesuaikan ke database; kalau gagal
+// (Discord gangguan sesaat), ditandai embedSynced=false lalu diulang otomatis tiap 2 menit.
+async function syncVouchEmbed(tv, channel = null) {
+    try {
+        let gone = false;
+        const ch = channel || await client.channels.fetch(tv.channelId).catch(err => { if (err?.code === 10003) gone = true; return null; });
+        if (!ch && !gone) return false; // gangguan sementara -> coba lagi nanti
+        const formMsg = ch ? await ch.messages.fetch(tv.messageId).catch(err => { if (err?.code === 10008) gone = true; return null; }) : null;
+        if (gone) { await TicketVouch.deleteOne({ _id: tv._id }); return false; } // tiket/form benar-benar sudah dihapus
+        if (!formMsg) return false;
+
+        // Cek ulang database tepat sebelum edit (bisa saja status baru di-reset oleh invoice baru di tiket ini)
+        const fresh = await TicketVouch.findById(tv._id);
+        if (!fresh || !fresh.vouched) return false;
+
+        const oldFormEmbed = formMsg.embeds[0];
+        if (oldFormEmbed) {
+            const updatedFields = oldFormEmbed.fields.map(f =>
+                f.name === '🗣️ Status Vouch'
+                    ? { name: f.name, value: '✅ Sudah melakukan Vouch', inline: f.inline }
+                    : f
+            );
+            const newFormEmbed = EmbedBuilder.from(oldFormEmbed).setFields(updatedFields);
+            await discordRetry(() => formMsg.edit({ embeds: [newFormEmbed] }));
+        }
+        await TicketVouch.updateOne({ _id: tv._id, vouched: true }, { $set: { embedSynced: true } });
+        return true;
+    } catch (e) {
+        console.error(`Gagal update tampilan vouch di ticket ${tv.channelId}:`, e.message);
+        return false;
+    }
+}
+
+// Perbaikan otomatis: tampilan form yang sempat gagal diupdate, diulang tiap 2 menit
+setInterval(async () => {
+    if (!client.isReady()) return;
+    try {
+        const unsynced = await TicketVouch.find({ vouched: true, embedSynced: false }).limit(20);
+        for (const tv of unsynced) await syncVouchEmbed(tv);
+    } catch (e) {}
+}, 2 * 60 * 1000);
+
 // === EVENT: BACA CHAT TEXT BIASA (KHUSUS VOUCH) ===
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
@@ -772,28 +817,30 @@ client.on('messageCreate', async (message) => {
             }).sort({ doneAt: 1 }); // tiket yang invoicenya paling dulu selesai didahulukan
 
             for (const tv of pendingTickets) {
-                try {
-                    const ch = await client.channels.fetch(tv.channelId).catch(() => null);
-                    if (!ch) { await TicketVouch.deleteOne({ _id: tv._id }); continue; }
-                    const formMsg = await ch.messages.fetch(tv.messageId).catch(() => null);
-                    if (!formMsg) { await TicketVouch.deleteOne({ _id: tv._id }); continue; }
-
-                    const oldFormEmbed = formMsg.embeds[0];
-                    if (oldFormEmbed) {
-                        const updatedFields = oldFormEmbed.fields.map(f =>
-                            f.name === '🗣️ Status Vouch'
-                                ? { name: f.name, value: '✅ Sudah melakukan Vouch', inline: f.inline }
-                                : f
-                        );
-                        const newFormEmbed = EmbedBuilder.from(oldFormEmbed).setFields(updatedFields);
-                        await formMsg.edit({ embeds: [newFormEmbed] });
-                    }
-                    tv.vouched = true;
-                    await tv.save();
-                    break; // 1 pesan vouch hanya untuk 1 tiket
-                } catch (e) {
-                    console.error(`Gagal update vouch di ticket ${tv.channelId}:`, e.message);
+                // 1. Pastikan tiket & form-nya masih ada. Data dihapus HANYA kalau Discord memastikan
+                //    sudah tidak ada (10003/10008), BUKAN karena gangguan koneksi sesaat.
+                let gone = false;
+                const ch = await client.channels.fetch(tv.channelId).catch(err => { if (err?.code === 10003) gone = true; return null; });
+                if (!gone && ch) {
+                    await ch.messages.fetch(tv.messageId).catch(err => { if (err?.code === 10008) gone = true; });
                 }
+                if (gone) { await TicketVouch.deleteOne({ _id: tv._id }).catch(() => {}); continue; }
+
+                // 2. Kunci vouch ke tiket ini di DATABASE dulu (sumber kebenaran).
+                //    Kalau database gagal -> berhenti, jangan dialihkan ke tiket lain.
+                try {
+                    tv.vouched = true;
+                    tv.embedSynced = false;
+                    await tv.save();
+                } catch (e) {
+                    console.error(`Gagal simpan vouch ticket ${tv.channelId}:`, e.message);
+                    break;
+                }
+
+                // 3. Update tampilan form (dengan percobaan ulang). Kalau tetap gagal,
+                //    diulang otomatis tiap 2 menit — vouch TIDAK pindah ke tiket lain.
+                await syncVouchEmbed(tv, ch);
+                break; // 1 pesan vouch hanya untuk 1 tiket
             }
         } catch (e) {
             console.error('Gagal proses vouch tracking:', e.message);
