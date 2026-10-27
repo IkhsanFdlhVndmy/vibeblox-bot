@@ -939,8 +939,9 @@ const acLastEval = new Map();              // channelId -> waktu evaluasi terakh
 const acStaffCache = new Map();            // userId -> { v, at }
 const ticketsBeingClosed = new Set();      // kunci proses tutup (manual & otomatis)
 
+const AC_LOCK_BUSY = Symbol('busy');      // tanda: tiket sedang diproses bagian lain
 async function acWithLock(channelId, fn) {
-    if (acLocks.has(channelId)) return;
+    if (acLocks.has(channelId)) return AC_LOCK_BUSY;
     acLocks.add(channelId);
     try { return await fn(); } finally { acLocks.delete(channelId); }
 }
@@ -1117,10 +1118,10 @@ async function autoCloseDisarm(channelId, reason) {
 
 // --- 1. CEK SYARAT & AKTIFKAN HITUNG MUNDUR ---
 // Syarat: sudah Done DAN (sudah vouch ATAU sudah lewat 2 jam sejak pengingat vouch terakhir)
-async function evaluateAutoClose(channelId, force = false) {
+async function evaluateAutoClose(channelId, force = false, attempt = 0) {
     if (!AUTO_CLOSE_ENABLED || !client.isReady()) return;
     if (!force && Date.now() - (acLastEval.get(channelId) || 0) < AUTO_CLOSE_REEVAL_MS) return;
-    return acWithLock(channelId, async () => {
+    const result = await acWithLock(channelId, async () => {
         acLastEval.set(channelId, Date.now());
         const ticket = await Ticket.findOne({ channelId });
         if (!ticket) return;
@@ -1163,6 +1164,11 @@ async function evaluateAutoClose(channelId, force = false) {
         }
         acActiveChannels.add(channelId);
     });
+    // Dipicu oleh vouch tapi tiket sedang diproses penjadwal -> coba lagi 3 detik kemudian (maks ±1 menit), jangan dilewati
+    if (result === AC_LOCK_BUSY && force && attempt < 20) {
+        setTimeout(() => evaluateAutoClose(channelId, true, attempt + 1).catch(() => {}), 3000);
+    }
+    return result;
 }
 
 // =====================================================================
@@ -1202,7 +1208,7 @@ function vrBuildReminder(buyerId, final) {
         .setTitle(final ? '⏰ PENGINGAT TERAKHIR: VOUCH' : '📣 PENGINGAT VOUCH')
         .setDescription(
             `Halo <@${buyerId}>! Pesanan kamu sudah **selesai** ✅\n\n` +
-            `Bantu kami dengan mengirim vouch di <#${VOUCH_CHANNEL_ID}> ya. Teks vouch-nya sudah ada di atas, tinggal salin & kirim. 🙏\n\n` +
+            `Bantu kami dengan copy text dan kirim vouch di <#${VOUCH_CHANNEL_ID}> ya. Teks vouch-nya sudah ada di atas, tinggal salin & kirim. 🙏\n\n` +
             (autoCloseLine ? `${autoCloseLine}\n` : '') +
             `-# Masih ada keperluan di tiket ini? Ketik **Jangan Tutup**.`
         )
