@@ -769,7 +769,7 @@ client.on('messageCreate', async (message) => {
                 buyerId: message.author.id,
                 vouched: false,
                 doneAt: { $lte: msgTime }
-            });
+            }).sort({ doneAt: 1 }); // tiket yang invoicenya paling dulu selesai didahulukan
 
             for (const tv of pendingTickets) {
                 try {
@@ -790,6 +790,7 @@ client.on('messageCreate', async (message) => {
                     }
                     tv.vouched = true;
                     await tv.save();
+                    break; // 1 pesan vouch hanya untuk 1 tiket
                 } catch (e) {
                     console.error(`Gagal update vouch di ticket ${tv.channelId}:`, e.message);
                 }
