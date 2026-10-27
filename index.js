@@ -1208,7 +1208,7 @@ function vrBuildReminder(buyerId, final) {
         .setTitle(final ? '⏰ PENGINGAT TERAKHIR: VOUCH' : '📣 PENGINGAT VOUCH')
         .setDescription(
             `Halo <@${buyerId}>! Pesanan kamu sudah **selesai** ✅\n\n` +
-            `Bantu kami dengan copy text dan kirim vouch di <#${VOUCH_CHANNEL_ID}> ya. Teks vouch-nya sudah ada di atas, tinggal salin & kirim. 🙏\n\n` +
+            `Bantu kami dengan copy text dan kirim vouch ke <#${VOUCH_CHANNEL_ID}> ya. Teks vouch-nya sudah ada di atas, tinggal salin & kirim. 🙏\n\n` +
             (autoCloseLine ? `${autoCloseLine}\n` : '') +
             `-# Masih ada keperluan di tiket ini? Ketik **Jangan Tutup**.`
         )
