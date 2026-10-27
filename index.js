@@ -977,7 +977,9 @@ async function acFetchAllMessages(channel) {
         before = batch.last().id;
     }
     // urut waktu; kalau detiknya sama, pakai ID pesan Discord (selalu berurutan)
-    return all.sort((a, b) => a.createdTimestamp - b.createdTimestamp || (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+    all.sort((a, b) => a.createdTimestamp - b.createdTimestamp || (BigInt(a.id) < BigInt(b.id) ? -1 : 1));
+    all.truncated = all.length >= TRANSCRIPT_MAX_MESSAGES; // riwayat lebih panjang dari batas -> pesan paling lama tidak terbaca
+    return all;
 }
 
 function acIsInvoiceMessage(m) {
@@ -1132,6 +1134,7 @@ async function evaluateAutoClose(channelId, force = false) {
         if (!channel || acIsPreOrder(ticket, channel)) return;
 
         const messages = await acFetchAllMessages(channel);
+        if (messages.truncated) return;                                                  // riwayat >3000 pesan: tidak bisa dipastikan aman -> tutup manual saja
         if (acFindActiveInvoice(messages)) return;                                       // ada invoice berjalan
         if (messages.some(m => acIsInvoiceMessage(m) && m.createdTimestamp > +tv.doneAt)) return; // invoice baru setelah transaksi yang di-vouch
 
@@ -1231,6 +1234,7 @@ async function finalizeAutoClose(channelId) {
             if (acIsPreOrder(ticket, channel)) return disarm('tiket ditandai Pre-Order');
             // c. Invoice berjalan / invoice baru?
             const messages = await acFetchAllMessages(channel);
+            if (messages.truncated) return disarm('riwayat tiket terlalu panjang (>3000 pesan), mohon tutup manual');
             if (acFindActiveInvoice(messages)) return disarm('ada invoice yang masih berjalan');
             if (messages.some(m => acIsInvoiceMessage(m) && m.createdTimestamp > +tv.doneAt)) return disarm('ada invoice baru');
             // d. Aktivitas yang mungkin terlewat (bot mati / Discord gangguan)
@@ -1272,7 +1276,7 @@ async function finalizeAutoClose(channelId) {
                     if (fresh?.autoClose?.state !== 'closing') return 'status auto-close berubah';
                     const newer = [...(await channel.messages.fetch({ limit: 50, after: lastMessageId, cache: false })).values()];
                     if (newer.some(m => !m.author.bot)) return 'ada pesan baru di tiket';
-                    if (newer.some(m => acIsInvoiceMessage(m))) return 'ada invoice baru';
+                    if (newer.some(m => m.author.id === client.user.id)) return 'ada aktivitas baru dari bot / command (mis. invoice baru)';
                     return null;
                 }
             });
@@ -1325,6 +1329,7 @@ function buildTicketTranscript(channel, ticketData, messages, closedByText) {
     lines.push(`Ditutup oleh  : ${resolve(closedByText).replace(/[🤖]/gu, '').trim()}`);
     const attachCount = messages.reduce((n, m) => n + (m.attachments?.size || 0), 0);
     lines.push(`Jumlah pesan  : ${messages.length} | Lampiran: ${attachCount}`);
+    if (messages.truncated) lines.push(`⚠️ PERHATIAN  : riwayat tiket lebih dari ${TRANSCRIPT_MAX_MESSAGES} pesan, hanya ${TRANSCRIPT_MAX_MESSAGES} pesan terakhir yang tersimpan`);
     lines.push(bar, '');
 
     for (const m of messages) {
@@ -1433,7 +1438,7 @@ async function closeTicketWithTranscript(channel, ticketData, { closedByText, me
         }
 
         // d. Hapus channel DULU, baru data database (kalau hapus channel gagal, data tiket tetap utuh)
-        await discordRetry(() => channel.delete());
+        await discordRetry(() => channel.delete()).catch(e => { if (e?.code !== 10003) throw e; }); // 10003 = channel sudah terhapus -> berhasil
         acActiveChannels.delete(channelId);
         try {
             const removed = await InvoiceTracker.deleteMany({ channelId });
