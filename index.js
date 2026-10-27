@@ -955,10 +955,6 @@ async function acIsStaffUser(guild, member, userId) {
     return v;
 }
 
-function acIsPreOrder(ticket, channel) {
-    return !!ticket?.isPreOrder || /(^|-)po(-|$)/i.test(channel?.name || '');
-}
-
 async function acFetchChannel(channelId) {
     let gone = false;
     const channel = await client.channels.fetch(channelId).catch(err => { if (err?.code === 10003) gone = true; return null; });
@@ -1131,7 +1127,7 @@ async function evaluateAutoClose(channelId, force = false) {
         if (st === 'cancelled' && ticket.autoClose?.forDoneAt && +ticket.autoClose.forDoneAt === +tv.doneAt) return;
 
         const { channel } = await acFetchChannel(channelId);
-        if (!channel || acIsPreOrder(ticket, channel)) return;
+        if (!channel) return;
 
         const messages = await acFetchAllMessages(channel);
         if (messages.truncated) return;                                                  // riwayat >3000 pesan: tidak bisa dipastikan aman -> tutup manual saja
@@ -1230,8 +1226,6 @@ async function finalizeAutoClose(channelId) {
             // a. Vouch masih untuk transaksi yang sama?
             const tv = await TicketVouch.findOne({ channelId });
             if (!tv || !tv.vouched || +tv.doneAt !== +ticket.autoClose.forDoneAt) return disarm('ada transaksi baru yang belum di-vouch');
-            // b. Pre-Order?
-            if (acIsPreOrder(ticket, channel)) return disarm('tiket ditandai Pre-Order');
             // c. Invoice berjalan / invoice baru?
             const messages = await acFetchAllMessages(channel);
             if (messages.truncated) return disarm('riwayat tiket terlalu panjang (>3000 pesan), mohon tutup manual');
@@ -4584,10 +4578,6 @@ Jumlah Robux: `;
         }
 
         await interaction.deferReply(); // cegah interaction expired (>3 detik) kalau proses rename lambat
-
-        // AUTO-CLOSE: tandai Pre-Order di DATABASE (tetap berlaku walau rename channel kena batas Discord)
-        await Ticket.updateOne({ channelId: interaction.channel.id }, { $set: { isPreOrder: true } }).catch(() => {});
-        autoCloseDisarm(interaction.channel.id, 'tiket ditandai Pre-Order').catch(() => {}); 
 
         const newNamePO = `${interaction.channel.name}-po`;
 
