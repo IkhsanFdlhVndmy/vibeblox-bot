@@ -18,7 +18,8 @@ const TicketSchema = new mongoose.Schema({
         noticeMessageId: { type: String, default: null },
         warned: { type: Boolean, default: false },
         reason: { type: String, default: null },
-        failCount: { type: Number, default: 0 }
+        failCount: { type: Number, default: 0 },
+        viaReminder: { type: Boolean, default: false } // true = ditutup karena belum vouch setelah 2x pengingat
     }
 });
 
