@@ -11,7 +11,9 @@ const TicketVouchSchema = new mongoose.Schema({
     doneAt: { type: Date, required: true },
     // false = status vouch sudah tercatat di database tapi tampilan form tiket belum berhasil diupdate
     // (akan diulang otomatis tiap 2 menit)
-    embedSynced: { type: Boolean, default: true }
+    embedSynced: { type: Boolean, default: true },
+    // ID pesan vouch yang dipakai untuk mencentang tiket ini (1 pesan hanya boleh dipakai 1x)
+    vouchMessageId: { type: String, default: null, index: true }
 }, { timestamps: true });
 
 module.exports = mongoose.model('TicketVouch', TicketVouchSchema);
