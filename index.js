@@ -493,7 +493,7 @@ const slashCommands = [
     //cek eligble
     {
         name: 'cek-eligible', 
-        description: 'Cek status antrean 14 hari di grup BEJIRLAH, Vandamoy, Maycomn & VibeBlox Community',
+        description: 'Cek status 14 hari di grup BEJIRLAH, Vandamoy, Maycomn, VibeBlox & LemonY Studio',
         options: [
             { name: 'username', description: 'Username Roblox pembeli', type: 3, required: true }
         ]
@@ -2042,7 +2042,8 @@ async function runEligibilityCheck(targetUsername, cacheKey) {
             { id: '1064667246', shortName: 'BEJIRLAH', url: 'https://www.roblox.com/communities/1064667246/BEJIRLAH-Community' },
             { id: '1108229986', shortName: 'Vandamoy', url: 'https://www.roblox.com/id/communities/1108229986/Vandamoy' },
             { id: '653724099', shortName: 'Maycomn', url: 'https://www.roblox.com/communities/653724099/Maycomn' },
-            { id: '617301345', shortName: 'Vibies', url: 'https://www.roblox.com/id/communities/617301345/VibeBlox-Community' }
+            { id: '617301345', shortName: 'Vibies', url: 'https://www.roblox.com/id/communities/617301345/VibeBlox-Community' },
+            { id: '1080653338', shortName: 'LemonY', url: 'https://www.roblox.com/id/communities/1080653338/LemonY-Studio' }
         ];
 
         const formatWaktu = (isoString) => {
@@ -2181,7 +2182,8 @@ async function runTransactionCheck(targetUsername, cacheKey, requesterTag) {
             { id: '1064667246', name: 'Community 1 (BEJIRLAH)' },
             { id: '1108229986', name: 'Community 2 (Vandamoy)' },
             { id: '653724099', name: 'Community 3 (Maycomn)' },
-            { id: '617301345', name: 'Community 4 (Vibies)' }
+            { id: '617301345', name: 'Community 4 (Vibies)' },
+            { id: '1080653338', name: 'Community 5 (LemonY)' }
         ];
         const now = Date.now();
         const cutoffOldest = now - (10 * 24 * 60 * 60 * 1000); // batas 10 hari ke belakang
@@ -2287,7 +2289,8 @@ const RESTOCK_COMMUNITIES = {
     1: { name: 'BEJIRLAH', groupId: '1064667246' },
     2: { name: 'Vandamoy', groupId: '1108229986' },
     3: { name: 'Maycomn', groupId: '653724099' },
-    4: { name: 'Vibies', groupId: '617301345' }
+    4: { name: 'Vibies', groupId: '617301345' },
+    5: { name: 'LemonY', groupId: '1080653338' }
 };
 
 // "1,3" -> [1, 3] (nomor valid saja, dedup, urut)
@@ -4498,7 +4501,7 @@ Jumlah Robux: `;
         await interaction.deferReply();
 
         await interaction.editReply({
-            content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/communities/653724099/Maycomn\n\nKomunitas 4:\nhttps://www.roblox.com/id/communities/617301345/VibeBlox-Community\n\n',
+            content: '**Link Grup Komunitas:**\nKomunitas 1:\nhttps://www.roblox.com/communities/1064667246/BEJIRLAH-Community\n\nKomunitas 2:\nhttps://www.roblox.com/id/communities/1108229986/Vandamoy\n\nKomunitas 3:\nhttps://www.roblox.com/communities/653724099/Maycomn\n\nKomunitas 4:\nhttps://www.roblox.com/id/communities/617301345/VibeBlox-Community\n\nKomunitas 5:\nhttps://www.roblox.com/id/communities/1080653338/LemonY-Studio\n\n',
             flags: MessageFlags.SuppressEmbeds
         });
         linkCommunityActive = false;
