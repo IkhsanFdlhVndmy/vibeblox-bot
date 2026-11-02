@@ -276,6 +276,7 @@ if (menuType === 'howtoorder') {
 // =============================================================
 let leaderboardTimeout = null;
 function scheduleLiveLeaderboardUpdate() {
+    lbInvalidateCache(); // data berubah (transaksi / anonymous) -> halaman tersimpan dibuang SEKARANG
     if (leaderboardTimeout) clearTimeout(leaderboardTimeout);
     leaderboardTimeout = setTimeout(() => {
         updateLiveLeaderboard();
@@ -650,31 +651,81 @@ async function updateSpenderRoles(member, userData) {
 // =============================================================
 // === FUNGSI GENERATE LEADERBOARD =============================
 // =============================================================
+// --- CACHE LEADERBOARD (bikin tombol Next/Prev cepat) ---
+// Penyebab lambat sebelumnya: cache user Discord dibatasi 50 (hemat RAM), jadi nama pembeli di halaman 2+
+// diambil dari API Discord SATU PER SATU (10 request berurutan per halaman).
+// Sekarang: nama disimpan sendiri (6 jam) & diambil BERSAMAAN, query database berjalan BERSAMAAN,
+// dan halaman yang sudah dibuat disimpan 2 menit (otomatis dibuang begitu ada transaksi / anonymous baru).
+const LB_NAME_TTL_MS = 6 * 60 * 60 * 1000;
+const LB_PAGE_TTL_MS = 2 * 60 * 1000;
+const lbNameCache = new Map();   // userId -> { name, at }
+const lbPageCache = new Map();   // page -> { data, at }
+let lbCacheVersion = 0;
+
+function lbInvalidateCache() {
+    lbCacheVersion++;
+    lbPageCache.clear();
+}
+
+function lbClampPage(page) {
+    page = parseInt(page, 10) || 1;
+    return Math.min(Math.max(page, 1), 10);
+}
+
+function lbGetCachedPage(page) {
+    const c = lbPageCache.get(lbClampPage(page));
+    return c && Date.now() - c.at < LB_PAGE_TTL_MS ? c.data : null;
+}
+
+async function lbResolveName(userId) {
+    const saved = lbNameCache.get(userId);
+    if (saved && Date.now() - saved.at < LB_NAME_TTL_MS) return saved.name;
+    let name;
+    const cachedUser = client.users.cache.get(userId);
+    if (cachedUser) {
+        name = cachedUser.username;
+    } else {
+        try {
+            name = (await client.users.fetch(userId, { cache: false })).username;
+        } catch (err) {
+            if (err?.code !== 10013) return saved ? saved.name : 'Unknown'; // gangguan sementara: jangan disimpan
+            name = 'Akun_Dihapus';                                           // 10013 = akun benar-benar sudah tidak ada
+        }
+    }
+    if (lbNameCache.size > 500) lbNameCache.clear(); // batas RAM (normalnya cuma ±100 nama: 10 halaman x 10)
+    lbNameCache.set(userId, { name, at: Date.now() });
+    return name;
+}
+
 async function generateLeaderboard(page) {
-    if (page > 10) page = 10;
-    if (page < 1) page = 1;
+    page = lbClampPage(page);
+    const cached = lbGetCachedPage(page);
+    if (cached) return cached;
+    const version = lbCacheVersion;
 
     const limit = 10;
     const skip = (page - 1) * limit;
 
-    // .lean() = return plain object, HEMAT RAM (tidak bikin Mongoose Document)
-    const users = await User.find({ uangMasuk: { $gt: 0 } }).sort({ uangMasuk: -1 }).skip(skip).limit(limit).lean();
-    const totalUsers = await User.countDocuments({ uangMasuk: { $gt: 0 } });
+    // 4 query database dijalankan BERSAMAAN (bukan satu per satu). .lean() = hemat RAM
+    const [users, totalUsers, storeData, partnerData] = await Promise.all([
+        User.find({ uangMasuk: { $gt: 0 } }).sort({ uangMasuk: -1 }).skip(skip).limit(limit).lean(),
+        User.countDocuments({ uangMasuk: { $gt: 0 } }),
+        Store.findOne({ storeId: 'VIBEBLOX_FINANCE' }).lean(),
+        Partner.find({}).select('totalUangMasuk').lean()
+    ]);
 
     const calculatedPages = Math.ceil(totalUsers / limit) || 1;
     const totalPages = Math.min(calculatedPages, 10);
 
     // MENGHITUNG TOTAL SERVER (UTAMA + PARTNER)
-    const storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' }).lean();
-    const storeTotal = storeData ? storeData.totalUangMasuk : 0;
-    
-    const partnerData = await Partner.find({}).lean();
+    const storeTotal = storeData ? (storeData.totalUangMasuk || 0) : 0;
     const partnerTotal = partnerData.reduce((acc, curr) => acc + (curr.totalUangMasuk || 0), 0);
-    
     const totalAmountServer = storeTotal + partnerTotal;
 
-    let listText = '';
+    // Nama semua user di halaman ini diambil BERSAMAAN
+    const names = await Promise.all(users.map(u => (u.isAnonymous ? 'Anonymous' : lbResolveName(u.userId))));
 
+    let listText = '';
     for (let i = 0; i < users.length; i++) {
         const user = users[i];
         const rank = skip + i + 1;
@@ -685,20 +736,8 @@ async function generateLeaderboard(page) {
         else if (rank === 3) rankMedal = '🥉';
         else rankMedal = `\`#${rank}\``;
 
-        let namaUser = "Unknown";
-
-        if (user.isAnonymous) {
-            namaUser = "Anonymous";
-        } else {
-            try {
-                let fetchedUser = client.users.cache.get(user.userId);
-                if (!fetchedUser) fetchedUser = await client.users.fetch(user.userId);
-                namaUser = fetchedUser.username;
-            } catch (err) {
-                namaUser = "Akun_Dihapus";
-            }
-            if (namaUser.length > 12) namaUser = namaUser.substring(0, 12) + '..';
-        }
+        let namaUser = names[i] || 'Unknown';
+        if (!user.isAnonymous && namaUser.length > 12) namaUser = namaUser.substring(0, 12) + '..';
 
         listText += `${rankMedal} **@${namaUser}** — 💸 Rp ${formatRupiah(user.uangMasuk)}\n`;
     }
@@ -729,9 +768,12 @@ async function generateLeaderboard(page) {
                 .setDisabled(page >= totalPages)
         );
 
-    return { embeds: [embed], components: [row] };
+    const data = { embeds: [embed.toJSON()], components: [row.toJSON()] };
+    Object.defineProperty(data, 'totalPages', { value: totalPages, enumerable: false }); // info internal, tidak ikut dikirim ke Discord
+    // Simpan hanya kalau data tidak berubah selama halaman ini dibuat (cegah data lama tersimpan)
+    if (version === lbCacheVersion) lbPageCache.set(page, { data, at: Date.now() });
+    return data;
 }
-
 async function updateLiveLeaderboard() {
     try {
         const storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' }).lean();
@@ -3469,39 +3511,44 @@ client.on('interactionCreate', async (interaction) => {
         isUpdating.add(msgId);
 
         try {
-            // Step 1: Disable tombol + tampilkan Loading (acknowledge interaction sekaligus)
-            const disabledRow = new ActionRowBuilder()
-                .addComponents(
-                    new ButtonBuilder()
-                        .setCustomId('lb_loading_prev')
-                        .setLabel('Loading...')
-                        .setStyle(ButtonStyle.Secondary)
-                        .setDisabled(true),
-                    new ButtonBuilder()
-                        .setCustomId('lb_loading_next')
-                        .setLabel('Loading...')
-                        .setStyle(ButtonStyle.Secondary)
-                        .setDisabled(true)
-                );
-            await interaction.update({ components: [disabledRow] });
-
-            // Step 2: Hitung halaman tujuan
+            // Hitung halaman tujuan
             const parts = interaction.customId.split('_');
             const direction = parts[1]; // 'prev' atau 'next'
-            const currentPage = parseInt(parts[2]);
-            const targetPage = direction === 'next' ? currentPage + 1 : currentPage - 1;
+            const currentPage = parseInt(parts[2], 10) || 1;
+            const targetPage = lbClampPage(direction === 'next' ? currentPage + 1 : currentPage - 1);
 
-            // Step 3: Generate & update
-            const boardData = await generateLeaderboard(targetPage);
-            await interaction.editReply(boardData);
+            const cachedBoard = lbGetCachedPage(targetPage);
+            if (cachedBoard) {
+                // Halaman sudah tersimpan -> langsung tampil (1 request saja)
+                await interaction.update({ embeds: cachedBoard.embeds, components: cachedBoard.components });
+            } else {
+                // Belum tersimpan -> tampilkan Loading dulu (acknowledge interaction), lalu isi halaman
+                const disabledRow = new ActionRowBuilder()
+                    .addComponents(
+                        new ButtonBuilder().setCustomId('lb_loading_prev').setLabel('Loading...').setStyle(ButtonStyle.Secondary).setDisabled(true),
+                        new ButtonBuilder().setCustomId('lb_loading_next').setLabel('Loading...').setStyle(ButtonStyle.Secondary).setDisabled(true)
+                    );
+                await interaction.update({ components: [disabledRow] });
+                const boardData = await generateLeaderboard(targetPage);
+                await interaction.editReply({ embeds: boardData.embeds, components: boardData.components });
+            }
+
+            // Siapkan halaman berikutnya di belakang layar -> klik Next selanjutnya langsung tampil
+            const shown = lbGetCachedPage(targetPage);
+            if (shown && targetPage < shown.totalPages) generateLeaderboard(targetPage + 1).catch(() => {});
         } catch (err) {
             console.error("Button pagination error:", err.message);
+            // Jangan biarkan tombol macet di "Loading...": coba tampilkan ulang halaman yang tadi
+            try {
+                const parts = interaction.customId.split('_');
+                const fallback = await generateLeaderboard(parseInt(parts[2], 10) || 1);
+                await interaction.message.edit({ embeds: fallback.embeds, components: fallback.components });
+            } catch (e) {}
         } finally {
             isUpdating.delete(msgId);
         }
         return;
     }
-
 // ----- INVOICE BUTTONS -----
     if (interaction.isButton() && interaction.customId.startsWith('inv_')) {
         const allowedRolesInv = ['1489612423521374309', '1489612221544665231'];
@@ -3789,7 +3836,10 @@ client.on('interactionCreate', async (interaction) => {
 
                 const disabledComponents = invoiceMsg.components.map(row => {
                     const newRow = ActionRowBuilder.from(row);
-                    newRow.components.forEach(btn => btn.setDisabled(true));
+                    newRow.components.forEach(btn => {
+                        btn.setDisabled(true);
+                        if (btn.data.custom_id?.startsWith('inv_done')) btn.setLabel('✅ Selesai'); // ganti label "⏳ Processing..."
+                    });
                     return newRow;
                 });
 
@@ -4909,6 +4959,12 @@ Jumlah Robux: `;
         const invoiceSent = await sendInvoiceMessage(interaction, invoiceMsgId, { embeds: [invoiceEmbed], components: [row1, row2] }, '/invoice');
         if (!invoiceSent) return; // gagal total -> pesan sudah dihapus & staf sudah diberi tahu, jangan dicatat ke panel
         autoCloseDisarm(interaction.channel.id, 'ada invoice baru').catch(() => {}); // AUTO-CLOSE: ada transaksi baru
+        // TAG PEMBELI: dikirim sebagai pesan BARU (mention di pesan yang di-edit tidak memberi notifikasi)
+        interaction.channel.send({
+            content: `🔔 <@${target.id}> invoice kamu sudah dibuat! Silakan cek detail di atas & lakukan pembayaran sesuai **Total Bayar**.`,
+            reply: { messageReference: invoiceMsgId, failIfNotExists: false },
+            allowedMentions: { users: [target.id], repliedUser: false }
+        }).catch(e => console.error('Gagal tag pembeli invoice:', e.message));
 
         // --- PANEL STOCK: catat invoice ini kalau tipenya Community ---
         if (type === 'community') {
@@ -5004,6 +5060,13 @@ Jumlah Robux: `;
 
         if (await sendInvoiceMessage(interaction, msgId, { embeds: [invoiceEmbed], components: [row] }, '/partnerinvoice')) {
             autoCloseDisarm(interaction.channel.id, 'ada invoice partner baru').catch(() => {}); // AUTO-CLOSE: ada transaksi baru
+
+            // TAG PEMBELI: dikirim sebagai pesan BARU (mention di pesan yang di-edit tidak memberi notifikasi)
+            interaction.channel.send({
+                content: `🔔 <@${target.id}> invoice kamu dari Partner <@${interaction.user.id}> sudah dibuat! Silakan cek detail di atas & lakukan pembayaran sesuai **Total Bayar**.`,
+                reply: { messageReference: msgId, failIfNotExists: false },
+                allowedMentions: { users: [target.id], repliedUser: false }
+            }).catch(e => console.error('Gagal tag pembeli partner invoice:', e.message));
         }
         return;
     }
