@@ -265,12 +265,22 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
                 const m = await ch.send({ embeds: [embed] });
                 await core.setState('verif_panel', { messageId: m.id });
             }
+            if (!waiting.length) await clearPing(ch);
         } finally { panelBusy = false; }
+    }
+    // Semua pembayaran sudah diverifikasi -> pesan ping lama dihapus supaya tidak membingungkan
+    async function clearPing(ch) {
+        const prev = await core.getState('verif_ping');
+        if (!prev?.messageId) return;
+        await ch.messages.delete(prev.messageId).catch(() => {});
+        await core.setState('verif_ping', { messageId: null });
     }
     async function flushPing() {
         if (!newProofCount) return;
         const n = newProofCount; newProofCount = 0;
         try {
+            // sudah keburu diverifikasi semua sebelum ping terkirim -> tidak perlu ping
+            if (!(await InvoiceRecord.countDocuments({ status: 'waiting' }).catch(() => 1))) return;
             const prev = await core.getState('verif_ping');
             const ch = await client.channels.fetch(CFG.CHANNEL_VERIFIKASI).catch(() => null);
             if (!ch) return;
