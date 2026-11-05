@@ -67,13 +67,34 @@ class Canvas {
             }
         }
     }
-    // ikon Robux sederhana: segi enam bercincin + segi enam kecil di tengah
-    robuxIcon(cx, cy, size, fg, bg) {
-        const hex = (r) => Array.from({ length: 6 }, (_, i) => { const a = Math.PI / 180 * (60 * i - 90); return [cx + r * Math.cos(a), cy + r * Math.sin(a)]; });
-        const R = size / 2;
-        this.polygon(hex(R), fg);
-        this.polygon(hex(R * 0.72), bg);
-        this.polygon(hex(R * 0.36), fg);
+    // ikon Robux: cincin segi enam (sudut membulat) + segi enam isi dengan lubang kotak di tengah
+    robuxIcon(cx, cy, size, fg) {
+        const R = size / 2;                      // jari-jari luar (titik sudut)
+        const sdHex = (x, y, ap) => {           // segi enam ujung-atas, ap = jarak tengah ke sisi
+            let px = Math.abs(y), py = Math.abs(x); // tukar sumbu -> ujung di atas
+            const kx = -0.866025404, ky = 0.5, kz = 0.577350269;
+            const d = Math.min(kx * px + ky * py, 0) * 2;
+            px -= d * kx; py -= d * ky;
+            const qx = px - Math.max(-kz * ap, Math.min(kz * ap, px)), qy = py - ap;
+            return Math.hypot(qx, qy) * Math.sign(qy);
+        };
+        const sdBox = (x, y, h) => { const dx = Math.abs(x) - h, dy = Math.abs(y) - h; return Math.hypot(Math.max(dx, 0), Math.max(dy, 0)) + Math.min(Math.max(dx, dy), 0); };
+        const round = R * 0.14;
+        const apOut = R * 0.866 - round, ring = R * 0.17;
+        const apIn = R * 0.866 * 0.66 - round;
+        const hole = R * 0.2;
+        const inside = (x, y) => {
+            const o = sdHex(x, y, apOut) - round;
+            if (o <= 0 && o > -ring) return true;                  // cincin luar
+            const n = sdHex(x, y, apIn) - round;
+            return n <= 0 && sdBox(x, y, hole - R * 0.04) - R * 0.04 > 0; // isi dalam, berlubang kotak
+        };
+        const S = 4, x0 = Math.floor(cx - R - 1), x1 = Math.ceil(cx + R + 1), y0 = Math.floor(cy - R - 1), y1 = Math.ceil(cy + R + 1);
+        for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+            let n = 0;
+            for (let sy = 0; sy < S; sy++) for (let sx = 0; sx < S; sx++) if (inside(x + (sx + 0.5) / S - cx, y + (sy + 0.5) / S - cy)) n++;
+            if (n) this.blend(x, y, fg, n / (S * S));
+        }
     }
     measure(font, text) {
         const f = atlas().fonts[font];
@@ -158,7 +179,7 @@ function danaGrupPng(items) {
         cv.text('title', 'Dana Grup', lx + 40, y + 30, C.white);
         cv.text('subr', 'Robux di akun grupmu', lx + 40, y + 92, C.grey);
         const iconMid = y + 194;
-        cv.robuxIcon(lx + 40 + 22, iconMid, 44, C.white, C.card);
+        cv.robuxIcon(lx + 40 + 23, iconMid, 48, C.white);
         const end = textMid(cv, 'amt', commas(it.robux), lx + 102, iconMid, C.white);
         chevron(cv, end + 22, iconMid + 2, 20, C.grey);
         textMid(cv, 'usd', usd(it.robux), lx + 92, y + 262, C.white);
