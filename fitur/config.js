@@ -26,8 +26,7 @@ module.exports = {
 
     // --- ASISTEN PAYOUT ---
     PAYOUT_CAP: 9999,             // maks Robux ke 1 username dari 1 community
-    PAYOUT_RISK_DAYS: 10,         // payout dalam X hari terakhir ikut dihitung ke batas (rawan pending)
-    PAYOUT_LOOKBACK_DAYS: 20,     // payout 10-20 hari lalu diberi tanda hati-hati
+    PAYOUT_WINDOW_DAYS: 15,       // total payout 15 hari terakhir ke username itu dari community itu dihitung ke batas 9.999 (lewat = pending)
 
     // --- KODE UNIK (ditambahkan ke Total Bayar) ---
     KODE_UNIK_MIN: 1,

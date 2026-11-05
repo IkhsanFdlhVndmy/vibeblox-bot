@@ -86,6 +86,11 @@ module.exports = function createPayout(ctx, core, eligible) {
     function received(num, names, sinceMs) {
         return ledgers[num].entries.filter(x => x.ts >= sinceMs && names.includes(x.name)).reduce((s, x) => s + x.amount, 0);
     }
+    function oldestTs(num, names, sinceMs) {
+        let t = 0;
+        for (const x of ledgers[num].entries) if (x.ts >= sinceMs && names.includes(x.name) && (!t || x.ts < t)) t = x.ts;
+        return t;
+    }
 
     // ---------------- Opsi payout per username ----------------
     // Untuk tiap username: community mana saja yang BISA dipakai & berapa maksimal yang bisa dikirim.
@@ -106,13 +111,14 @@ module.exports = function createPayout(ctx, core, eligible) {
                 const saldo = typeof funds[row.num] === 'number' ? funds[row.num] : null;
                 const sell = saldo === null ? 0 : Math.max(0, saldo - CFG.STOCK_RESERVE);
                 const L = ledgers[row.num];
-                const r10 = L.ready ? received(row.num, names, Date.now() - CFG.PAYOUT_RISK_DAYS * DAY) : 0;
-                const r20 = L.ready ? received(row.num, names, Date.now() - CFG.PAYOUT_LOOKBACK_DAYS * DAY) : 0;
-                const cap = Math.max(0, CFG.PAYOUT_CAP - r10);
-                options.push({ label, num: row.num, max: Math.min(cap, sell), sell, cap, r10, r20, ready: L.ready, saldoKnown: saldo !== null });
+                const since = Date.now() - CFG.PAYOUT_WINDOW_DAYS * DAY;
+                const got = L.ready ? received(row.num, names, since) : 0;
+                const first = got > 0 ? oldestTs(row.num, names, since) : 0;
+                const cap = Math.max(0, CFG.PAYOUT_CAP - got);
+                options.push({ label, num: row.num, max: Math.min(cap, sell), sell, cap, got, resetAt: first ? first + CFG.PAYOUT_WINDOW_DAYS * DAY : 0, ready: L.ready, saldoKnown: saldo !== null });
             }
-            // urutan: belum pernah dapat payout 20 hari > 10-20 hari lalu > baru dapat; lalu yang bisa kirim paling banyak
-            const rank = (o) => (!o.ready ? 1.5 : (o.r20 === 0 ? 0 : (o.r10 === 0 ? 1 : 2)));
+            // urutan: yang bisa kirim > belum pernah terima dalam 15 hari > sudah pernah terima; lalu yang bisa kirim paling banyak
+            const rank = (o) => (!o.ready ? 1 : (o.got === 0 ? 0 : 2));
             options.sort((a, b) => (b.max > 0) - (a.max > 0) || rank(a) - rank(b) || b.max - a.max);
             out.push({ ...rcp, status: 'ok', name: check.user.name, options, pending, notJoin });
         }
@@ -130,8 +136,7 @@ module.exports = function createPayout(ctx, core, eligible) {
             if (o.max === 0) why = !o.saldoKnown ? ' (saldo belum termuat)' : (o.sell === 0 ? ' (saldo kurang)' : ' (sudah capai batas 9.999)');
             lines.push(`${icon} ${o.label} · bisa **${fmt(o.max)}**${why}`);
             if (!o.ready) lines.push('└ riwayat payout belum termuat');
-            else if (o.r10 > 0) lines.push(`└ sudah terima ${fmt(o.r10)} dalam ${CFG.PAYOUT_RISK_DAYS} hari`);
-            else if (o.r20 > 0) lines.push(`└ pernah terima ${fmt(o.r20)} (${CFG.PAYOUT_RISK_DAYS}–${CFG.PAYOUT_LOOKBACK_DAYS} hari lalu)`);
+            else if (o.got > 0) lines.push(`└ sudah terima ${fmt(o.got)} dalam ${CFG.PAYOUT_WINDOW_DAYS} hari terakhir${o.resetAt ? ` · mulai berkurang <t:${Math.floor(o.resetAt / 1000)}:R>` : ''}`);
         }
         for (const p of r.pending) lines.push(p.unknown ? `❔ ${p.label} · status sedang dimuat` : `⏳ ${p.label} · eligible <t:${Math.floor(p.at / 1000)}:R>`);
         if (r.notJoin.length) lines.push(`❌ Belum join: ${r.notJoin.join(' · ')}`);

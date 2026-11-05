@@ -5,13 +5,13 @@ Setiap fitur punya saklar **ON/OFF** lewat `/pengaturan` (khusus Vibe Owner, ter
 
 | File | Isi |
 |---|---|
-| `config.js` | Semua angka & ID yang bisa diubah (channel, sisa wajib 1.000, ambang 2.000, batas payout 9.999, kode unik, jam laporan, 12 jam tiket mati) |
+| `config.js` | Semua angka & ID yang bisa diubah (channel, sisa wajib 1.000, ambang 2.000, batas payout 9.999 per 15 hari, kode unik, jam laporan, 12 jam tiket mati) |
 | `riwayat.js` | Catatan transaksi per Done / manual / pengeluaran, impor log keuangan lama, `/riwayat` |
 | `eligible.js` | Cek eligible "borongan", mode Community di `/buttonticket`, 1 username = 1 tiket Community |
 | `stok.js` | Bisa dijual = saldo − 1.000, alarm saldo < 2.000, kuota Pre-Order dari Robux pending, estimasi dari `/restock`, tombol Ingatkan Saya |
 | `pembayaran.js` | Draft invoice, kode unik, QRIS bernominal, antrean "Sudah Bayar" |
 | `qris.js` + `qrcode-lite.js` | Pembuat QRIS bernominal + gambar QR (tanpa library tambahan) |
-| `payout.js` | Opsi payout Community per username (community yang bisa dipakai, maks kirim, riwayat 10–20 hari) |
+| `payout.js` | Opsi payout Community per username (community yang bisa dipakai, maks kirim, total diterima 15 hari terakhir) |
 | `operasional.js` | Tiket tanpa kabar, laporan harian/mingguan/bulanan, alarm, `/balas` |
 
 ## Command baru
