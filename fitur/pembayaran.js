@@ -63,11 +63,15 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
     function applyKodeToEmbed(embed, price, kode) {
         if (!kode) return embed;
         // PENTING: isi field "Total Bayar" harus tetap 1 angka saja (dibaca ulang oleh tombol QRIS & Done)
+        const total = price + kode;
         const fields = [];
         for (const f of embed.data.fields || []) {
-            if (f.name.includes('Total Bayar')) {
-                fields.push({ name: f.name, value: `**Rp ${fmt(price + kode)}**`, inline: f.inline });
-                fields.push({ name: '🔢 Kode Unik', value: `+${kode} — sudah termasuk di Total Bayar. Transfer **persis** sesuai Total Bayar ya 🙏`, inline: false });
+            if (f.name.includes('Perhitungan')) {
+                // hitungan dibuat jelas sampai ke angka akhir, supaya pembeli tidak bingung kenapa ada tambahan
+                fields.push({ name: f.name, value: `${f.value} = Rp ${fmt(price)}\n+ Rp ${fmt(kode)} *(angka penanda pembayaranmu)*`, inline: f.inline });
+            } else if (f.name.includes('Total Bayar')) {
+                fields.push({ name: f.name, value: `**Rp ${fmt(total)}**`, inline: f.inline });
+                fields.push({ name: '📌 Penting', value: `Transfer **tepat Rp ${fmt(total)}** ya (jangan dibulatkan), supaya pembayaranmu langsung dikenali admin 🙏`, inline: false });
             } else fields.push(f);
         }
         embed.setFields(fields);
