@@ -2729,10 +2729,11 @@ async function buildPanelStockPages() {
     }
     
     let totalStock = 0;
+    let totalReal = 0; // saldo asli semua community (sebelum dikurangi sisa wajib)
     let anyFundsFailed = false;
     for (const num of Object.keys(RESTOCK_COMMUNITIES)) {
         const funds = fundsPerCommunity[num];
-        if (typeof funds === 'number') totalStock += FX ? FX.sellableFunds(funds) : funds; // stok BISA DIJUAL (saldo - sisa wajib)
+        if (typeof funds === 'number') { totalReal += funds; totalStock += FX ? FX.sellableFunds(funds) : funds; } // stok BISA DIJUAL (saldo - sisa wajib)
         else if (panelFunds.at) anyFundsFailed = true; // (sebelum saldo pertama terambil = masih memuat, bukan gagal)
         if (panelFunds.failed.has(num)) anyFundsFailed = true; // saldo lama karena tarikan terakhir gagal
     }
@@ -2777,7 +2778,8 @@ async function buildPanelStockPages() {
     }
 
     const summaryLines = [
-        `💎 **Total Stock${FX ? ' (bisa dijual)' : ''}:** \`${fmt(totalStock)} Robux\``,
+        ...(FX ? [`🏦 **Total Stock:** \`${fmt(totalReal)} Robux\``] : []),
+        `💎 **${FX ? 'Bisa Dijual' : 'Total Stock'}:** \`${fmt(totalStock)} Robux\``,
         `⏳ **Total Pending:** \`${fmt(totalPending)} Robux\``,
         `🧾 **Ter-invoice:** \`${fmt(totalInvoiced)} Robux\` *(${(FX ? readyInvoices : activeInvoices).length} invoice)*`,
         `${sisaStock < 0 ? '🔴' : '🟢'} **Sisa Stock:** \`${fmt(sisaStock)} Robux\``
