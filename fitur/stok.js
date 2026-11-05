@@ -24,7 +24,7 @@ module.exports = function createStok(ctx, core, riwayat) {
             return `🏢 **Community ${num} (${grp.name}):** ${fundsAt ? '⚠️ *Gagal ambil data*' : '*memuat...*'}`;
         }
         const low = val < CFG.STOCK_LOW;
-        return `🏢 **Community ${num} (${grp.name}):** \`${fmt(val)} Robux\`${low ? ' 🔴' : ''}\n└ 🟢 Bisa dijual: \`${fmt(sellable(val))} Robux\`${low ? ' · ⚠️ **menipis, jangan beri invoice dari sini**' : ''}`;
+        return `🏢 **Community ${num} (${grp.name}):** \`${fmt(val)} Robux\`${low ? ' 🔴' : ''}\n└ ${low ? '⚠️' : '🟢'} Bisa dijual: \`${fmt(sellable(val))} Robux\`${low ? ' · **menipis**' : ''}`;
     }
     // (tampilan ringkas lama, tidak dipakai panel lagi)
     function panelCommunityBlock(num, grp, val, fundsAt) { return panelCommunityLine(num, grp, val, fundsAt); }
@@ -76,7 +76,7 @@ module.exports = function createStok(ctx, core, riwayat) {
             summaryLines.push(`└ Kuota: \`${po.pendingKnown ? fmt(po.quota) : '…'} Robux\` · Terpakai: \`${fmt(po.used)} Robux\``);
             summaryLines.push(`└ ${po.left < 0 ? '🔴' : '🟢'} Sisa kuota PO: \`${po.pendingKnown ? fmt(po.left) : '…'} Robux\`${po.left < 0 ? ' · ⚠️ **kuota PO penuh**' : ''}`);
             summaryLines.push(`└ Estimasi masuk: ${etaText(restock)}`);
-            summaryLines.push(`-# Bisa dijual = saldo − ${fmt(CFG.STOCK_RESERVE)} (sisa wajib per community)`);
+            summaryLines.push(`-# Bisa dijual = saldo − ${fmt(CFG.STOCK_RESERVE)} (sisa wajib per community)\n-# 🔴⚠️ menipis = saldo < ${fmt(CFG.STOCK_LOW)}, jangan beri invoice dari community itu`);
         } catch (e) {
             console.error('[STOK] Gagal hitung PO untuk panel:', e.message);
         }
