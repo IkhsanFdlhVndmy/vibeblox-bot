@@ -2587,23 +2587,54 @@ function buildRestockDoneStatusEmbed(restock) {
 }
 
 // Kartu "Dana Grup" (desain owner) untuk pengumuman restock: satu baris per community lokasi restock, saldo ASLI.
-// Tidak ada angka karangan: community yang saldonya gagal diambil dilewati; kalau semuanya gagal -> tanpa gambar.
-async function buildRestockFundsImage(restock) {
+// Gambar hanya dibuat kalau saldo semua community restock berhasil diambil DAN totalnya sudah >= nominal /restock
+// (artinya Robux restock sudah benar-benar masuk). Kalau belum -> null, nanti dicoba lagi (lihat tickRestockImages).
+async function buildRestockFundsImage(restock, refresh = true) {
     try {
-        await refreshPanelFunds();
+        if (refresh) await refreshPanelFunds();
         if (!panelFunds.at || Date.now() - panelFunds.at > 3 * 60 * 1000) return null;
         const items = [];
+        let total = 0;
         for (const num of restock.communities || []) {
             const key = String(num);
             const val = panelFunds.data[key];
-            if (typeof val !== 'number' || panelFunds.failed.has(key) || !RESTOCK_COMMUNITIES[key]) continue;
+            if (typeof val !== 'number' || panelFunds.failed.has(key) || !RESTOCK_COMMUNITIES[key]) return null;
             items.push({ label: `C${key} · ${RESTOCK_COMMUNITIES[key].name}`, robux: val });
+            total += val;
         }
-        if (!items.length) return null;
+        if (!items.length || total < restock.amount) return null; // Robux restock belum masuk penuh
         return require('./fitur/gambar').danaGrupPng(items);
     } catch (e) {
         console.error('[Restock] Gagal membuat gambar Dana Grup:', e.message);
         return null;
+    }
+}
+
+// Robux telat masuk: cek ulang tiap kali saldo diperbarui; begitu masuk, gambar ditambahkan ke pengumuman yang sama.
+let lastImageCheckFundsAt = 0;
+async function tickRestockImages() {
+    if (!panelFunds.at || panelFunds.at === lastImageCheckFundsAt) return;
+    lastImageCheckFundsAt = panelFunds.at;
+    const waiting = await Restock.find({ imagePending: true }).catch(() => []);
+    for (const r of waiting) {
+        try {
+            if (r.imageDeadline && r.imageDeadline.getTime() < Date.now()) {
+                await Restock.updateOne({ _id: r._id }, { $set: { imagePending: false } });
+                console.log(`[Restock] Saldo restock ${r._id} belum masuk penuh setelah 24 jam — gambar Dana Grup tidak ditambahkan.`);
+                continue;
+            }
+            const png = await buildRestockFundsImage(r, false);
+            if (!png) continue;
+            const ch = await client.channels.fetch(r.channelId).catch(() => null);
+            const msg = ch && r.announceMessageId ? await ch.messages.fetch(r.announceMessageId).catch(() => null) : null;
+            if (msg?.embeds?.[0]) {
+                await msg.edit({
+                    embeds: [EmbedBuilder.from(msg.embeds[0]).setImage('attachment://dana-grup.png')],
+                    files: [{ attachment: png, name: 'dana-grup.png' }]
+                }).catch(() => {});
+            }
+            await Restock.updateOne({ _id: r._id }, { $set: { imagePending: false } });
+        } catch (e) { console.error('[Restock] Gagal menambahkan gambar Dana Grup:', e.message); }
     }
 }
 
@@ -3007,12 +3038,16 @@ async function tickRestocks() {
                     // Kalau saldo gagal diambil -> pengumuman tetap dikirim seperti biasa, tanpa gambar.
                     const fundsImage = await buildRestockFundsImage(restock);
                     if (fundsImage) finishedEmbed.setImage('attachment://dana-grup.png');
-                    await channel.send({
+                    const announced = await channel.send({
                         content: '@everyone',
                         embeds: [finishedEmbed],
                         files: fundsImage ? [{ attachment: fundsImage, name: 'dana-grup.png' }] : [],
                         allowedMentions: { parse: ['everyone'] }
-                    }).catch(() => {});
+                    }).catch(() => null);
+                    if (announced && !fundsImage) {
+                        // Robux belum masuk penuh ke grup -> gambar ditambahkan otomatis begitu saldonya masuk
+                        await Restock.updateOne({ _id: restock._id }, { $set: { announceMessageId: announced.id, imagePending: true, imageDeadline: new Date(Date.now() + 24 * 60 * 60 * 1000) } }).catch(() => {});
+                    }
 
                     console.log(`[Restock] Pengumuman restock ${restock._id} berhasil dikirim (1x).`);
                 }
@@ -3020,6 +3055,7 @@ async function tickRestocks() {
                 console.error(`Gagal update restock ${restock._id}:`, e.message);
             }
         }
+        await tickRestockImages().catch(() => {});
     } finally {
         isTickRunning = false;
     }

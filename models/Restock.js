@@ -16,7 +16,12 @@ const RestockSchema = new mongoose.Schema({
     // Stok restock ini sudah HABIS terjual lewat Pre-Order (/restock-sold) -> tampilan "SOLD OUT",
     // tombol Ingatkan Saya dimatikan, pengingat DM dibatalkan, pengumuman @everyone saat ready TIDAK dikirim
     soldOut: { type: Boolean, default: false },
-    soldOutAt: { type: Date, default: null }
+    soldOutAt: { type: Date, default: null },
+    // Gambar "Dana Grup" di pengumuman READY: kalau saat countdown selesai saldo grup BELUM terisi
+    // (Robux telat masuk), gambar ditambahkan belakangan begitu saldonya sudah masuk (maks 24 jam).
+    announceMessageId: { type: String, default: null },
+    imagePending: { type: Boolean, default: false },
+    imageDeadline: { type: Date, default: null }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Restock', RestockSchema);
