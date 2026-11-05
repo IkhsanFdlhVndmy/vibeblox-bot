@@ -37,6 +37,8 @@ module.exports = {
     QRIS_PAYLOAD: '00020101021126570011ID.DANA.WWW011893600915302422717302090242271730303UMI51440014ID.CO.QRIS.WWW0215ID10265133103790303UMI5204594553033605802ID5908VibeBlox6012Kota Cilegon61054242363040955',
     QRIS_NMID: 'ID1026513310379',
     QRIS_MERCHANT_NAME: 'VibeBlox',
+    // Total >= ini: QRIS STATIS (yang lama, nominal diketik pembeli) — sama dengan batas QRIS lama 300k (pembeli luar negeri)
+    QRIS_NOMINAL_LIMIT: 300000,
 
     // --- TIKET TANPA KABAR ---
     IDLE_TICKET_MS: 12 * 60 * 60 * 1000,      // 12 jam tanpa pesan & tanpa invoice -> diingatkan

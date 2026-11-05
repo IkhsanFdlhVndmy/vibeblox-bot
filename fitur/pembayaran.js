@@ -119,6 +119,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         try {
             const amount = totalFromEmbed(invoiceMessage.embeds?.[0]);
             if (!amount) return null;
+            if (amount >= CFG.QRIS_NOMINAL_LIMIT) return null; // >= 300k (dibuka admin, mis. pembeli luar negeri) -> QRIS statis
             const rec = await getRecord(invoiceMessage.id);
             if (rec && rec.total && rec.total !== amount) {
                 console.error(`[QRIS] Nominal invoice (${amount}) beda dengan data (${rec.total}) -> pakai QRIS statis`);
