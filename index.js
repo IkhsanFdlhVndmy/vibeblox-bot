@@ -2586,7 +2586,7 @@ function buildRestockDoneStatusEmbed(restock) {
         .setTimestamp();
 }
 
-// Kartu "Dana Grup" untuk pengumuman restock: saldo ASLI tiap community lokasi restock + totalnya.
+// Kartu "Dana Grup" (desain owner) untuk pengumuman restock: satu baris per community lokasi restock, saldo ASLI.
 // Tidak ada angka karangan: community yang saldonya gagal diambil dilewati; kalau semuanya gagal -> tanpa gambar.
 async function buildRestockFundsImage(restock) {
     try {

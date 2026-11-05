@@ -128,49 +128,58 @@ class Canvas {
 const commas = (n) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 const usd = (robux) => { const v = (robux * 0.0038).toFixed(2).split('.'); return `$${commas(v[0])}.${v[1]}`; };
 
-// items: [{ label: 'C1 · BEJIRLAH', robux: 101356 }, ...]
+// Teks di tengah vertikal (pakai tinggi huruf kapital Inter ≈ 0,73 em)
+function textMid(cv, font, text, x, midY, c) {
+    const f = atlas().fonts[font];
+    const cap = Math.round((f.asc + f.desc) * 0.6);
+    return cv.text(font, text, x, Math.round(midY + cap / 2 - f.asc), c);
+}
+function chevron(cv, x, midY, size, c) {
+    const w = size, h = size * 0.55, t = size * 0.16;
+    cv.polygon([[x, midY - h / 2], [x + t, midY - h / 2], [x + w / 2, midY + h / 2 - t * 1.2], [x + w - t, midY - h / 2], [x + w, midY - h / 2], [x + w / 2, midY + h / 2]], c);
+}
+
+// Desain mengikuti tampilan "Dana Grup" milik owner. items: [{ robux: 101356 }, ...] — satu baris per community.
+// Angka = saldo ASLI grup (diambil bot dari Roblox), bukan angka ketikan.
 function danaGrupPng(items) {
     if (!items?.length) return null;
-    const PAD = 28, GAP = 28, CW = 680, CH = 320, TH = 340;
-    const n = items.length;
-    const cols = n === 1 ? 1 : 2;
-    const withTotal = n > 1;
-    // jumlah ganjil -> kartu total mengisi slot kosong di sebelah kartu terakhir; genap -> kartu total lebar di bawah
-    const totalInGrid = withTotal && n % 2 === 1;
-    const slots = n + (totalInGrid ? 1 : 0);
-    const rows = Math.ceil(slots / cols);
-    const W = PAD * 2 + CW * cols + GAP * (cols - 1);
-    const H = PAD * 2 + rows * CH + (rows - 1) * GAP + (withTotal && !totalInGrid ? GAP + TH : 0);
-    const cv = new Canvas(W, H, COLOR.page);
-
-    const card = (x, y, w, h, title, sub, robux, big) => {
-        cv.roundRect(x, y, w, h, 28, COLOR.card);
-        cv.text('title', title, x + 40, y + 34, COLOR.white);
-        cv.text('sub', cv.fit('sub', sub, w - 80), x + 40, y + 92, COLOR.sub);
-        const icon = big ? 66 : 54;
-        const amountFont = big ? 'big' : 'amount';
-        const amountTop = big ? y + 146 : y + 140;
-        const f = atlas().fonts[amountFont];
-        const capMid = amountTop + f.asc - Math.round(f.asc * 0.36);
-        cv.robuxIcon(x + 40 + icon / 2, capMid, icon, COLOR.white, COLOR.card);
-        cv.text(amountFont, commas(robux), x + 40 + icon + 18, amountTop, COLOR.white);
-        cv.text('usd', usd(robux), x + 56, y + h - 80, COLOR.white);
-    };
+    const C = { page: [17, 18, 20], card: [29, 30, 34], white: [255, 255, 255], grey: [200, 201, 205], blue: [51, 95, 255], chipOn: [217, 218, 221], chipOnTxt: [25, 26, 30], chipOff: [40, 41, 46] };
+    const PAD = 40, LW = 680, LH = 320, GAP = 52, RW = 668, RH = 274, ROWGAP = 32;
+    const W = PAD + LW + GAP + RW + PAD;
+    const rowsH = items.length * LH + (items.length - 1) * ROWGAP;
+    const H = PAD + rowsH + 52 + 72 + PAD;
+    const cv = new Canvas(W, H, C.page);
 
     items.forEach((it, i) => {
-        const c = i % cols, r = Math.floor(i / cols);
-        card(PAD + c * (CW + GAP), PAD + r * (CH + GAP), CW, CH, 'Dana Grup', it.label, it.robux, false);
+        const y = PAD + i * (LH + ROWGAP);
+        // kartu kiri: Dana Grup
+        const lx = PAD;
+        cv.roundRect(lx, y, LW, LH, 26, C.card);
+        cv.text('title', 'Dana Grup', lx + 40, y + 30, C.white);
+        cv.text('subr', 'Robux di akun grupmu', lx + 40, y + 92, C.grey);
+        const iconMid = y + 194;
+        cv.robuxIcon(lx + 40 + 22, iconMid, 44, C.white, C.card);
+        const end = textMid(cv, 'amt', commas(it.robux), lx + 102, iconMid, C.white);
+        chevron(cv, end + 22, iconMid + 2, 20, C.grey);
+        textMid(cv, 'usd', usd(it.robux), lx + 92, y + 262, C.white);
+        // kartu kanan: Kirim Pembayaran Sekali
+        const rx = PAD + LW + GAP;
+        cv.roundRect(rx, y, RW, RH, 26, C.card);
+        cv.text('title', 'Kirim Pembayaran Sekali', rx + 36, y + 30, C.white);
+        cv.text('subr', 'Berikan Robux kepada kolaboratormu', rx + 36, y + 92, C.grey);
+        const bw = Math.round(cv.measure('btn', 'Kirim Robux')) + 52;
+        cv.roundRect(rx + 36, y + 160, bw, 76, 16, C.blue);
+        textMid(cv, 'btn', 'Kirim Robux', rx + 36 + 26, y + 160 + 38, C.white);
     });
-    if (withTotal) {
-        const total = items.reduce((s, it) => s + it.robux, 0);
-        const sub = items.map(it => it.label.split(' ')[0]).join(' + ');
-        if (totalInGrid) {
-            const c = n % cols, r = Math.floor(n / cols);
-            card(PAD + c * (CW + GAP), PAD + r * (CH + GAP), CW, CH, 'Total Dana Grup', sub, total, false);
-        } else {
-            const y = PAD + rows * CH + (rows - 1) * GAP + GAP;
-            card(PAD, y, W - PAD * 2, TH, 'Total Dana Grup', sub, total, true);
-        }
+
+    // tombol bawah: Grup / Pengalaman virtual
+    const cy = PAD + rowsH + 52;
+    let cx = PAD;
+    for (const [label, on] of [['Grup', true], ['Pengalaman virtual', false]]) {
+        const w = Math.round(cv.measure('chip', label)) + 56;
+        cv.roundRect(cx, cy, w, 72, 36, on ? C.chipOn : C.chipOff);
+        textMid(cv, 'chip', label, cx + 28, cy + 36, on ? C.chipOnTxt : C.white);
+        cx += w + 24;
     }
     return cv.png();
 }
