@@ -15,6 +15,11 @@ module.exports = function setupFitur(ctx) {
     const bayar = require('./pembayaran')(ctx, core, riwayat, stok, eligible);
     const payout = require('./payout')(ctx, core, eligible);
     const ops = require('./operasional')(ctx, core, stok);
+    // Rencana payout muncul SEBELUM Robux dikirim: saat bukti bayar masuk, atau lewat tombol di invoice
+    bayar.setPlanButton((id) => payout.planButton(id));
+    bayar.setOnWaiting(async (rec, channel) => {
+        if (rec.type === 'community') await payout.ensurePlan({ channel, invoiceMessageId: rec.messageId, buyerId: rec.buyerId, robux: rec.robux });
+    });
 
     const settingChoices = Object.keys(CFG.DEFAULT_SETTINGS).map(k => ({ name: CFG.SETTING_LABELS[k] || k, value: k }));
     const commands = [
@@ -89,6 +94,7 @@ module.exports = function setupFitur(ctx) {
                 if (id === 'vx_watch_community') return await stok.handleWatchButton(interaction);
                 if (id.startsWith('vx_dr_')) return await bayar.handleDraftButton(interaction);
                 if (id.startsWith('vx_po_')) return await payout.handleButton(interaction);
+                if (id.startsWith('vx_plan_')) return await payout.handlePlanButton(interaction);
             }
             if (interaction.isStringSelectMenu() && id.startsWith('vx_rmdsel_')) return await stok.handleReminderSelect(interaction);
             if (interaction.isModalSubmit()) {
@@ -171,6 +177,7 @@ module.exports = function setupFitur(ctx) {
         },
         applyKodeToEmbed: (embed, price, kode) => { try { return bayar.applyKodeToEmbed(embed, price, kode); } catch (e) { return embed; } },
         afterMainInvoice: safe('afterMainInvoice', (d) => bayar.afterMainInvoice(d)),
+        planButton: (id) => payout.planButton(id),
         releaseInvoice: safe('releaseInvoice', (messageId) => bayar.onInvoiceCancelled(messageId)),
         onInvoiceCancelled: safe('onInvoiceCancelled', (messageId) => bayar.onInvoiceCancelled(messageId)),
         buildQrisPayment: safe('buildQrisPayment', (msg) => bayar.buildQrisPayment(msg)),

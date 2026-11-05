@@ -30,7 +30,7 @@ module.exports = function createRiwayat(ctx, core) {
             staffId: rec.staffId || null, partnerId: rec.partnerId || null,
             kodeUnik: rec.kodeUnik || 0,
             isPreOrder: isPO(rec.channel?.name),
-            poOutstanding: rec.type === 'community' && isPO(rec.channel?.name) && core.isOn('asisten_payout'),
+            poOutstanding: false, // Done = Robux sudah dikirim, jadi tidak ada PO terutang setelah Done
             createdAt: new Date()
         };
         try {

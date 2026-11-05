@@ -147,6 +147,10 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         return (att.contentType || '').startsWith('image/') || IMAGE_EXT.test(att.name || '') || IMAGE_EXT.test(att.url || '');
     }
     let newProofCount = 0;
+    let onWaitingCb = null;
+    const setOnWaiting = (fn) => { onWaitingCb = fn; };
+    let planButtonFn = null;
+    const setPlanButton = (fn) => { planButtonFn = fn; };
     async function markWaiting(rec, message) {
         const upd = await InvoiceRecord.findOneAndUpdate(
             { _id: rec._id, status: 'open' },
@@ -154,6 +158,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             { new: true }
         ).lean();
         if (!upd) return false;
+        if (onWaitingCb) Promise.resolve(onWaitingCb(upd, message.channel)).catch(() => {});
         const ch = message.channel;
         try {
             const inv = await ch.messages.fetch(rec.messageId);
@@ -373,7 +378,8 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         );
         const row2 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`inv_cancel_${msg.id}`).setLabel('❌ Close').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId(`inv_done_${draft.type}_${msg.id}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
+            new ButtonBuilder().setCustomId(`inv_done_${draft.type}_${msg.id}`).setLabel('✅ Done').setStyle(ButtonStyle.Success),
+            ...(draft.type === 'community' && planButtonFn ? [planButtonFn(msg.id)] : [])
         );
         try {
             await h.discordRetry(() => msg.edit({ embeds: [embed], components: [row1, row2] }));
@@ -545,6 +551,6 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         start, prepareInvoice, applyKodeToEmbed, onInvoiceDone, onInvoiceCancelled, getRecord, afterMainInvoice,
         buildQrisPayment, qrisTest, onTicketMessage, rebuildVerifPanel, scheduleVerifPanel, flushPing, catchUpProofs, cleanupStale,
         createDraft, markDraftUsed, handleDraftButton, handleDraftModal, onFormEdited, onChannelDelete, onMessageDelete,
-        createInvoiceFromDraft, priceFor, parseRobux, parseType, totalFromEmbed, isImage
+        createInvoiceFromDraft, setOnWaiting, setPlanButton, priceFor, parseRobux, parseType, totalFromEmbed, isImage
     };
 };

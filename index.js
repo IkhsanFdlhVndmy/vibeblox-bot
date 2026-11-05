@@ -5061,7 +5061,8 @@ Jumlah Robux: `;
         );
         const row2 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`inv_cancel_${invoiceMsgId}`).setLabel('❌ Close').setStyle(ButtonStyle.Danger),
-            new ButtonBuilder().setCustomId(`inv_done_${type}_${invoiceMsgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
+            new ButtonBuilder().setCustomId(`inv_done_${type}_${invoiceMsgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success),
+            ...(FX && type === 'community' ? [FX.planButton(invoiceMsgId)] : []) // FITUR: rencana payout sebelum kirim Robux
         );
 
         // --- FITUR: kode unik di Total Bayar + data pembayaran (antrean verifikasi, QRIS bernominal) ---

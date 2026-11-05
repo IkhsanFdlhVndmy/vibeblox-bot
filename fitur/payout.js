@@ -192,33 +192,62 @@ module.exports = function createPayout(ctx, core, eligible) {
         } catch (e) { return null; }
     }
 
-    // Dipanggil setelah invoice Community di-Done
+    // Membuat / menampilkan Rencana Payout untuk 1 invoice Community (SEBELUM Robux dikirim).
+    // Dipicu otomatis saat pembeli mengirim bukti bayar, atau lewat tombol "📤 Rencana Payout" di invoice.
+    async function ensurePlan({ channel, invoiceMessageId, buyerId, robux }) {
+        if (!core.isOn('asisten_payout') || !robux) return null;
+        const username = await formUsername(channel);
+        const isPreOrder = /-po/i.test(channel.name || '');
+        const recipients = username ? [{ username, amount: robux }] : [];
+        const plan = await PayoutPlan.findOneAndUpdate(
+            { invoiceMessageId },
+            { $setOnInsert: { invoiceMessageId, channelId: channel.id, buyerId, robux, recipients, status: 'planned', doneAt: new Date(), isPreOrder } },
+            { upsert: true, new: true }
+        );
+        if (plan.messageId) return plan;
+        let notes = [];
+        if (recipients.length) {
+            const res = await computePlan(recipients);
+            plan.allocations = res.allocations; plan.shortfall = res.shortfall; notes = res.notes;
+            if (isPreOrder && res.shortfall > 0) notes.push('📦 Pre-Order: tekan **🔄 Hitung Ulang** setelah stok masuk.');
+        } else {
+            notes = ['⚠️ Username Roblox tidak ditemukan di form. Tekan **👥 Beberapa Username** untuk mengisi penerima.'];
+            plan.shortfall = robux;
+        }
+        const msg = await h.discordRetry(() => channel.send(planPayload(plan, notes)));
+        plan.messageId = msg.id;
+        await plan.save();
+        return plan;
+    }
+
+    // Done = Robux sudah dikirim -> langsung cek audit log Roblox (otomatis, beberapa kali)
     async function onCommunityDone({ channel, invoiceMessageId, buyerId, robux }) {
         if (!core.isOn('asisten_payout') || !robux) return;
         try {
-            const username = await formUsername(channel);
-            const isPreOrder = /-po/i.test(channel.name || '');
-            const recipients = username ? [{ username, amount: robux }] : [];
-            const plan = await PayoutPlan.findOneAndUpdate(
-                { invoiceMessageId },
-                { $setOnInsert: { invoiceMessageId, channelId: channel.id, buyerId, robux, recipients, status: 'planned', doneAt: new Date(), isPreOrder } },
-                { upsert: true, new: true }
-            );
-            if (plan.messageId) return;
-            let notes = [];
-            if (recipients.length && !isPreOrder) {
-                const res = await computePlan(recipients);
-                plan.allocations = res.allocations; plan.shortfall = res.shortfall; notes = res.notes;
-            } else if (!recipients.length) {
-                notes = ['⚠️ Username Roblox tidak ditemukan di form. Tekan **👥 Beberapa Username** untuk mengisi penerima.'];
-                plan.shortfall = robux;
-            } else {
-                notes = ['📦 Pre-Order: rencana dihitung saat stok sudah masuk — tekan **🔄 Hitung Ulang** saat siap kirim.'];
-            }
-            const msg = await h.discordRetry(() => channel.send(planPayload(plan, notes)));
-            plan.messageId = msg.id;
+            const plan = await ensurePlan({ channel, invoiceMessageId, buyerId, robux });
+            if (!plan || ['verified', 'manual'].includes(plan.status) || !plan.recipients.length) return;
+            plan.status = 'checking'; plan.checkAttempts = 0; plan.nextCheckAt = new Date(Date.now() + CHECK_DELAYS[0]);
             await plan.save();
-        } catch (e) { console.error('[PAYOUT] Gagal membuat rencana payout:', e.message); }
+            await editPlanMessage(plan);
+        } catch (e) { console.error('[PAYOUT] Gagal memproses payout setelah Done:', e.message); }
+    }
+
+    // Tombol "📤 Rencana Payout" di invoice Community
+    function planButton(invoiceMessageId) {
+        return new ButtonBuilder().setCustomId(`vx_plan_${invoiceMessageId}`).setLabel('📤 Rencana Payout').setStyle(ButtonStyle.Primary);
+    }
+    async function handlePlanButton(interaction) {
+        if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Khusus Owner dan Handler.', flags: MessageFlags.Ephemeral });
+        if (!core.isOn('asisten_payout')) return interaction.reply({ content: '❌ Asisten payout sedang OFF (/pengaturan).', flags: MessageFlags.Ephemeral });
+        const id = interaction.customId.replace('vx_plan_', '');
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const embed = interaction.message?.embeds?.[0];
+        const robux = parseInt(String((embed?.fields || []).find(f => f.name.includes('Jumlah Robux'))?.value || '').replace(/[^\d]/g, ''), 10) || 0;
+        const buyerId = (String((embed?.fields || []).find(f => f.name.includes('Pembeli'))?.value || '').match(/<@!?(\d+)>/) || [])[1] || null;
+        if (!robux) return interaction.editReply({ content: '❌ Jumlah Robux di invoice tidak terbaca.' });
+        const plan = await ensurePlan({ channel: interaction.channel, invoiceMessageId: id, buyerId, robux });
+        if (!plan?.messageId) return interaction.editReply({ content: '❌ Gagal membuat rencana payout.' });
+        return interaction.editReply({ content: `📤 Rencana payout: https://discord.com/channels/${interaction.guildId || interaction.guild?.id}/${interaction.channel.id}/${plan.messageId}` });
     }
 
     async function handleButton(interaction) {
@@ -298,7 +327,9 @@ module.exports = function createPayout(ctx, core, eligible) {
             // Payout yang sudah "dipakai" tiket lain (username sama) tidak dihitung lagi untuk rencana ini
             const others = await PayoutPlan.find({ status: { $in: ['verified', 'checking', 'mismatch'] }, claimedKeys: { $exists: true } }).select('invoiceMessageId claimedKeys').lean();
             for (const plan of due) {
-                const since = new Date(plan.doneAt).getTime() - 5 * 60 * 1000;
+                // Payout bisa dikirim kapan saja setelah invoice dibuat (sebelum Done) -> hitung sejak invoice dibuat
+                let since = new Date(plan.doneAt).getTime() - 5 * 60 * 1000;
+                try { since = Math.min(since, core.snowflakeTime(plan.invoiceMessageId) - 5 * 60 * 1000); } catch (e) {}
                 const claimedByOthers = new Set(others.filter(o => o.invoiceMessageId !== plan.invoiceMessageId).flatMap(o => o.claimedKeys || []));
                 const found = [];
                 const keys = [];
@@ -334,7 +365,7 @@ module.exports = function createPayout(ctx, core, eligible) {
                     core.stat('payout_terverifikasi');
                 } else if (plan.checkAttempts >= CHECK_DELAYS.length) {
                     plan.status = 'mismatch';
-                    core.alarm(`payout_${plan.invoiceMessageId}`, `⚠️ **Payout belum cocok** di <#${plan.channelId}>: terdeteksi ${fmt(plan.foundTotal)} dari ${fmt(plan.robux)} R$${notReady ? ' (sebagian riwayat community belum termuat)' : ''}. Cek salah username / nominal.`, 24 * 60 * 60 * 1000);
+                    core.alarm(`payout_${plan.invoiceMessageId}`, `⚠️ **Payout belum cocok** (invoice sudah Done) di <#${plan.channelId}>: terdeteksi ${fmt(plan.foundTotal)} dari ${fmt(plan.robux)} R$${notReady ? ' (sebagian riwayat community belum termuat)' : ''}. Cek salah username / nominal.`, 24 * 60 * 60 * 1000);
                 } else {
                     plan.nextCheckAt = new Date(Date.now() + CHECK_DELAYS[plan.checkAttempts]);
                 }
@@ -356,5 +387,5 @@ module.exports = function createPayout(ctx, core, eligible) {
         setInterval(verifyTick, 30 * 1000);
     }
 
-    return { start, refreshAll, computePlan, onCommunityDone, handleButton, handleModal, verifyTick, onChannelDelete, ledgers, planPayload, parseEntry };
+    return { start, refreshAll, computePlan, ensurePlan, planButton, handlePlanButton, onCommunityDone, handleButton, handleModal, verifyTick, onChannelDelete, ledgers, planPayload, parseEntry };
 };
