@@ -177,6 +177,7 @@ module.exports = function setupFitur(ctx) {
         // Panel stock
         panelCommunityLine: (num, grp, val, at) => stok.panelCommunityLine(num, grp, val, at),
         panelCommunityBlock: (num, grp, val, at, p) => stok.panelCommunityBlock(num, grp, val, at, p),
+        robuxFormText: (raw) => bayar.robuxFormText(raw),
         sellableFunds: (funds) => stok.sellable(funds),
         decoratePanel: safe('decoratePanel', (summaryLines) => stok.decoratePanel(summaryLines)),
         onFundsUpdated: (data) => { stok.onFundsUpdated(data).catch(() => {}); },

@@ -343,13 +343,48 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         if (customTotal && customTotal > 0) { price = customTotal; detail = `Harga khusus (diatur staf): Rp ${fmt(customTotal)}`; }
         return { price, detail };
     }
-    function parseRobux(raw) {
-        const s = String(raw || '').toLowerCase().replace(/\s/g, '');
-        const k = s.match(/^(\d+(?:[.,]\d+)?)k$/);
-        if (k) return Math.round(parseFloat(k[1].replace(',', '.')) * 1000);
-        const n = parseInt(s.replace(/[^\d]/g, ''), 10);
-        return Number.isFinite(n) ? n : 0;
+    // Jumlah Robux dari pembeli bisa ditulis macam-macam:
+    //   "1000" "1.000" "1,000" "1k" "1.5k" "2rb" "1 ribu" "500 R$" "109 + 119" "2x500" "500 + 1.2k"
+    function parseRobuxTerm(term) {
+        let t = term.replace(/r\$|robux|rbx/g, '');
+        let mult = 1;
+        const suf = t.match(/^(.*?)(k|rb|ribu|jt|juta)$/);
+        if (suf) { t = suf[1]; mult = /^(jt|juta)$/.test(suf[2]) ? 1e6 : 1000; }
+        if (!/^\d[\d.,]*$/.test(t)) return NaN;
+        // tanpa k/rb: "1.000" / "1,000" / "1.000.000" = pemisah ribuan
+        if (mult === 1 && /^\d{1,3}([.,]\d{3})+$/.test(t)) return parseInt(t.replace(/[.,]/g, ''), 10);
+        // selain itu: angka biasa atau desimal ("1.5k", "2,5rb")
+        const m = t.match(/^(\d+)(?:[.,](\d+))?$/);
+        if (!m) return NaN;
+        return Math.round(parseFloat(`${m[1]}.${m[2] || 0}`) * mult);
     }
+    function parseRobux(raw) {
+        const s = String(raw || '').toLowerCase().replace(/\s+/g, '');
+        if (!s) return 0;
+        let total = 0;
+        for (const part of s.split(/\+|&|dan/).filter(Boolean)) {
+            const factors = part.split(/[x×*]/).filter(Boolean);
+            if (!factors.length) continue;
+            let v = 1;
+            for (const f of factors) { const n = parseRobuxTerm(f); if (!Number.isFinite(n)) { v = NaN; break; } v *= n; }
+            if (!Number.isFinite(v)) {
+                // tidak terbaca rapi -> ambil angkanya saja (perilaku lama)
+                const n = parseInt(part.replace(/[^\d]/g, ''), 10);
+                v = Number.isFinite(n) ? n : 0;
+            }
+            total += v;
+        }
+        return Math.max(0, Math.round(total));
+    }
+    // Teks "Jumlah Robux" di form tiket: kalau ditulis tidak biasa, tampilkan juga hasil hitungnya
+    function robuxFormText(raw) {
+        const txt = String(raw || '').trim();
+        const n = parseRobux(txt);
+        const plain = /^\d{1,3}([.,]\d{3})*$|^\d+$/.test(txt.replace(/\s*(r\$|robux)$/i, ''));
+        if (!n || plain) return `**${txt} R$**`;
+        return `${txt.replace(/\s*(r\$|robux)$/i, '')} = **${fmt(n)} R$**`;
+    }
+
     async function draftPayload(draft) {
         const p = await priceFor(draft.type, draft.robux, draft.customTotal);
         const embed = new EmbedBuilder().setColor(0x99AAB5).setTitle('📝 Draft Pesanan (belum ditagih)') // JANGAN pakai kata "invoice" di judul: auto-close menganggap judul ber-"invoice" sebagai tagihan aktif
@@ -617,6 +652,6 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         start, prepareInvoice, applyKodeToEmbed, onInvoiceDone, onInvoiceCancelled, getRecord, afterMainInvoice,
         buildQrisPayment, qrisTest, onTicketMessage, rebuildVerifPanel, scheduleVerifPanel, flushPing, catchUpProofs, cleanupStale,
         createDraft, markDraftUsed, handleDraftButton, handleDraftModal, onFormEdited, onChannelDelete, onMessageDelete,
-        createInvoiceFromDraft, paidButton, handlePaidButton, setOnWaiting, setPlanButton, syncFormWithInvoices, updateFormFields, priceFor, parseRobux, parseType, totalFromEmbed, isImage
+        createInvoiceFromDraft, paidButton, handlePaidButton, setOnWaiting, setPlanButton, syncFormWithInvoices, updateFormFields, priceFor, parseRobux, robuxFormText, parseType, totalFromEmbed, isImage
     };
 };

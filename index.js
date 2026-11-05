@@ -3426,14 +3426,14 @@ client.on('interactionCreate', async (interaction) => {
             if (['community', 'robux_plus', 'vilog'].includes(type)) {
                 ticketEmbed.addFields(
                     { name: '👤 Username Roblox', value: `\`${interaction.fields.getTextInputValue('user_roblox')}\``, inline: true },
-                    { name: '💰 Jumlah Robux', value: `**${interaction.fields.getTextInputValue('jml_robux')} R$**`, inline: true }
+                    { name: '💰 Jumlah Robux', value: (FX ? FX.robuxFormText(interaction.fields.getTextInputValue('jml_robux')) : `**${interaction.fields.getTextInputValue('jml_robux')} R$**`), inline: true }
                 );
             } else if (type === 'gamepass') {
-                ticketEmbed.addFields({ name: '💰 Jumlah Robux', value: `**${interaction.fields.getTextInputValue('jml_robux')} R$**`, inline: true });
+                ticketEmbed.addFields({ name: '💰 Jumlah Robux', value: (FX ? FX.robuxFormText(interaction.fields.getTextInputValue('jml_robux')) : `**${interaction.fields.getTextInputValue('jml_robux')} R$**`), inline: true });
             } else if (type === 'gig') {
                 ticketEmbed.addFields(
                     { name: '👤 Username Roblox', value: `\`${interaction.fields.getTextInputValue('user_roblox')}\``, inline: true },
-                    { name: '💰 Jumlah Robux', value: `**${interaction.fields.getTextInputValue('jml_robux')} R$**`, inline: true },
+                    { name: '💰 Jumlah Robux', value: (FX ? FX.robuxFormText(interaction.fields.getTextInputValue('jml_robux')) : `**${interaction.fields.getTextInputValue('jml_robux')} R$**`), inline: true },
                     { name: '🗺️ Nama Map', value: interaction.fields.getTextInputValue('nama_map'), inline: false },
                     { name: '🎁 Nama Item', value: interaction.fields.getTextInputValue('nama_item'), inline: false }
                 );
