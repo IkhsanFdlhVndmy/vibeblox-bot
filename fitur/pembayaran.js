@@ -81,7 +81,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         const rec = await InvoiceRecord.findOneAndUpdate(
             { messageId, status: { $in: ['open', 'waiting', 'paid'] } },
             { $set: { status, codeActive: false, closedAt: new Date() } },
-            { new: false }
+            { returnDocument: 'before' }
         ).lean().catch(() => null);
         if (rec?.status === 'waiting') scheduleVerifPanel();
         return rec;
@@ -196,7 +196,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         const upd = await InvoiceRecord.findOneAndUpdate(
             { _id: rec._id, status: 'open' },
             { $set: { status: 'waiting', proofAt: message.createdAt, proofMessageId: message.id, proofUrl: message.url } },
-            { new: true }
+            { returnDocument: 'after' }
         ).lean();
         if (!upd) return false;
         if (onWaitingCb) Promise.resolve(onWaitingCb(upd, message.channel)).catch(() => {});
@@ -378,7 +378,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             const draft = await InvoiceDraft.findOneAndUpdate(
                 { channelId: channel.id },
                 { $setOnInsert: { channelId: channel.id, buyerId: interaction.user.id, type, robux, used: false } },
-                { upsert: true, new: true }
+                { upsert: true, returnDocument: 'after' }
             ).lean();
             if (!draft || draft.messageId) return;
             const sent = await h.discordRetry(async () => channel.send(await draftPayload(draft)));
@@ -386,7 +386,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         } catch (e) { console.error('[DRAFT] Gagal membuat draft invoice:', e.message); }
     }
     async function markDraftUsed(channelId, by = null) {
-        const d = await InvoiceDraft.findOneAndUpdate({ channelId, used: false }, { $set: { used: true, usedBy: by } }, { new: true }).lean();
+        const d = await InvoiceDraft.findOneAndUpdate({ channelId, used: false }, { $set: { used: true, usedBy: by } }, { returnDocument: 'after' }).lean();
         if (d) await refreshDraftMessage(d);
     }
 
@@ -458,7 +458,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
 
         if (action === 'ok') {
             if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Hanya Owner dan Handler yang bisa membuat invoice.', flags: MessageFlags.Ephemeral });
-            const claimed = await InvoiceDraft.findOneAndUpdate({ channelId, used: false }, { $set: { used: true, usedBy: interaction.user.id } }, { new: true }).lean();
+            const claimed = await InvoiceDraft.findOneAndUpdate({ channelId, used: false }, { $set: { used: true, usedBy: interaction.user.id } }, { returnDocument: 'after' }).lean();
             if (!claimed) return interaction.reply({ content: '✅ Invoice sudah dibuat oleh staf lain.', flags: MessageFlags.Ephemeral });
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             let res;
@@ -515,7 +515,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             if (!type) return interaction.reply({ content: '❌ Tipe tidak dikenal. Ketik salah satu:\n• `community`\n• `plus` (Robux Send Username)\n• `vilog`\n• `gig` (Gift In-Game)\n• `gamepass` atau `after` (Gamepass After)\n• `before` (Gamepass Before)', flags: MessageFlags.Ephemeral });
             const hargaRaw = interaction.fields.getTextInputValue('harga') || '';
             const customTotal = hargaRaw.trim() ? parseInt(hargaRaw.replace(/[^\d]/g, ''), 10) || null : null;
-            const updated = await InvoiceDraft.findOneAndUpdate({ channelId, used: false }, { $set: { type, robux, customTotal } }, { new: true }).lean();
+            const updated = await InvoiceDraft.findOneAndUpdate({ channelId, used: false }, { $set: { type, robux, customTotal } }, { returnDocument: 'after' }).lean();
             if (!updated) return interaction.reply({ content: '❌ Draft sudah dipakai.', flags: MessageFlags.Ephemeral });
             await refreshDraftMessage(updated, interaction.channel);
             await updateFormFields(interaction.channel, null, robux);
@@ -536,7 +536,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             ticket.robloxUsername = normName;
             await ticket.save();
         }
-        const updated = await InvoiceDraft.findOneAndUpdate({ channelId, used: false }, { $set: { robux } }, { new: true }).lean();
+        const updated = await InvoiceDraft.findOneAndUpdate({ channelId, used: false }, { $set: { robux } }, { returnDocument: 'after' }).lean();
         if (!updated) return interaction.editReply({ content: '❌ Invoice sudah dibuat, hubungi staf untuk perubahan.' });
         await updateFormFields(interaction.channel, newUsername, robux);
         await refreshDraftMessage(updated, interaction.channel);
@@ -579,7 +579,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
                 if (ticket?.ticketType === 'community') eligible.postEligibility(channel, { username }).catch(() => {});
             }
             if (robux) {
-                const d = await InvoiceDraft.findOneAndUpdate({ channelId: channel.id, used: false }, { $set: { robux } }, { new: true }).lean();
+                const d = await InvoiceDraft.findOneAndUpdate({ channelId: channel.id, used: false }, { $set: { robux } }, { returnDocument: 'after' }).lean();
                 if (d) await refreshDraftMessage(d, channel);
             }
         } catch (e) { console.error('[DRAFT] Sinkron editform gagal:', e.message); }

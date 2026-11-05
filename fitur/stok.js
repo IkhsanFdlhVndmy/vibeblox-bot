@@ -91,19 +91,32 @@ module.exports = function createStok(ctx, core, riwayat) {
     }
 
     // Alarm saldo menipis (dipanggil tiap saldo diperbarui)
-    const lowState = new Set();
-    function onFundsUpdated(data) {
-        for (const [num, grp] of Object.entries(h.RESTOCK_COMMUNITIES)) {
-            const v = data[num];
-            if (typeof v !== 'number') continue;
-            if (v < CFG.STOCK_LOW && !lowState.has(num)) {
-                lowState.add(num);
-                core.alarm(`low_${num}`, `🔴 **Saldo Community ${num} (${grp.name}) menipis:** \`${fmt(v)} Robux\` (di bawah ${fmt(CFG.STOCK_LOW)}). Jangan beri invoice dari community ini dulu.`, 6 * 60 * 60 * 1000);
-            } else if (v >= CFG.STOCK_LOW + 200 && lowState.has(num)) {
-                lowState.delete(num);
-                core.clearAlarm(`low_${num}`);
+    // Status "menipis" disimpan di database -> restart bot TIDAK mengirim ulang alarm yang sama
+    let lowState = null;
+    async function loadLowState() {
+        const v = await core.getState('stok_menipis').catch(() => null);
+        lowState = new Set(Array.isArray(v) ? v : []);
+    }
+    let lowBusy = false;
+    async function onFundsUpdated(data) {
+        if (lowBusy) return;
+        lowBusy = true;
+        try {
+            if (!lowState) await loadLowState();
+            const newlyLow = [];
+            let changed = false;
+            for (const [num, grp] of Object.entries(h.RESTOCK_COMMUNITIES)) {
+                const v = data[num];
+                if (typeof v !== 'number') continue;
+                if (v < CFG.STOCK_LOW && !lowState.has(num)) { lowState.add(num); newlyLow.push(`• **C${num} ${grp.name}:** ${fmt(v)}`); changed = true; }
+                else if (v >= CFG.STOCK_LOW + 200 && lowState.has(num)) { lowState.delete(num); changed = true; }
             }
-        }
+            if (changed) await core.setState('stok_menipis', [...lowState]).catch(() => {});
+            if (newlyLow.length) {
+                // 1 pesan untuk semua community yang baru menipis (tidak spam)
+                core.alarm(`low_${Date.now()}`, `🔴 **Saldo community menipis** (di bawah ${fmt(CFG.STOCK_LOW)} Robux):\n${newlyLow.join('\n')}\nJangan beri invoice dari community ini dulu.`, 0);
+            }
+        } finally { lowBusy = false; }
     }
 
     // Peringatan untuk staf saat membuat invoice Community yang melebihi stok

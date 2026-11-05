@@ -216,7 +216,7 @@ module.exports = function createPayout(ctx, core, eligible) {
         const plan = await PayoutPlan.findOneAndUpdate(
             { invoiceMessageId },
             { $setOnInsert: { invoiceMessageId, channelId: channel.id, buyerId, robux, recipients, status: 'planned', doneAt: new Date(), isPreOrder } },
-            { upsert: true, new: true }
+            { upsert: true, returnDocument: 'after' }
         );
         if (plan.messageId) return plan;
         let notes = [];

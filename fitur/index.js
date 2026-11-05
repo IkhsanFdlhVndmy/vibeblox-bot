@@ -169,7 +169,7 @@ module.exports = function setupFitur(ctx) {
         panelCommunityBlock: (num, grp, val, at, p) => stok.panelCommunityBlock(num, grp, val, at, p),
         sellableFunds: (funds) => stok.sellable(funds),
         decoratePanel: safe('decoratePanel', (summaryLines) => stok.decoratePanel(summaryLines)),
-        onFundsUpdated: (data) => { try { stok.onFundsUpdated(data); } catch (e) {} },
+        onFundsUpdated: (data) => { stok.onFundsUpdated(data).catch(() => {}); },
 
         // Invoice & pembayaran
         prepareInvoice: async (d) => {

@@ -1122,7 +1122,7 @@ async function acTransition(channelId, fromStates, set) {
     return Ticket.findOneAndUpdate(
         { channelId, 'autoClose.state': { $in: fromStates } },
         { $set: Object.fromEntries(Object.entries(set).map(([k, v]) => [`autoClose.${k}`, v])) },
-        { new: true }
+        { returnDocument: 'after' }
     );
 }
 
@@ -1167,7 +1167,7 @@ async function autoCloseDisarm(channelId, reason) {
     const before = await Ticket.findOneAndUpdate(
         { channelId, 'autoClose.state': { $in: ['armed', 'paused', 'closing'] } },
         { $set: { 'autoClose.state': null, 'autoClose.reason': reason, 'autoClose.closeAt': null } },
-        { new: false }
+        { returnDocument: 'before' }
     ).catch(() => null);
     acActiveChannels.delete(channelId);
     if (before) await acEditNotice(before, 'cancelled', { reason });
@@ -1368,7 +1368,7 @@ async function finalizeAutoClose(channelId) {
         const ticket = await Ticket.findOneAndUpdate(
             { channelId, 'autoClose.state': 'armed', 'autoClose.closeAt': { $lte: new Date() } },
             { $set: { 'autoClose.state': 'closing' } },
-            { new: true }
+            { returnDocument: 'after' }
         );
         if (!ticket) return;
         const backToArmed = (ms, extra = {}) => acTransition(channelId, ['closing'], { state: 'armed', closeAt: new Date(Date.now() + ms), warned: false, ...extra });
@@ -1632,7 +1632,7 @@ async function autoCloseTick() {
             if (!closeAt || !AUTO_CLOSE_ENABLED) continue; // saklar dimatikan -> tidak ada tiket yang ditutup otomatis
             if (closeAt <= now) { due.push({ channelId: t.channelId, closeAt }); continue; }
             if (!t.autoClose.warned && closeAt - now <= AUTO_CLOSE_WARN_MS) {
-                const upd = await Ticket.findOneAndUpdate({ channelId: t.channelId, 'autoClose.state': 'armed', 'autoClose.warned': false }, { $set: { 'autoClose.warned': true } }, { new: true });
+                const upd = await Ticket.findOneAndUpdate({ channelId: t.channelId, 'autoClose.state': 'armed', 'autoClose.warned': false }, { $set: { 'autoClose.warned': true } }, { returnDocument: 'after' });
                 if (upd) {
                     const { channel } = await acFetchChannel(t.channelId);
                     if (channel) await acSendWarning(channel, t, closeAt);
@@ -3328,7 +3328,7 @@ client.on('interactionCreate', async (interaction) => {
         const config = await TicketConfig.findOneAndUpdate(
             { configId: 'VIBEBLOX_TICKET' },
             { $inc: { ticketCounter: 1 } },
-            { new: true, upsert: true }
+            { returnDocument: 'after', upsert: true }
         );
 
         const channelPrefixes = {
