@@ -5,6 +5,20 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags
 
 const TYPE_LABEL = { community: 'Community', gamepass_after: 'Gamepass After', gamepass_before: 'Gamepass Before', gig: 'GIG', vilog: 'Vilog', robux_plus: 'Robux Plus' };
 const LABEL_TYPE = Object.fromEntries(Object.entries(TYPE_LABEL).map(([k, v]) => [v.toLowerCase(), k]));
+// Kategori yang diketik manual (mis. "COMMUNITY", "community - bca") disamakan dengan label resminya
+function typeOf(t) {
+    if (t.type) return t.type;
+    const [a, b] = String(t.category || '').split(' - ');
+    const k = LABEL_TYPE[(a || '').trim().toLowerCase()];
+    return k ? { type: k, method: (b || '').trim().toLowerCase() || null } : null;
+}
+function niceLabel(t) {
+    const k = typeOf(t);
+    if (!k) return null;
+    const type = typeof k === 'string' ? k : k.type;
+    const method = typeof k === 'string' ? t.method : (t.method || k.method);
+    return { type: TYPE_LABEL[type], method };
+}
 const METHOD_LABEL = { qris: 'QRIS', bca: 'BCA', dana: 'Dana', gopay: 'GoPay', lainnya: 'Lainnya' };
 const SPENDER_TIERS = [
     [50000000, 'Vibe Immortal'], [25000000, 'Vibe Sovereign'], [10000000, 'Vibe Beast'],
@@ -192,7 +206,7 @@ module.exports = function createRiwayat(ctx, core) {
         const [userDoc, count, all] = await Promise.all([
             User.findOne({ userId: user.id }).lean(),
             Transaction.countDocuments(filter),
-            Transaction.find(filter).select('amount direction type category createdAt legacy').lean()
+            Transaction.find(filter).select('amount direction type method category createdAt legacy').lean()
         ]);
         const spent = userDoc?.uangMasuk || 0;
         const rank = spent > 0 ? (await User.countDocuments({ uangMasuk: { $gt: spent } })) + 1 : null;
@@ -200,7 +214,7 @@ module.exports = function createRiwayat(ctx, core) {
         const sumRecords = all.reduce((s, t) => s + t.direction * t.amount, 0);
         const perType = {};
         for (const t of all) {
-            const label = TYPE_LABEL[t.type] || (t.category ? t.category.split(' - ')[0] : 'Lainnya');
+            const label = niceLabel(t)?.type || (t.category ? t.category.split(' - ')[0] : 'Lainnya');
             perType[label] = (perType[label] || 0) + t.direction * t.amount;
         }
         const first = all.reduce((m, t) => (!m || t.createdAt < m ? t.createdAt : m), null);
@@ -211,7 +225,8 @@ module.exports = function createRiwayat(ctx, core) {
         const list = await Transaction.find(filter).sort({ createdAt: -1 }).skip((page - 1) * PAGE_SIZE).limit(PAGE_SIZE).lean();
         const lines = list.map(t => {
             const sign = t.direction < 0 ? '−' : '';
-            const kat = t.type ? `${TYPE_LABEL[t.type]}${t.method ? ` · ${METHOD_LABEL[t.method] || t.method}` : ''}` : (t.category || (t.source === 'manual' ? 'Manual' : '-'));
+            const nl = niceLabel(t);
+            const kat = nl ? `${nl.type}${nl.method ? ` · ${METHOD_LABEL[nl.method] || nl.method}` : ''}` : (t.category || (t.source === 'manual' ? 'Manual' : '-'));
             const rbx = t.robux ? ` · ${core.fmt(t.robux)} R$` : '';
             return `<t:${core.ts(t.createdAt)}:d> **${sign}${core.rp(t.amount)}** — ${kat}${rbx}${t.legacy ? ' *(lama)*' : ''}`;
         });
