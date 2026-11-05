@@ -79,7 +79,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
     }
     async function closeRecord(messageId, status) {
         const rec = await InvoiceRecord.findOneAndUpdate(
-            { messageId, status: { $in: ['open', 'waiting'] } },
+            { messageId, status: { $in: ['open', 'waiting', 'paid'] } },
             { $set: { status, codeActive: false, closedAt: new Date() } },
             { new: false }
         ).lean().catch(() => null);
@@ -149,6 +149,38 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         } catch (e) {
             return interaction.reply({ content: `❌ QRIS tes gagal dibuat: ${e.message}`, flags: MessageFlags.Ephemeral });
         }
+    }
+
+    // ---------------- Tombol "💳 Sudah Dibayar" (pembayaran dicek, Robux belum dikirim — mis. Pre-Order) ----------------
+    function paidButton(invoiceMessageId) {
+        return new ButtonBuilder().setCustomId(`vx_paid_${invoiceMessageId}`).setLabel('💳 Sudah Dibayar').setStyle(ButtonStyle.Secondary);
+    }
+    async function handlePaidButton(interaction) {
+        if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Hanya Owner dan Handler.', flags: MessageFlags.Ephemeral });
+        const id = interaction.customId.replace('vx_paid_', '');
+        const msg = interaction.message;
+        let rec = await InvoiceRecord.findOne({ messageId: id }).lean();
+        if (!rec) {
+            // invoice lama (dibuat sebelum fitur ini) -> buat datanya dulu
+            const total = totalFromEmbed(msg?.embeds?.[0]);
+            const robux = parseInt(String((msg?.embeds?.[0]?.fields || []).find(f => f.name.includes('Jumlah Robux'))?.value || '').replace(/[^\d]/g, ''), 10) || 0;
+            await InvoiceRecord.create({ messageId: id, channelId: interaction.channel.id, robux, price: total, total, status: 'open' }).catch(() => {});
+            rec = await InvoiceRecord.findOne({ messageId: id }).lean();
+        }
+        if (!rec || !['open', 'waiting'].includes(rec.status)) return interaction.reply({ content: rec?.status === 'paid' ? '✅ Sudah ditandai dibayar.' : '❌ Invoice ini sudah selesai / dibatalkan.', flags: MessageFlags.Ephemeral });
+        await InvoiceRecord.updateOne({ _id: rec._id }, { $set: { status: 'paid', paidAt: new Date(), paidBy: interaction.user.id } });
+        const done = /^✅/.test(msg?.embeds?.[0]?.footer?.text || '');
+        const components = (msg?.components || []).map(row => {
+            const r = ActionRowBuilder.from(row);
+            r.components.forEach(b => { if (b.data.custom_id === interaction.customId) b.setDisabled(true).setLabel('💳 Dibayar ✓'); });
+            return r;
+        });
+        await interaction.update({
+            embeds: done ? msg.embeds : [EmbedBuilder.from(msg.embeds[0]).setColor(0x5865F2).setFooter({ text: `💳 Pembayaran diterima — menunggu Robux dikirim • VibeBlox Invoice` })],
+            components
+        });
+        if (rec.status === 'waiting') scheduleVerifPanel();
+        return null;
     }
 
     // ---------------- Antrean "Sudah Bayar" ----------------
@@ -276,7 +308,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
     }
     // Bersihkan data invoice yang pesannya sudah hilang (dihapus saat bot mati)
     async function cleanupStale() {
-        const list = await InvoiceRecord.find({ status: { $in: ['open', 'waiting'] }, updatedAt: { $lt: new Date(Date.now() - 2 * 60 * 60 * 1000) } }).limit(50).lean().catch(() => []);
+        const list = await InvoiceRecord.find({ status: { $in: ['open', 'waiting', 'paid'] }, updatedAt: { $lt: new Date(Date.now() - 2 * 60 * 60 * 1000) } }).limit(50).lean().catch(() => []);
         for (const rec of list) {
             if (rec.messageId.startsWith('tmp:')) { await closeRecord(rec.messageId, 'cancelled'); continue; }
             let gone = false;
@@ -388,6 +420,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         const row2 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`inv_cancel_${msg.id}`).setLabel('❌ Close').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId(`inv_done_${draft.type}_${msg.id}`).setLabel('✅ Done').setStyle(ButtonStyle.Success),
+            paidButton(msg.id),
             ...(draft.type === 'community' && planButtonFn ? [planButtonFn(msg.id)] : [])
         );
         try {
@@ -528,7 +561,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
     // Form tiket mengikuti invoice: "Jumlah Robux" = total invoice yang masih berlaku di tiket ini
     async function syncFormWithInvoices(channel) {
         try {
-            const recs = await InvoiceRecord.find({ channelId: channel.id, status: { $in: ['open', 'waiting', 'done'] }, messageId: { $not: /^tmp:/ } }).lean();
+            const recs = await InvoiceRecord.find({ channelId: channel.id, status: { $in: ['open', 'waiting', 'paid', 'done'] }, messageId: { $not: /^tmp:/ } }).lean();
             if (!recs.length) return;
             const total = recs.reduce((s2, r) => s2 + (r.robux || 0), 0);
             if (!total) return;
@@ -553,12 +586,12 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
     }
 
     async function onChannelDelete(channelId) {
-        const res = await InvoiceRecord.updateMany({ channelId, status: { $in: ['open', 'waiting'] } }, { $set: { status: 'cancelled', codeActive: false, closedAt: new Date() } }).catch(() => null);
+        const res = await InvoiceRecord.updateMany({ channelId, status: { $in: ['open', 'waiting', 'paid'] } }, { $set: { status: 'cancelled', codeActive: false, closedAt: new Date() } }).catch(() => null);
         await InvoiceDraft.deleteOne({ channelId }).catch(() => {});
         if (res?.modifiedCount) scheduleVerifPanel();
     }
     async function onMessageDelete(messageId) {
-        const rec = await InvoiceRecord.findOne({ messageId, status: { $in: ['open', 'waiting'] } }).lean().catch(() => null);
+        const rec = await InvoiceRecord.findOne({ messageId, status: { $in: ['open', 'waiting', 'paid'] } }).lean().catch(() => null);
         if (rec) await onInvoiceCancelled(messageId);
         await InvoiceDraft.updateOne({ messageId }, { $set: { messageId: null } }).catch(() => {});
     }
@@ -574,6 +607,6 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         start, prepareInvoice, applyKodeToEmbed, onInvoiceDone, onInvoiceCancelled, getRecord, afterMainInvoice,
         buildQrisPayment, qrisTest, onTicketMessage, rebuildVerifPanel, scheduleVerifPanel, flushPing, catchUpProofs, cleanupStale,
         createDraft, markDraftUsed, handleDraftButton, handleDraftModal, onFormEdited, onChannelDelete, onMessageDelete,
-        createInvoiceFromDraft, setOnWaiting, setPlanButton, syncFormWithInvoices, updateFormFields, priceFor, parseRobux, parseType, totalFromEmbed, isImage
+        createInvoiceFromDraft, paidButton, handlePaidButton, setOnWaiting, setPlanButton, syncFormWithInvoices, updateFormFields, priceFor, parseRobux, parseType, totalFromEmbed, isImage
     };
 };

@@ -11,7 +11,9 @@ const InvoiceRecordSchema = new mongoose.Schema({
     kodeUnik: { type: Number, default: 0 },
     total: { type: Number, default: 0 },          // harga + kode unik (= Total Bayar di invoice)
     codeActive: { type: Boolean, default: false }, // kode unik sedang dipakai (unik di antara invoice aktif)
-    status: { type: String, default: 'open', index: true }, // open | waiting | done | cancelled
+    status: { type: String, default: 'open', index: true }, // open | waiting | paid | done | cancelled
+    paidAt: { type: Date, default: null },     // staf menandai "Sudah Dibayar" (Robux belum dikirim, mis. Pre-Order)
+    paidBy: { type: String, default: null },
     proofAt: { type: Date, default: null },
     proofMessageId: { type: String, default: null },
     proofUrl: { type: String, default: null },

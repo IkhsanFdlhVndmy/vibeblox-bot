@@ -2667,7 +2667,9 @@ async function buildPanelStockPages() {
     } catch (e) {
         console.error('Gagal ambil data InvoiceTracker:', e.message);
     }
-    const totalInvoiced = activeInvoices.reduce((sum, inv) => sum + inv.amount, 0);
+    // FITUR: invoice di tiket Pre-Order (-po) memakai kuota PO (dari pending), BUKAN stok ready
+    const readyInvoices = FX ? activeInvoices.filter(inv => !FX.isPOInvoice(inv)) : activeInvoices;
+    const totalInvoiced = readyInvoices.reduce((sum, inv) => sum + inv.amount, 0);
     const sisaStock = totalStock - totalInvoiced;
     const color = sisaStock < 0 ? 0xED4245 : 0x5865F2;
 
@@ -2707,7 +2709,7 @@ async function buildPanelStockPages() {
         '**📊 Ringkasan**',
         `💎 Bisa dijual: **${fmt(totalStock)}**`,
         `⏳ Pending: **${fmt(totalPending)}**`,
-        `🧾 Ter-invoice: **${fmt(totalInvoiced)}** (${activeInvoices.length})`,
+        `🧾 Ter-invoice (ready): **${fmt(totalInvoiced)}** (${readyInvoices.length})`,
         `${sisaStock < 0 ? '🔴' : '🟢'} Sisa: **${fmt(sisaStock)}**`
     ] : [
         `💎 **Total Stock:** \`${fmt(totalStock)} Robux\``,
@@ -5062,6 +5064,7 @@ Jumlah Robux: `;
         const row2 = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`inv_cancel_${invoiceMsgId}`).setLabel('❌ Close').setStyle(ButtonStyle.Danger),
             new ButtonBuilder().setCustomId(`inv_done_${type}_${invoiceMsgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success),
+            ...(FX ? [FX.paidButton(invoiceMsgId)] : []), // FITUR: tandai pembayaran sudah dicek (tanpa Done)
             ...(FX && type === 'community' ? [FX.planButton(invoiceMsgId)] : []) // FITUR: rencana payout sebelum kirim Robux
         );
 

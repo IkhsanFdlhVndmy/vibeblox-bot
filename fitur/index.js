@@ -95,6 +95,7 @@ module.exports = function setupFitur(ctx) {
                 if (id.startsWith('vx_dr_')) return await bayar.handleDraftButton(interaction);
                 if (id.startsWith('vx_po_')) return await payout.handleButton(interaction);
                 if (id.startsWith('vx_plan_')) return await payout.handlePlanButton(interaction);
+                if (id.startsWith('vx_paid_')) return await bayar.handlePaidButton(interaction);
             }
             if (interaction.isStringSelectMenu() && id.startsWith('vx_rmdsel_')) return await stok.handleReminderSelect(interaction);
             if (interaction.isModalSubmit()) {
@@ -178,6 +179,8 @@ module.exports = function setupFitur(ctx) {
         applyKodeToEmbed: (embed, price, kode) => { try { return bayar.applyKodeToEmbed(embed, price, kode); } catch (e) { return embed; } },
         afterMainInvoice: safe('afterMainInvoice', (d) => bayar.afterMainInvoice(d)),
         planButton: (id) => payout.planButton(id),
+        paidButton: (id) => bayar.paidButton(id),
+        isPOInvoice: (inv) => { const name = ctx.client.channels.cache.get(inv.channelId)?.name || inv.channelName; return riwayat.isPO(name); },
         releaseInvoice: safe('releaseInvoice', (messageId) => bayar.onInvoiceCancelled(messageId)),
         onInvoiceCancelled: safe('onInvoiceCancelled', (messageId) => bayar.onInvoiceCancelled(messageId)),
         buildQrisPayment: safe('buildQrisPayment', (msg) => bayar.buildQrisPayment(msg)),
