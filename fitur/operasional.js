@@ -171,7 +171,7 @@ module.exports = function createOperasional(ctx, core, stok) {
                 const funds = h.getPanelFunds().data, pending = h.getPendingCache();
                 const lines = Object.entries(h.RESTOCK_COMMUNITIES).map(([n, g]) => {
                     const f = funds[n]; const p = pending[n]?.pending;
-                    return `C${n} ${g.name}: ${typeof f === 'number' ? `${fmt(f)} (bisa dijual ${fmt(stok.sellable(f))})` : '?'}${typeof p === 'number' ? ` · pending ${fmt(p)}` : ''}`;
+                    return `**C${n} ${g.name}**\n└ Saldo ${typeof f === 'number' ? `${fmt(f)} · Jual ${fmt(stok.sellable(f))}` : '?'}${typeof p === 'number' ? ` · Pending ${fmt(p)}` : ''}`;
                 });
                 const po = await stok.poStatus();
                 const [openTickets, pendingVouch, waiting, openInv, planOpen] = await Promise.all([
@@ -179,8 +179,8 @@ module.exports = function createOperasional(ctx, core, stok) {
                     InvoiceRecord.countDocuments({ status: 'open' }), PayoutPlan.countDocuments({ status: { $in: ['planned', 'checking', 'mismatch'] } })
                 ]);
                 embed.addFields(
-                    { name: '📦 Stok Community (saat laporan)', value: `${lines.join('\n')}\nPO: kuota ${fmt(po.quota)} · terpakai ${fmt(po.used)} · sisa ${fmt(po.left)}`.slice(0, 1024), inline: false },
-                    { name: '📌 Masih Terbuka', value: `Tiket aktif: **${openTickets}** · Invoice belum dibayar: **${openInv}** · Menunggu verifikasi: **${waiting}**\nBelum vouch: **${pendingVouch}** · Payout belum terverifikasi: **${planOpen}**`, inline: false }
+                    { name: '📦 Stok Community (saat laporan)', value: `${lines.join('\n')}\n**PO:** kuota ${fmt(po.quota)} · terpakai ${fmt(po.used)} · sisa ${fmt(po.left)}`.slice(0, 1024), inline: false },
+                    { name: '📌 Masih Terbuka', value: `🎫 Tiket aktif: **${openTickets}**\n🧾 Invoice belum dibayar: **${openInv}**\n🟡 Menunggu verifikasi: **${waiting}**\n🗣️ Belum vouch: **${pendingVouch}**\n📤 Payout belum terverifikasi: **${planOpen}**`, inline: false }
                 );
             } catch (e) { /* bagian snapshot opsional */ }
         }

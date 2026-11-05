@@ -2677,9 +2677,16 @@ async function buildPanelStockPages() {
     const communityLines = [];
     for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
         const val = fundsPerCommunity[num];
-        communityLines.push(FX ? FX.panelCommunityLine(num, grp, val, panelFunds.at) : `🏢 **Community ${num} (${grp.name}):** ${val !== null ? `\`${fmt(val)} Robux\`` : (panelFunds.at ? '⚠️ *Gagal ambil data*' : '*memuat...*')}`);
-
         const p = pendingCache[num];
+        if (FX) {
+            // Tampilan ringkas (enak dibaca di HP): 2 baris per community
+            if (p && typeof p.pending === 'number') { totalPending += p.pending; if (!p.ok) anyPendingFailed = true; }
+            else if (p) anyPendingFailed = true;
+            communityLines.push(FX.panelCommunityBlock(num, grp, val, panelFunds.at, p));
+            continue;
+        }
+        communityLines.push(`🏢 **Community ${num} (${grp.name}):** ${val !== null ? `\`${fmt(val)} Robux\`` : (panelFunds.at ? '⚠️ *Gagal ambil data*' : '*memuat...*')}`);
+
         if (!p) {
             communityLines.push('└ ⏳ Pending: *memuat...*');
         } else if (typeof p.pending !== 'number') {
@@ -2696,8 +2703,14 @@ async function buildPanelStockPages() {
         }
     }
 
-    const summaryLines = [
-        `💎 **Total Stock${FX ? ' (bisa dijual)' : ''}:** \`${fmt(totalStock)} Robux\``,
+    const summaryLines = FX ? [
+        '**📊 Ringkasan**',
+        `💎 Bisa dijual: **${fmt(totalStock)}**`,
+        `⏳ Pending: **${fmt(totalPending)}**`,
+        `🧾 Ter-invoice: **${fmt(totalInvoiced)}** (${activeInvoices.length})`,
+        `${sisaStock < 0 ? '🔴' : '🟢'} Sisa: **${fmt(sisaStock)}**`
+    ] : [
+        `💎 **Total Stock:** \`${fmt(totalStock)} Robux\``,
         `⏳ **Total Pending:** \`${fmt(totalPending)} Robux\``,
         `🧾 **Ter-invoice:** \`${fmt(totalInvoiced)} Robux\` *(${activeInvoices.length} invoice)*`,
         `${sisaStock < 0 ? '🔴' : '🟢'} **Sisa Stock:** \`${fmt(sisaStock)} Robux\``
@@ -2709,7 +2722,9 @@ async function buildPanelStockPages() {
     if (anyFundsFailed || anyPendingFailed) summaryLines.push('*(Sebagian data gagal ditarik, kemungkinan sementara — akan otomatis re-sync)*');
     if (FX) await FX.decoratePanel(summaryLines); // kuota Pre-Order (dari pending) + estimasi masuk (dari /restock)
     if (pendingLastUpdated) {
-        summaryLines.push(`*Pending dicek tiap 5 menit · terakhir <t:${Math.floor(pendingLastUpdated.getTime() / 1000)}:R> · refund = ${PENDING_LOOKBACK_DAYS} hari terakhir*`);
+        summaryLines.push(FX
+            ? `-# Pending dicek tiap 5 menit · terakhir <t:${Math.floor(pendingLastUpdated.getTime() / 1000)}:R>`
+            : `*Pending dicek tiap 5 menit · terakhir <t:${Math.floor(pendingLastUpdated.getTime() / 1000)}:R> · refund = ${PENDING_LOOKBACK_DAYS} hari terakhir*`);
     }
 
     const overviewFields = [];

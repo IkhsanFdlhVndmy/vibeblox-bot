@@ -150,10 +150,11 @@ module.exports = function createPayout(ctx, core, eligible) {
     function planPayload(plan, notes = []) {
         const [title, color] = STATUS[plan.status] || STATUS.planned;
         const byNum = (n) => `C${n} ${h.RESTOCK_COMMUNITIES[n]?.name || ''}`.trim();
-        const allocLines = plan.allocations.map(a => `• **${byNum(a.num)}** → \`${a.username}\` : **${fmt(a.amount)} R$**${a.note ? `\n  -# ⚠️ ${a.note}` : ''}`);
+        const allocLines = plan.allocations.map(a => `• **${byNum(a.num)}** → **${fmt(a.amount)} R$**\n└ ke \`${a.username}\`${a.note ? `\n-# ⚠️ ${a.note}` : ''}`);
         const embed = new EmbedBuilder().setColor(color).setTitle(`${title}${plan.isPreOrder ? ' (Pre-Order)' : ''}`)
             .setDescription([
-                `Total pesanan: **${fmt(plan.robux)} R$** · penerima: ${plan.recipients.map(r => `\`${r.username}\` ${fmt(r.amount)}`).join(', ')}`,
+                `Pesanan: **${fmt(plan.robux)} R$**`,
+                `Penerima: ${plan.recipients.map(r => `\`${r.username}\` ${fmt(r.amount)}`).join(', ') || '-'}`,
                 '',
                 allocLines.join('\n') || '_Belum ada pembagian yang bisa disarankan._',
                 plan.shortfall > 0 ? `\n🔴 **Belum terbagi: ${fmt(plan.shortfall)} R$**` : '',

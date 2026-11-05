@@ -19,13 +19,22 @@ module.exports = function createStok(ctx, core, riwayat) {
 
     const sellable = (funds) => Math.max(0, (Number(funds) || 0) - CFG.STOCK_RESERVE);
 
-    function panelCommunityLine(num, grp, val, fundsAt) {
-        if (val === null || val === undefined) {
-            return `🏢 **Community ${num} (${grp.name}):** ${fundsAt ? '⚠️ *Gagal ambil data*' : '*memuat...*'}`;
-        }
-        const low = val < CFG.STOCK_LOW;
-        return `🏢 **Community ${num} (${grp.name}):** \`${fmt(val)} Robux\`${low ? ' 🔴' : ''}\n└ 🟢 Bisa dijual: \`${fmt(sellable(val))} Robux\`${low ? ' · ⚠️ **menipis, jangan beri invoice dari sini**' : ''}`;
+    // Tampilan per community di Panel Stock — dibuat pendek supaya enak dibaca di HP:
+    //   🔴 C1 · BEJIRLAH
+    //   Saldo 781 · Jual 0 · Pending 85.001
+    function panelCommunityBlock(num, grp, val, fundsAt, p) {
+        const low = typeof val === 'number' && val < CFG.STOCK_LOW;
+        const head = `${low ? '🔴' : '🟢'} **C${num} · ${grp.name}**`;
+        let saldo;
+        if (val === null || val === undefined) saldo = fundsAt ? 'Saldo ⚠️ gagal' : 'Saldo …';
+        else saldo = `Saldo ${fmt(val)} · Jual **${fmt(sellable(val))}**`;
+        let pend = 'Pending …';
+        if (p && typeof p.pending === 'number') pend = `Pending ${fmt(p.pending)}${p.ok ? '' : '*'}`;
+        else if (p) pend = 'Pending ⚠️';
+        const refund = p?.refundedCount > 0 ? `\n-# ↩️ ${p.refundedCount}x dana dikembalikan${p.refundedAmount > 0 ? ` (${fmt(p.refundedAmount)})` : ''}` : '';
+        return `${head}\n${saldo} · ${pend}${refund}\n`;
     }
+    function panelCommunityLine(num, grp, val, fundsAt) { return panelCommunityBlock(num, grp, val, fundsAt, null); }
 
     function isPOChannel(channelId, storedName) {
         const name = client.channels.cache.get(channelId)?.name || storedName;
@@ -40,6 +49,13 @@ module.exports = function createStok(ctx, core, riwayat) {
         if (new Date(restock.arrivalTimestamp).getTime() <= Date.now()) return 'sedang diproses, sebentar lagi masuk';
         const t = core.ts(restock.arrivalTimestamp);
         return `<t:${t}:F> (<t:${t}:R>)`;
+    }
+
+    function etaShort(restock) {
+        if (!restock) return 'belum dijadwalkan';
+        if (new Date(restock.arrivalTimestamp).getTime() <= Date.now()) return 'sedang diproses';
+        const t = core.ts(restock.arrivalTimestamp);
+        return `<t:${t}:d> <t:${t}:t> (<t:${t}:R>)`;
     }
 
     async function poStatus() {
@@ -63,11 +79,12 @@ module.exports = function createStok(ctx, core, riwayat) {
             const po = await poStatus();
             const restock = await nearestRestock();
             summaryLines.push('');
-            summaryLines.push(`📦 **Pre-Order** *(kuota dari Robux pending)*`);
-            summaryLines.push(`└ Kuota: \`${po.pendingKnown ? fmt(po.quota) : '…'} Robux\` · Terpakai: \`${fmt(po.used)} Robux\``);
-            summaryLines.push(`└ ${po.left < 0 ? '🔴' : '🟢'} Sisa kuota PO: \`${po.pendingKnown ? fmt(po.left) : '…'} Robux\`${po.left < 0 ? ' · ⚠️ **kuota PO penuh**' : ''}`);
-            summaryLines.push(`└ Estimasi masuk: ${etaText(restock)}`);
-            summaryLines.push(`-# Bisa dijual = saldo − ${fmt(CFG.STOCK_RESERVE)} (sisa wajib per community)`);
+            summaryLines.push('**📦 Pre-Order** (dari pending)');
+            summaryLines.push(`Kuota **${po.pendingKnown ? fmt(po.quota) : '…'}** · Terpakai **${fmt(po.used)}**`);
+            summaryLines.push(`${po.left < 0 ? '🔴 Kuota PO penuh' : '🟢 Sisa PO'}: **${po.pendingKnown ? fmt(po.left) : '…'}**`);
+            summaryLines.push(`🕐 Masuk: ${etaShort(restock)}`);
+            summaryLines.push('');
+            summaryLines.push(`-# Angka dalam Robux · Jual = saldo − ${fmt(CFG.STOCK_RESERVE)}\n-# 🔴 = saldo di bawah ${fmt(CFG.STOCK_LOW)}, jangan beri invoice dari community ini`);
         } catch (e) {
             console.error('[STOK] Gagal hitung PO untuk panel:', e.message);
         }
@@ -255,7 +272,7 @@ module.exports = function createStok(ctx, core, riwayat) {
     }
 
     return {
-        start, sellable, panelCommunityLine, decoratePanel, onFundsUpdated, invoiceStockWarning, poStatus, postPreOrderInfo,
+        start, sellable, panelCommunityLine, panelCommunityBlock, decoratePanel, onFundsUpdated, invoiceStockWarning, poStatus, postPreOrderInfo,
         onRestockCreated, handleReminderButton, handleReminderSelect, reminderTick, extraPanelRows, handleWatchButton, onCommunityModeChanged,
         nearestRestock, etaText, OFFSETS
     };

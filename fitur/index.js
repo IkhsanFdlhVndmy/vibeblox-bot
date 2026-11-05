@@ -159,6 +159,7 @@ module.exports = function setupFitur(ctx) {
 
         // Panel stock
         panelCommunityLine: (num, grp, val, at) => stok.panelCommunityLine(num, grp, val, at),
+        panelCommunityBlock: (num, grp, val, at, p) => stok.panelCommunityBlock(num, grp, val, at, p),
         sellableFunds: (funds) => stok.sellable(funds),
         decoratePanel: safe('decoratePanel', (summaryLines) => stok.decoratePanel(summaryLines)),
         onFundsUpdated: (data) => { try { stok.onFundsUpdated(data); } catch (e) {} },

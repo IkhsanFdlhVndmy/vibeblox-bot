@@ -179,10 +179,10 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         panelBusy = true;
         try {
             const waiting = await InvoiceRecord.find({ status: 'waiting' }).sort({ proofAt: 1 }).lean();
-            const lines = waiting.map((r, i) => `**${i + 1}.** <#${r.channelId}> · **Rp ${fmt(r.total)}**${r.kodeUnik ? ` (kode ${r.kodeUnik})` : ''} · <@${r.buyerId}> · bayar <t:${core.ts(r.proofAt)}:R> · [bukti](${r.proofUrl})`);
+            const lines = waiting.map((r, i) => `**${i + 1}.** <#${r.channelId}> · **Rp ${fmt(r.total)}**\n└ ${r.kodeUnik ? `kode ${r.kodeUnik} · ` : ''}<@${r.buyerId}> · <t:${core.ts(r.proofAt)}:R> · [bukti](${r.proofUrl})`);
             let desc = '';
             let shown = 0;
-            for (const l of lines) { if (desc.length + l.length + 1 > 3900) break; desc += (desc ? '\n' : '') + l; shown++; }
+            for (const l of lines) { if (desc.length + l.length + 2 > 3900) break; desc += (desc ? '\n\n' : '') + l; shown++; }
             if (shown < lines.length) desc += `\n…dan ${lines.length - shown} lainnya`;
             const embed = new EmbedBuilder().setColor(waiting.length ? 0xFEE75C : 0x57F287)
                 .setTitle(`🟡 Menunggu Verifikasi Pembayaran (${waiting.length})`)
