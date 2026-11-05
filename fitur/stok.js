@@ -163,6 +163,7 @@ module.exports = function createStok(ctx, core, riwayat) {
     async function handleReminderButton(interaction) {
         const msgId = interaction.customId.replace('vx_rmd_', '');
         const restock = await Restock.findOne({ messageId: msgId }).lean();
+        if (restock?.soldOut) return interaction.reply({ content: '🔴 Stok restock ini sudah **habis dipesan lewat Pre-Order**. Pantau pengumuman restock berikutnya ya!', flags: MessageFlags.Ephemeral });
         if (!restock || restock.status !== 'pending') return interaction.reply({ content: '✅ Stok restock ini sudah masuk.', flags: MessageFlags.Ephemeral });
         const existing = await StockReminder.findOne({ userId: interaction.user.id, target: msgId }).lean();
         const menu = new StringSelectMenuBuilder().setCustomId(`vx_rmdsel_${msgId}`).setPlaceholder('Pilih kapan mau diingatkan').setMinValues(0).setMaxValues(4)
@@ -210,7 +211,7 @@ module.exports = function createStok(ctx, core, riwayat) {
             for (const r of reminders) (byTarget[r.target] = byTarget[r.target] || []).push(r);
             for (const [msgId, list] of Object.entries(byTarget)) {
                 const restock = await Restock.findOne({ messageId: msgId }).lean();
-                if (!restock) { await StockReminder.deleteMany({ target: msgId }); continue; }
+                if (!restock || restock.soldOut) { await StockReminder.deleteMany({ target: msgId }); continue; } // sold out oleh PO -> tidak ada DM
                 const arrival = new Date(restock.arrivalTimestamp).getTime();
                 const now = Date.now();
                 for (const key of Object.keys(OFFSETS)) {
@@ -239,7 +240,7 @@ module.exports = function createStok(ctx, core, riwayat) {
             // Lepas tombol dari pengumuman restock yang sudah selesai
             const doneRestocks = await Restock.find({ status: 'completed', updatedAt: { $gt: new Date(Date.now() - 6 * 60 * 60 * 1000) } }).lean();
             for (const r of doneRestocks) {
-                if (removedButtons.has(r.messageId)) continue;
+                if (r.soldOut || removedButtons.has(r.messageId)) continue;
                 removedButtons.add(r.messageId);
                 const ch = await client.channels.fetch(r.channelId).catch(() => null);
                 if (ch) await ch.messages.edit(r.messageId, { components: [] }).catch(() => {});
@@ -279,6 +280,43 @@ module.exports = function createStok(ctx, core, riwayat) {
             .catch(() => {});
     }
 
+    // ---------------- /restock-sold: tandai stok restock habis oleh Pre-Order ----------------
+    function soldRow() {
+        return new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('vx_rmd_sold').setLabel('🔴 Sold Out (Pre-Order)').setStyle(ButtonStyle.Danger).setDisabled(true)
+        );
+    }
+    async function handleRestockSold(interaction) {
+        if (!core.isStaff(interaction.member)) return interaction.reply({ content: '❌ Khusus Owner, Handler, dan Partner.', flags: MessageFlags.Ephemeral });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const status = interaction.options.getString('status') || 'sold';
+        const raw = (interaction.options.getString('pesan') || '').trim();
+        const msgId = raw ? (raw.match(/(\d{17,20})\/?$/) || [])[1] : null;
+        if (raw && !msgId) return interaction.editReply({ content: '❌ Isi `pesan` dengan link / ID pesan /restock. Kosongkan untuk restock aktif terdekat.' });
+        const restock = msgId
+            ? await Restock.findOne({ messageId: msgId })
+            : await Restock.findOne({ status: 'pending' }).sort({ arrivalTimestamp: 1 });
+        if (!restock) return interaction.editReply({ content: '❌ Tidak ada /restock aktif yang ditemukan.' });
+        if (restock.status !== 'pending') return interaction.editReply({ content: '❌ Restock ini sudah masuk (countdown selesai).' });
+        const sold = status === 'sold';
+        restock.soldOut = sold;
+        restock.soldOutAt = sold ? new Date() : null;
+        await restock.save();
+        let removed = 0;
+        if (sold) removed = (await StockReminder.deleteMany({ target: restock.messageId })).deletedCount || 0;
+        const ch = await client.channels.fetch(restock.channelId).catch(() => null);
+        if (ch) {
+            await ch.messages.edit(restock.messageId, {
+                embeds: [h.buildRestockPendingEmbed(restock)],
+                components: sold ? [soldRow()] : (core.isOn('ingatkan_saya') ? [reminderRow(restock.messageId)] : [])
+            }).catch(e => console.error('[STOK] Gagal ubah tampilan restock:', e.message));
+        }
+        const link = `https://discord.com/channels/${restock.guildId || interaction.guildId}/${restock.channelId}/${restock.messageId}`;
+        return interaction.editReply({ content: sold
+            ? `🔴 Restock **${fmt(restock.amount)} Robux** ditandai **SOLD OUT (Pre-Order)**.\n• Tampilan countdown berubah jadi SOLD OUT, tombol Ingatkan Saya dimatikan\n• ${removed} pengingat DM dibatalkan\n• Saat stok masuk **tidak** ada pengumuman @everyone\n${link}`
+            : `✅ Status SOLD OUT dibatalkan — countdown & tombol Ingatkan Saya aktif lagi.\n${link}` });
+    }
+
     function start() {
         setInterval(reminderTick, 60 * 1000);
         setTimeout(reminderTick, 30000);
@@ -286,7 +324,7 @@ module.exports = function createStok(ctx, core, riwayat) {
 
     return {
         start, sellable, panelCommunityLine, panelCommunityBlock, decoratePanel, onFundsUpdated, invoiceStockWarning, poStatus, postPreOrderInfo,
-        onRestockCreated, handleReminderButton, handleReminderSelect, reminderTick, extraPanelRows, handleWatchButton, onCommunityModeChanged,
+        onRestockCreated, handleRestockSold, handleReminderButton, handleReminderSelect, reminderTick, extraPanelRows, handleWatchButton, onCommunityModeChanged,
         nearestRestock, etaText, OFFSETS
     };
 };

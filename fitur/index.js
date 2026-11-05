@@ -45,6 +45,15 @@ module.exports = function setupFitur(ctx) {
             options: [{ name: 'template', description: 'Pilih template', type: 3, required: true, choices: ops.QUICK_CHOICES }]
         },
         {
+            name: 'restock-sold', description: '[Staf] Tandai stok /restock sudah habis oleh Pre-Order (atau batalkan)',
+            options: [
+                { name: 'status', description: 'Sold out atau batalkan', type: 3, required: false, choices: [
+                    { name: 'Sold Out (habis oleh Pre-Order)', value: 'sold' }, { name: 'Batalkan (stok tersedia lagi)', value: 'open' }
+                ] },
+                { name: 'pesan', description: 'Link/ID pesan /restock (kosongkan = restock aktif terdekat)', type: 3, required: false }
+            ]
+        },
+        {
             name: 'qris-tes', description: '[Owner/Handler] Buat QRIS bernominal untuk uji bayar (hanya terlihat olehmu)',
             options: [{ name: 'nominal', description: 'Nominal Rupiah, contoh 1000', type: 4, required: true, min_value: 1000, max_value: 10000000 }]
         }
@@ -81,6 +90,7 @@ module.exports = function setupFitur(ctx) {
                 if (n === 'pengaturan') return await handlePengaturan(interaction);
                 if (n === 'laporan') return await ops.handleLaporanCommand(interaction);
                 if (n === 'balas') return await ops.handleBalas(interaction);
+                if (n === 'restock-sold') return await stok.handleRestockSold(interaction);
                 if (n === 'qris-tes') {
                     if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Khusus Owner dan Handler.', flags: MessageFlags.Ephemeral });
                     return await bayar.qrisTest(interaction);

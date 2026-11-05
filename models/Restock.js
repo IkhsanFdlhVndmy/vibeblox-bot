@@ -12,7 +12,11 @@ const RestockSchema = new mongoose.Schema({
     // kekirim lebih dari sekali. Begitu true, GAK ADA jalur manapun di kode yang boleh kirim
     // pengumuman lagi untuk restock ini, walau `status` sempat berubah/direset manual di DB.
     announcementSent: { type: Boolean, default: false },
-    createdBy: { type: String }
+    createdBy: { type: String },
+    // Stok restock ini sudah HABIS terjual lewat Pre-Order (/restock-sold) -> tampilan "SOLD OUT",
+    // tombol Ingatkan Saya dimatikan, pengingat DM dibatalkan, pengumuman @everyone saat ready TIDAK dikirim
+    soldOut: { type: Boolean, default: false },
+    soldOutAt: { type: Date, default: null }
 }, { timestamps: true });
 
 module.exports = mongoose.model('Restock', RestockSchema);

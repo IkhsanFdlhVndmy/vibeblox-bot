@@ -2541,6 +2541,21 @@ function buildRestockPendingEmbed(restock) {
     const countdown = formatCountdown(restock.arrivalTimestamp) || '0d 0h 0m 0s left';
     const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
 
+    // FITUR: stok restock ini sudah habis dipesan lewat Pre-Order (/restock-sold)
+    if (restock.soldOut) {
+        return new EmbedBuilder()
+            .setColor(0xED4245)
+            .setTitle('📦 VIBEBLOX RESTOCK — SOLD OUT')
+            .setDescription([
+                `# ${'<:robux:1497884445494087752>'} ${formattedAmount} Robux`,
+                '## 🔴 SOLD OUT (Pre-Order)',
+                'Stok restock ini **sudah habis dipesan lewat Pre-Order**. Terima kasih Vibies! 💜',
+                '',
+                `-# Pesanan Pre-Order dikirim mulai: ${formatWIB(restock.arrivalTimestamp)}`,
+                '-# Pantau pengumuman berikutnya untuk restock selanjutnya ya.'
+            ].join('\n'));
+    }
+
     const description = [
         'Halo Vibies! Robux kita bakal segera restock. Jangan sampai telat!',
         `# ${'<:robux:1497884445494087752>'} ${formattedAmount} Robux`,
@@ -2962,6 +2977,13 @@ async function tickRestocks() {
                     if (!claimed) {
                         // Ini bukti kalau proteksinya BEKERJA: ada percobaan kirim kedua/ketiga yang berhasil dicegah.
                         console.log(`[Restock] Skip restock ${restock._id} — sudah pernah diumumkan sebelumnya, mencegah duplikat.`);
+                        continue;
+                    }
+
+                    // FITUR: stok sudah habis oleh Pre-Order -> JANGAN umumkan "stok ready" ke @everyone
+                    if (restock.soldOut) {
+                        await msg.edit({ content: null, embeds: [buildRestockPendingEmbed(restock)], components: [] }).catch(() => {});
+                        console.log(`[Restock] Restock ${restock._id} masuk (SOLD OUT oleh Pre-Order) — pengumuman @everyone dilewati.`);
                         continue;
                     }
 
@@ -5401,7 +5423,7 @@ FX = setupFitur({
     h: {
         axios, discordRetry, rbxRun, rbxIsPaused, RESTOCK_COMMUNITIES, TICKET_CATEGORY_IDS,
         getPanelFunds: () => panelFunds, getPendingCache: () => pendingCache,
-        schedulePanelStockUpdate, autoCloseDisarm, acWithLock, acIsInvoiceMessage, closeTicketWithTranscript
+        schedulePanelStockUpdate, autoCloseDisarm, acWithLock, acIsInvoiceMessage, closeTicketWithTranscript, buildRestockPendingEmbed
     }
 });
 client.on('interactionCreate', (interaction) => { if (FX.owns(interaction)) FX.handleInteraction(interaction); });
