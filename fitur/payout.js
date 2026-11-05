@@ -168,9 +168,8 @@ module.exports = function createPayout(ctx, core, eligible) {
         if (!ch) return;
         const options = plan.status === 'done' ? null : await computeOptions(plan.recipients);
         if (plan.status === 'done') {
-            // invoice selesai: tampilan terakhir dibiarkan, cukup diberi tanda selesai & tombol dihapus
-            const msg = await ch.messages.fetch(plan.messageId).catch(() => null);
-            if (msg?.embeds?.[0]) await msg.edit({ embeds: [EmbedBuilder.from(msg.embeds[0]).setColor(0x99AAB5).setTitle(`📤 Opsi Payout${plan.isPreOrder ? ' (Pre-Order)' : ''} — ✅ invoice selesai`)], components: [] }).catch(() => {});
+            // invoice selesai: pesan opsi payout dihapus, di tiket tinggal pesan vouch
+            await ch.messages.delete(plan.messageId).catch(() => {});
             return;
         }
         await ch.messages.edit(plan.messageId, planPayload(plan, options)).catch(() => {});
