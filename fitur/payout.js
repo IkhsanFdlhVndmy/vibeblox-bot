@@ -181,6 +181,20 @@ module.exports = function createPayout(ctx, core, eligible) {
         if (ch) await ch.messages.edit(plan.messageId, planPayload(plan, notes)).catch(() => {});
     }
 
+    // Form tiket mengikuti penerima di rencana payout (1 atau beberapa username)
+    async function syncFormRecipients(channel, recipients) {
+        try {
+            if (!recipients.length) return;
+            await Ticket.updateOne({ channelId: channel.id }, { $set: { robloxUsername: eligible.norm(recipients[0].username) } });
+            const msgs = await channel.messages.fetch({ limit: 5, after: channel.id });
+            const form = [...msgs.values()].find(m => m.author?.id === client.user.id && m.embeds?.[0]?.title?.startsWith('🎫 Order Tiket'));
+            if (!form) return;
+            const value = recipients.length === 1 ? `\`${recipients[0].username}\`` : recipients.map(r => `\`${r.username}\` · ${fmt(r.amount)} R$`).join('\n');
+            const fields = form.embeds[0].fields.map(f => (f.name.includes('Username Roblox') ? { name: f.name, value, inline: f.inline } : f));
+            await form.edit({ embeds: [EmbedBuilder.from(form.embeds[0]).setFields(fields)] });
+        } catch (e) { /* tampilan saja */ }
+    }
+
     async function formUsername(channel) {
         const t = await Ticket.findOne({ channelId: channel.id }).lean().catch(() => null);
         if (t?.robloxUsername) return t.robloxUsername;
@@ -312,7 +326,8 @@ module.exports = function createPayout(ctx, core, eligible) {
         plan.recipients = recipients; plan.allocations = res.allocations; plan.shortfall = res.shortfall; plan.status = 'planned';
         await plan.save();
         await editPlanMessage(plan, res.notes);
-        return interaction.editReply({ content: '✅ Penerima diperbarui & rencana dihitung ulang.' });
+        await syncFormRecipients(interaction.channel, recipients);
+        return interaction.editReply({ content: '✅ Penerima diperbarui, rencana dihitung ulang & form tiket ikut diperbarui.' });
     }
 
     // ---------------- Verifikasi otomatis (tahan restart) ----------------

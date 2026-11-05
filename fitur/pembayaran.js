@@ -87,12 +87,21 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         return rec;
     }
     const onInvoiceDone = (messageId) => closeRecord(messageId, 'done');
-    const onInvoiceCancelled = async (messageId) => { const r = await closeRecord(messageId, 'cancelled'); if (r) core.stat('invoice_batal'); return r; };
+    const onInvoiceCancelled = async (messageId) => {
+        const r = await closeRecord(messageId, 'cancelled');
+        if (r) {
+            core.stat('invoice_batal');
+            const ch = await client.channels.fetch(r.channelId).catch(() => null);
+            if (ch) syncFormWithInvoices(ch).catch(() => {});
+        }
+        return r;
+    };
     async function getRecord(messageId) { return InvoiceRecord.findOne({ messageId }).lean().catch(() => null); }
 
     // ---------------- Setelah invoice utama berhasil dibuat ----------------
     async function afterMainInvoice({ channel, messageId, type, robux }) {
         markDraftUsed(channel.id).catch(() => {});
+        syncFormWithInvoices(channel).catch(() => {});
         core.stat('invoice_dibuat');
         if (type === 'community') return stok.invoiceStockWarning(channel, robux);
         return null;
@@ -401,6 +410,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             } catch (e) { console.error('[DRAFT] Gagal catat InvoiceTracker:', e.message); }
         }
         core.stat('invoice_dibuat');
+        syncFormWithInvoices(channel).catch(() => {});
         const warning = draft.type === 'community' ? await stok.invoiceStockWarning(channel, draft.robux) : null;
         return { ok: true, messageId: msg.id, warning };
     }
@@ -475,7 +485,8 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             const updated = await InvoiceDraft.findOneAndUpdate({ channelId, used: false }, { $set: { type, robux, customTotal } }, { new: true }).lean();
             if (!updated) return interaction.reply({ content: '❌ Draft sudah dipakai.', flags: MessageFlags.Ephemeral });
             await refreshDraftMessage(updated, interaction.channel);
-            return interaction.reply({ content: '✅ Draft diperbarui.', flags: MessageFlags.Ephemeral });
+            await updateFormFields(interaction.channel, null, robux);
+            return interaction.reply({ content: '✅ Draft & form tiket diperbarui.', flags: MessageFlags.Ephemeral });
         }
 
         // Pembeli mengubah pesanan sendiri (hanya selama invoice belum dibuat)
@@ -500,17 +511,29 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         return interaction.editReply({ content: '✅ Pesanan diperbarui. Staf akan mengecek sebelum invoice dibuat.' });
     }
 
-    async function updateFormFields(channel, username, robux) {
+    async function updateFormFields(channel, username, robux, robuxText = null) {
         try {
             const messages = await channel.messages.fetch({ limit: 5, after: channel.id });
             const formMsg = messages.find(m => m.author.id === client.user.id && m.embeds[0]?.title?.startsWith('🎫 Order Tiket'));
             if (!formMsg) return;
             const fields = formMsg.embeds[0].fields.map(f => {
                 if (username && f.name.includes('Username Roblox')) return { name: f.name, value: `\`${username}\``, inline: f.inline };
-                if (robux && f.name.includes('Jumlah Robux')) return { name: f.name, value: `**${robux} R$**`, inline: f.inline };
+                if ((robux || robuxText) && f.name.includes('Jumlah Robux')) return { name: f.name, value: robuxText || `**${fmt(robux)} R$**`, inline: f.inline };
                 return f;
             });
             await formMsg.edit({ embeds: [EmbedBuilder.from(formMsg.embeds[0]).setFields(fields)] });
+        } catch (e) { /* tampilan saja */ }
+    }
+
+    // Form tiket mengikuti invoice: "Jumlah Robux" = total invoice yang masih berlaku di tiket ini
+    async function syncFormWithInvoices(channel) {
+        try {
+            const recs = await InvoiceRecord.find({ channelId: channel.id, status: { $in: ['open', 'waiting', 'done'] }, messageId: { $not: /^tmp:/ } }).lean();
+            if (!recs.length) return;
+            const total = recs.reduce((s2, r) => s2 + (r.robux || 0), 0);
+            if (!total) return;
+            const text = recs.length === 1 ? `**${fmt(total)} R$**` : `**${fmt(total)} R$**\n-# total dari ${recs.length} invoice`;
+            await updateFormFields(channel, null, null, text);
         } catch (e) { /* tampilan saja */ }
     }
 
@@ -551,6 +574,6 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         start, prepareInvoice, applyKodeToEmbed, onInvoiceDone, onInvoiceCancelled, getRecord, afterMainInvoice,
         buildQrisPayment, qrisTest, onTicketMessage, rebuildVerifPanel, scheduleVerifPanel, flushPing, catchUpProofs, cleanupStale,
         createDraft, markDraftUsed, handleDraftButton, handleDraftModal, onFormEdited, onChannelDelete, onMessageDelete,
-        createInvoiceFromDraft, setOnWaiting, setPlanButton, priceFor, parseRobux, parseType, totalFromEmbed, isImage
+        createInvoiceFromDraft, setOnWaiting, setPlanButton, syncFormWithInvoices, updateFormFields, priceFor, parseRobux, parseType, totalFromEmbed, isImage
     };
 };
