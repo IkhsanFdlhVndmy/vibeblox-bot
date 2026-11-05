@@ -25,4 +25,4 @@ Setiap fitur punya saklar **ON/OFF** lewat `/pengaturan` (khusus Vibe Owner, ter
 ## Tahan restart
 Semua status (kode unik, antrean bayar, draft, rencana payout, pengingat, jadwal laporan, pengaturan) disimpan di MongoDB.
 Saat bot menyala lagi: bukti bayar yang masuk selama bot mati dicari ulang, laporan yang terlewat dikirim (ditandai terlambat),
-pengingat yang sudah basi tidak dikirim, dan verifikasi payout dilanjutkan.
+dan pengingat yang sudah basi tidak dikirim.
