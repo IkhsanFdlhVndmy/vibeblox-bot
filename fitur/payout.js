@@ -160,7 +160,6 @@ module.exports = function createPayout(ctx, core, eligible) {
                 plan.shortfall > 0 ? `\n🔴 **Belum terbagi: ${fmt(plan.shortfall)} R$**` : '',
                 ...(notes.length ? ['', ...notes] : [])
             ].filter(x => x !== undefined).join('\n').slice(0, 4000))
-            .setFooter({ text: `Saran saja — staf tetap yang kirim di Roblox · batas ${fmt(CFG.PAYOUT_CAP)}/username/community · sisa wajib ${fmt(CFG.STOCK_RESERVE)}` })
             .setTimestamp();
         if (['verified', 'mismatch', 'checking'].includes(plan.status) && plan.found?.length) {
             embed.addFields({ name: '🔎 Terdeteksi di audit log Roblox', value: plan.found.map(f => `• ${byNum(f.num)} → \`${f.username}\` : ${fmt(f.amount)} R$`).join('\n').slice(0, 1024) + `\n**Total: ${fmt(plan.foundTotal)} / ${fmt(plan.robux)} R$**`, inline: false });

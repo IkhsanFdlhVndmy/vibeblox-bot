@@ -130,7 +130,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             const embed = new EmbedBuilder().setColor(0x4F4580).setTitle('💳 Pembayaran QRIS VibeBlox')
                 .setDescription(`Scan QRIS di bawah ini. **Nominal sudah terisi otomatis:**\n# Rp ${fmt(amount)}\nSebelum bayar, pastikan di aplikasimu tertulis penerima **${CFG.QRIS_MERCHANT_NAME}** dan nominal **Rp ${fmt(amount)}**.`)
                 .setImage(`attachment://${name}`)
-                .setFooter({ text: `VibeBlox Payment · NMID ${CFG.QRIS_NMID}` })
+                .setFooter({ text: 'VibeBlox Payment' })
                 .setTimestamp();
             return { embeds: [embed], files: [new AttachmentBuilder(buffer, { name })] };
         } catch (e) {
@@ -252,7 +252,6 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             const embed = new EmbedBuilder().setColor(waiting.length ? 0xFEE75C : 0x57F287)
                 .setTitle(`🟡 Menunggu Verifikasi Pembayaran (${waiting.length})`)
                 .setDescription(desc || '✅ Tidak ada pembayaran yang menunggu verifikasi.')
-                .setFooter({ text: 'Urut dari yang bayar paling dulu · otomatis hilang setelah invoice Done / dibatalkan' })
                 .setTimestamp();
             const state = await core.getState('verif_panel');
             const ch = await client.channels.fetch(CFG.CHANNEL_VERIFIKASI).catch(() => null);
@@ -351,7 +350,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
                 { name: '📝 Perhitungan', value: p.error ? `⚠️ ${p.error}` : p.detail, inline: false },
                 { name: '💰 Perkiraan Total', value: p.error ? '-' : `**Rp ${fmt(p.price)}**${core.isOn('kode_unik') ? ' + kode unik' : ''}`, inline: false }
             )
-            .setFooter({ text: 'Staf mengecek pesanan dulu, lalu invoice dikirim. Belum perlu bayar.' });
+            .setFooter({ text: 'Belum perlu bayar — tunggu invoice dari staf' });
         if (draft.used) {
             embed.setColor(0x57F287).setTitle('📝 Draft Pesanan — ✅ sudah ditagih');
             return { embeds: [embed], components: [] };

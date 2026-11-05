@@ -204,7 +204,7 @@ module.exports = function createEligible(ctx, core) {
     function buildEligibilityEmbed(result) {
         const e = new EmbedBuilder().setTitle('🔎 Cek Eligible Otomatis').setTimestamp();
         if (result.status === 'notfound') {
-            return e.setColor(0xED4245).setDescription(`Username **\`${result.username}\`** tidak ditemukan di Roblox. Pastikan username benar (bukan display name).\n-# Staf bisa membetulkan lewat /editform.`);
+            return e.setColor(0xED4245).setDescription(`Username **\`${result.username}\`** tidak ditemukan di Roblox. Pastikan username benar (bukan display name).`);
         }
         if (result.status !== 'ok') {
             return e.setColor(0x99AAB5).setDescription(`Belum bisa mengecek **\`${result.username}\`** saat ini (Roblox sedang lambat). Staf bisa cek manual dengan /cek-eligible.`);
@@ -214,8 +214,7 @@ module.exports = function createEligible(ctx, core) {
         if (!result.anyEligible && result.allKnown) {
             desc += '\n\n⚠️ **Username ini belum bisa menerima Robux Community.** Wajib sudah join minimal 14 hari di salah satu community di atas. Silakan pilih metode lain atau tunggu sampai eligible.';
         }
-        return e.setColor(result.anyEligible ? 0x57F287 : (result.allKnown ? 0xED4245 : 0xFEE75C)).setDescription(desc)
-            .setFooter({ text: 'Status bisa berubah · cek ulang dengan /cek-eligible' });
+        return e.setColor(result.anyEligible ? 0x57F287 : (result.allKnown ? 0xED4245 : 0xFEE75C)).setDescription(desc);
     }
 
     // ---------------- Mode tiket Community ----------------

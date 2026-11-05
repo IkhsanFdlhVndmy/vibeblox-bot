@@ -184,7 +184,6 @@ module.exports = function createOperasional(ctx, core, stok) {
                 );
             } catch (e) { /* bagian snapshot opsional */ }
         }
-        embed.setFooter({ text: 'Data transaksi tercatat mulai fitur ini dipasang (+ impor log lama) · WIB' });
         return embed;
     }
 

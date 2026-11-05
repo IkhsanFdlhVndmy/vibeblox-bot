@@ -83,8 +83,6 @@ module.exports = function createStok(ctx, core, riwayat) {
             summaryLines.push(`Kuota **${po.pendingKnown ? fmt(po.quota) : '…'}** · Terpakai **${fmt(po.used)}**`);
             summaryLines.push(`${po.left < 0 ? '🔴 Kuota PO penuh' : '🟢 Sisa PO'}: **${po.pendingKnown ? fmt(po.left) : '…'}**`);
             summaryLines.push(`🕐 Masuk: ${etaShort(restock)}`);
-            summaryLines.push('');
-            summaryLines.push(`-# Angka dalam Robux · Jual = saldo − ${fmt(CFG.STOCK_RESERVE)}\n-# 🔴 = saldo di bawah ${fmt(CFG.STOCK_LOW)}, jangan beri invoice dari community ini`);
         } catch (e) {
             console.error('[STOK] Gagal hitung PO untuk panel:', e.message);
         }
@@ -145,7 +143,7 @@ module.exports = function createStok(ctx, core, riwayat) {
         const restock = await nearestRestock();
         const st = await poStatus().catch(() => null);
         const embed = new EmbedBuilder().setColor(0x5865F2).setTitle('📦 Pre-Order Robux Community')
-            .setDescription(`Tiket ini adalah **Pre-Order**. Robux dikirim setelah stok masuk.\n\n🕐 **Estimasi stok masuk:** ${etaText(restock)}\n${st?.pendingKnown ? `📦 **Sisa kuota PO saat ini:** ${fmt(Math.max(0, st.left))} Robux\n` : ''}\n-# Estimasi bisa berubah. Admin akan mengabari di tiket ini.`)
+            .setDescription(`Tiket ini adalah **Pre-Order**. Robux dikirim setelah stok masuk.\n\n🕐 **Estimasi stok masuk:** ${etaText(restock)}\n${st?.pendingKnown ? `📦 **Sisa kuota PO saat ini:** ${fmt(Math.max(0, st.left))} Robux` : ''}`)
             .setTimestamp();
         await h.discordRetry(() => channel.send({ embeds: [embed] })).catch(() => {});
     }

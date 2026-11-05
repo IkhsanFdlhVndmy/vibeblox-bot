@@ -234,7 +234,7 @@ module.exports = function createRiwayat(ctx, core) {
             embed.addFields({ name: '🔎 Catatan Staf', value: `Total dari daftar transaksi: ${core.rp(sumRecords)} (selisih ${core.rp(Math.abs(sumRecords - spent))} dengan Total Belanja — biasanya transaksi lama yang tidak tercatat lengkap / pembeli ganti username).`, inline: false });
         }
         const imp = await core.getState('import_v1');
-        embed.setFooter({ text: imp?.finished ? 'Data lama diimpor dari log keuangan · jumlah Robux hanya tersedia untuk transaksi baru' : 'Data lama sedang diimpor dari log keuangan, riwayat lama menyusul' });
+        if (!imp?.finished) embed.setFooter({ text: 'Riwayat lama sedang dimuat, akan lengkap sebentar lagi' });
 
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`vx_rw_${user.id}_${page - 1}`).setLabel('◀').setStyle(ButtonStyle.Secondary).setDisabled(page <= 1),

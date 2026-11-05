@@ -2551,8 +2551,7 @@ function buildRestockPendingEmbed(restock) {
                 '## 🔴 SOLD OUT (Pre-Order)',
                 'Stok restock ini **sudah habis dipesan lewat Pre-Order**. Terima kasih Vibies! 💜',
                 '',
-                `-# Pesanan Pre-Order dikirim mulai: ${formatWIB(restock.arrivalTimestamp)}`,
-                '-# Pantau pengumuman berikutnya untuk restock selanjutnya ya.'
+                `-# Pesanan Pre-Order dikirim mulai: ${formatWIB(restock.arrivalTimestamp)}`
             ].join('\n'));
     }
 
