@@ -11,7 +11,7 @@ Setiap fitur punya saklar **ON/OFF** lewat `/pengaturan` (khusus Vibe Owner, ter
 | `stok.js` | Bisa dijual = saldo − 1.000, alarm saldo < 2.000, kuota Pre-Order dari Robux pending, estimasi dari `/restock`, tombol Ingatkan Saya |
 | `pembayaran.js` | Draft invoice, kode unik, QRIS bernominal, antrean "Sudah Bayar" |
 | `qris.js` + `qrcode-lite.js` | Pembuat QRIS bernominal + gambar QR (tanpa library tambahan) |
-| `payout.js` | Asisten payout Community + verifikasi audit log |
+| `payout.js` | Opsi payout Community per username (community yang bisa dipakai, maks kirim, riwayat 10–20 hari) |
 | `operasional.js` | Tiket tanpa kabar, laporan harian/mingguan/bulanan, alarm, `/balas` |
 
 ## Command baru

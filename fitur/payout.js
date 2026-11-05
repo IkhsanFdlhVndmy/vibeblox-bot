@@ -6,7 +6,6 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder
 
 const DAY = 24 * 60 * 60 * 1000;
 const LEDGER_DAYS = 21;
-const CHECK_DELAYS = [30e3, 2 * 60e3, 5 * 60e3, 10 * 60e3]; // jeda cek ulang (audit log Roblox kadang telat)
 
 module.exports = function createPayout(ctx, core, eligible) {
     const { client, models, h } = ctx;
@@ -88,96 +87,88 @@ module.exports = function createPayout(ctx, core, eligible) {
         return ledgers[num].entries.filter(x => x.ts >= sinceMs && names.includes(x.name)).reduce((s, x) => s + x.amount, 0);
     }
 
-    // ---------------- Hitung rencana ----------------
-    async function computePlan(recipients) {
+    // ---------------- Opsi payout per username ----------------
+    // Untuk tiap username: community mana saja yang BISA dipakai & berapa maksimal yang bisa dikirim.
+    // Staf yang memilih sendiri. Bot tidak mengecek / memverifikasi pengiriman.
+    async function computeOptions(recipients) {
         const funds = h.getPanelFunds().data;
-        const used = {}; // num -> jumlah yang sudah dialokasikan di rencana ini
-        const allocations = [];
-        const notes = [];
-        let shortfall = 0;
+        const out = [];
         for (const rcp of recipients) {
             const check = await eligible.checkUsername(rcp.username, 20000);
-            if (check.status !== 'ok') {
-                notes.push(`⚠️ \`${rcp.username}\`: ${check.status === 'notfound' ? 'username tidak ditemukan di Roblox' : 'gagal dicek (Roblox lambat), tekan 🔄 Hitung Ulang'}`);
-                shortfall += rcp.amount;
-                continue;
-            }
+            if (check.status !== 'ok') { out.push({ ...rcp, status: check.status }); continue; }
             const names = [check.user.name.toLowerCase(), (check.user.displayName || '').toLowerCase()].filter(Boolean);
-            const candidates = [];
+            const options = [], pending = [], notJoin = [];
             for (const row of check.rows) {
-                if (row.status !== 'eligible') continue;
-                const num = row.num;
-                const saldo = typeof funds[num] === 'number' ? funds[num] : null;
-                if (saldo === null) continue;
-                const sell = Math.max(0, saldo - CFG.STOCK_RESERVE - (used[num] || 0));
-                const L = ledgers[num];
-                const r10 = L.ready ? received(num, names, Date.now() - CFG.PAYOUT_RISK_DAYS * DAY) : 0;
-                const r20 = L.ready ? received(num, names, Date.now() - CFG.PAYOUT_LOOKBACK_DAYS * DAY) : 0;
+                const label = `C${row.num} ${row.name}`;
+                if (row.status === 'notjoin') { notJoin.push(`C${row.num}`); continue; }
+                if (row.status === 'pending') { pending.push({ label, at: row.eligibleAt }); continue; }
+                if (row.status !== 'eligible') { pending.push({ label, unknown: true }); continue; }
+                const saldo = typeof funds[row.num] === 'number' ? funds[row.num] : null;
+                const sell = saldo === null ? 0 : Math.max(0, saldo - CFG.STOCK_RESERVE);
+                const L = ledgers[row.num];
+                const r10 = L.ready ? received(row.num, names, Date.now() - CFG.PAYOUT_RISK_DAYS * DAY) : 0;
+                const r20 = L.ready ? received(row.num, names, Date.now() - CFG.PAYOUT_LOOKBACK_DAYS * DAY) : 0;
                 const cap = Math.max(0, CFG.PAYOUT_CAP - r10);
-                const rank = !L.ready ? 1.5 : (r20 === 0 ? 0 : (r10 === 0 ? 1 : 2));
-                candidates.push({ num, sell, cap, r10, r20, rank, ready: L.ready });
+                options.push({ label, num: row.num, max: Math.min(cap, sell), sell, cap, r10, r20, ready: L.ready, saldoKnown: saldo !== null });
             }
-            candidates.sort((a, b) => a.rank - b.rank || b.sell - a.sell);
-            let left = rcp.amount;
-            for (const c of candidates) {
-                if (left <= 0) break;
-                const amt = Math.min(left, c.cap, c.sell);
-                if (amt <= 0) continue;
-                let note = '';
-                if (!c.ready) note = 'riwayat payout belum termuat — cek /cek-transaksi';
-                else if (c.r10 > 0) note = `sudah terima ${fmt(c.r10)} R$ dalam ${CFG.PAYOUT_RISK_DAYS} hari`;
-                else if (c.r20 > 0) note = `pernah payout ${fmt(c.r20)} R$ ${CFG.PAYOUT_RISK_DAYS}-${CFG.PAYOUT_LOOKBACK_DAYS} hari lalu`;
-                allocations.push({ num: c.num, username: check.user.name, amount: amt, note });
-                used[c.num] = (used[c.num] || 0) + amt;
-                left -= amt;
-            }
-            if (left > 0) {
-                shortfall += left;
-                const elig = check.rows.filter(r => r.status === 'eligible').map(r => `C${r.num}`).join(', ') || 'tidak ada';
-                notes.push(`⚠️ \`${check.user.name}\` kurang **${fmt(left)} R$** — community eligible: ${elig}; batas ${fmt(CFG.PAYOUT_CAP)}/community atau saldo (sisa wajib ${fmt(CFG.STOCK_RESERVE)}) tidak cukup.`);
-            }
+            // urutan: belum pernah dapat payout 20 hari > 10-20 hari lalu > baru dapat; lalu yang bisa kirim paling banyak
+            const rank = (o) => (!o.ready ? 1.5 : (o.r20 === 0 ? 0 : (o.r10 === 0 ? 1 : 2)));
+            options.sort((a, b) => (b.max > 0) - (a.max > 0) || rank(a) - rank(b) || b.max - a.max);
+            out.push({ ...rcp, status: 'ok', name: check.user.name, options, pending, notJoin });
         }
-        return { allocations, shortfall, notes };
+        return out;
     }
 
-    const STATUS = {
-        planned: ['📤 Rencana Payout', 0x5865F2],
-        checking: ['🔎 Mengecek payout di Roblox…', 0xFEE75C],
-        verified: ['✅ Payout Terverifikasi', 0x57F287],
-        mismatch: ['⚠️ Payout Belum Cocok', 0xED4245],
-        manual: ['✔️ Payout Ditandai Selesai (manual)', 0x57F287]
-    };
-    function planPayload(plan, notes = []) {
-        const [title, color] = STATUS[plan.status] || STATUS.planned;
-        const byNum = (n) => `C${n} ${h.RESTOCK_COMMUNITIES[n]?.name || ''}`.trim();
-        const allocLines = plan.allocations.map(a => `• **${byNum(a.num)}** → **${fmt(a.amount)} R$**\n└ ke \`${a.username}\`${a.note ? `\n-# ⚠️ ${a.note}` : ''}`);
-        const embed = new EmbedBuilder().setColor(color).setTitle(`${title}${plan.isPreOrder ? ' (Pre-Order)' : ''}`)
-            .setDescription([
-                `Pesanan: **${fmt(plan.robux)} R$**`,
-                `Penerima: ${plan.recipients.map(r => `\`${r.username}\` ${fmt(r.amount)}`).join(', ') || '-'}`,
-                '',
-                allocLines.join('\n') || '_Belum ada pembagian yang bisa disarankan._',
-                plan.shortfall > 0 ? `\n🔴 **Belum terbagi: ${fmt(plan.shortfall)} R$**` : '',
-                ...(notes.length ? ['', ...notes] : [])
-            ].filter(x => x !== undefined).join('\n').slice(0, 4000))
-            .setTimestamp();
-        if (['verified', 'mismatch', 'checking'].includes(plan.status) && plan.found?.length) {
-            embed.addFields({ name: '🔎 Terdeteksi di audit log Roblox', value: plan.found.map(f => `• ${byNum(f.num)} → \`${f.username}\` : ${fmt(f.amount)} R$`).join('\n').slice(0, 1024) + `\n**Total: ${fmt(plan.foundTotal)} / ${fmt(plan.robux)} R$**`, inline: false });
+    function recipientBlock(r) {
+        const head = `👤 **\`${r.name || r.username}\`** — ${fmt(r.amount)} R$`;
+        if (r.status === 'notfound') return `${head}\n🔴 Username tidak ditemukan di Roblox`;
+        if (r.status !== 'ok') return `${head}\n⚠️ Gagal dicek (Roblox lambat) — tekan 🔄 Perbarui`;
+        const lines = [head];
+        for (const o of r.options) {
+            const icon = o.max >= r.amount ? '🟢' : (o.max > 0 ? '🟡' : '🔴');
+            let why = '';
+            if (o.max === 0) why = !o.saldoKnown ? ' (saldo belum termuat)' : (o.sell === 0 ? ' (saldo kurang)' : ' (sudah capai batas 9.999)');
+            lines.push(`${icon} ${o.label} · bisa **${fmt(o.max)}**${why}`);
+            if (!o.ready) lines.push('└ riwayat payout belum termuat');
+            else if (o.r10 > 0) lines.push(`└ sudah terima ${fmt(o.r10)} dalam ${CFG.PAYOUT_RISK_DAYS} hari`);
+            else if (o.r20 > 0) lines.push(`└ pernah terima ${fmt(o.r20)} (${CFG.PAYOUT_RISK_DAYS}–${CFG.PAYOUT_LOOKBACK_DAYS} hari lalu)`);
         }
-        const done = ['verified', 'manual'].includes(plan.status);
+        for (const p of r.pending) lines.push(p.unknown ? `❔ ${p.label} · status sedang dimuat` : `⏳ ${p.label} · eligible <t:${Math.floor(p.at / 1000)}:R>`);
+        if (r.notJoin.length) lines.push(`❌ Belum join: ${r.notJoin.join(' · ')}`);
+        if (!r.options.length && !r.pending.length) lines.push('🔴 Belum eligible di community mana pun');
+        return lines.join('\n');
+    }
+
+    function planPayload(plan, options) {
+        const done = plan.status === 'done';
+        const blocks = (options || []).map(recipientBlock);
+        const embed = new EmbedBuilder().setColor(done ? 0x99AAB5 : 0x5865F2)
+            .setTitle(`📤 Opsi Payout${plan.isPreOrder ? ' (Pre-Order)' : ''}${done ? ' — ✅ invoice selesai' : ''}`)
+            .setDescription([
+                `Pesanan **${fmt(plan.robux)} R$**`,
+                '',
+                blocks.join('\n\n') || '⚠️ Username belum ada — tekan **👥 Beberapa Username**'
+            ].join('\n').slice(0, 4000));
+        if (done) return { embeds: [embed], components: [] };
         const id = plan.invoiceMessageId;
         const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`vx_po_sent_${id}`).setLabel(plan.status === 'mismatch' ? '🔁 Cek Lagi' : '✅ Sudah Dikirim').setStyle(ButtonStyle.Success).setDisabled(done || plan.status === 'checking'),
-            new ButtonBuilder().setCustomId(`vx_po_split_${id}`).setLabel('👥 Beberapa Username').setStyle(ButtonStyle.Secondary).setDisabled(done),
-            new ButtonBuilder().setCustomId(`vx_po_recalc_${id}`).setLabel('🔄 Hitung Ulang').setStyle(ButtonStyle.Secondary).setDisabled(done),
-            new ButtonBuilder().setCustomId(`vx_po_manual_${id}`).setLabel('✔️ Tandai Selesai').setStyle(ButtonStyle.Secondary).setDisabled(done)
+            new ButtonBuilder().setCustomId(`vx_po_split_${id}`).setLabel('👥 Beberapa Username').setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder().setCustomId(`vx_po_recalc_${id}`).setLabel('🔄 Perbarui').setStyle(ButtonStyle.Secondary)
         );
         return { embeds: [embed], components: [row] };
     }
-    async function editPlanMessage(plan, notes) {
+    async function editPlanMessage(plan) {
         if (!plan.messageId) return;
         const ch = await client.channels.fetch(plan.channelId).catch(() => null);
-        if (ch) await ch.messages.edit(plan.messageId, planPayload(plan, notes)).catch(() => {});
+        if (!ch) return;
+        const options = plan.status === 'done' ? null : await computeOptions(plan.recipients);
+        if (plan.status === 'done') {
+            // invoice selesai: tampilan terakhir dibiarkan, cukup diberi tanda selesai & tombol dihapus
+            const msg = await ch.messages.fetch(plan.messageId).catch(() => null);
+            if (msg?.embeds?.[0]) await msg.edit({ embeds: [EmbedBuilder.from(msg.embeds[0]).setColor(0x99AAB5).setTitle(`📤 Opsi Payout${plan.isPreOrder ? ' (Pre-Order)' : ''} — ✅ invoice selesai`)], components: [] }).catch(() => {});
+            return;
+        }
+        await ch.messages.edit(plan.messageId, planPayload(plan, options)).catch(() => {});
     }
 
     // Form tiket mengikuti penerima di rencana payout (1 atau beberapa username)
@@ -218,36 +209,27 @@ module.exports = function createPayout(ctx, core, eligible) {
             { upsert: true, returnDocument: 'after' }
         );
         if (plan.messageId) return plan;
-        let notes = [];
-        if (recipients.length) {
-            const res = await computePlan(recipients);
-            plan.allocations = res.allocations; plan.shortfall = res.shortfall; notes = res.notes;
-            if (isPreOrder && res.shortfall > 0) notes.push('📦 Pre-Order: tekan **🔄 Hitung Ulang** setelah stok masuk.');
-        } else {
-            notes = ['⚠️ Username Roblox tidak ditemukan di form. Tekan **👥 Beberapa Username** untuk mengisi penerima.'];
-            plan.shortfall = robux;
-        }
-        const msg = await h.discordRetry(() => channel.send(planPayload(plan, notes)));
+        const options = recipients.length ? await computeOptions(recipients) : [];
+        const msg = await h.discordRetry(() => channel.send(planPayload(plan, options)));
         plan.messageId = msg.id;
         await plan.save();
         return plan;
     }
 
-    // Done = Robux sudah dikirim -> langsung cek audit log Roblox (otomatis, beberapa kali)
-    async function onCommunityDone({ channel, invoiceMessageId, buyerId, robux }) {
-        if (!core.isOn('asisten_payout') || !robux) return;
+    // Invoice Done = Robux sudah dikirim -> opsi payout cukup ditandai selesai (tidak ada pengecekan audit log)
+    async function onCommunityDone({ invoiceMessageId }) {
         try {
-            const plan = await ensurePlan({ channel, invoiceMessageId, buyerId, robux });
-            if (!plan || ['verified', 'manual'].includes(plan.status) || !plan.recipients.length) return;
-            plan.status = 'checking'; plan.checkAttempts = 0; plan.nextCheckAt = new Date(Date.now() + CHECK_DELAYS[0]);
+            const plan = await PayoutPlan.findOne({ invoiceMessageId });
+            if (!plan || plan.status === 'done') return;
+            plan.status = 'done';
             await plan.save();
             await editPlanMessage(plan);
-        } catch (e) { console.error('[PAYOUT] Gagal memproses payout setelah Done:', e.message); }
+        } catch (e) { console.error('[PAYOUT] Gagal menandai opsi payout selesai:', e.message); }
     }
 
     // Tombol "📤 Rencana Payout" di invoice Community
     function planButton(invoiceMessageId) {
-        return new ButtonBuilder().setCustomId(`vx_plan_${invoiceMessageId}`).setLabel('📤 Rencana Payout').setStyle(ButtonStyle.Primary);
+        return new ButtonBuilder().setCustomId(`vx_plan_${invoiceMessageId}`).setLabel('📤 Opsi Payout').setStyle(ButtonStyle.Primary);
     }
     async function handlePlanButton(interaction) {
         if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Khusus Owner dan Handler.', flags: MessageFlags.Ephemeral });
@@ -259,8 +241,8 @@ module.exports = function createPayout(ctx, core, eligible) {
         const buyerId = (String((embed?.fields || []).find(f => f.name.includes('Pembeli'))?.value || '').match(/<@!?(\d+)>/) || [])[1] || null;
         if (!robux) return interaction.editReply({ content: '❌ Jumlah Robux di invoice tidak terbaca.' });
         const plan = await ensurePlan({ channel: interaction.channel, invoiceMessageId: id, buyerId, robux });
-        if (!plan?.messageId) return interaction.editReply({ content: '❌ Gagal membuat rencana payout.' });
-        return interaction.editReply({ content: `📤 Rencana payout: https://discord.com/channels/${interaction.guildId || interaction.guild?.id}/${interaction.channel.id}/${plan.messageId}` });
+        if (!plan?.messageId) return interaction.editReply({ content: '❌ Gagal membuat opsi payout.' });
+        return interaction.editReply({ content: `📤 Opsi payout: https://discord.com/channels/${interaction.guildId || interaction.guild?.id}/${interaction.channel.id}/${plan.messageId}` });
     }
 
     async function handleButton(interaction) {
@@ -268,7 +250,7 @@ module.exports = function createPayout(ctx, core, eligible) {
         const action = parts[2], id = parts[3];
         if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Khusus Owner dan Handler.', flags: MessageFlags.Ephemeral });
         const plan = await PayoutPlan.findOne({ invoiceMessageId: id });
-        if (!plan) return interaction.reply({ content: '❌ Rencana payout tidak ditemukan.', flags: MessageFlags.Ephemeral });
+        if (!plan) return interaction.reply({ content: '❌ Opsi payout tidak ditemukan.', flags: MessageFlags.Ephemeral });
 
         if (action === 'split') {
             const modal = new ModalBuilder().setCustomId(`vx_pom_${id}`).setTitle('Bagi ke Beberapa Username');
@@ -281,29 +263,12 @@ module.exports = function createPayout(ctx, core, eligible) {
         }
         if (action === 'recalc') {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-            if (!plan.recipients.length) return interaction.editReply({ content: '❌ Isi penerima dulu lewat **👥 Beberapa Username**.' });
+            if (!plan.recipients.length) return interaction.editReply({ content: '❌ Isi username dulu lewat **👥 Beberapa Username**.' });
             await refreshAll('normal').catch(() => {});
-            const res = await computePlan(plan.recipients);
-            plan.allocations = res.allocations; plan.shortfall = res.shortfall; plan.status = 'planned';
-            await plan.save();
-            await editPlanMessage(plan, res.notes);
-            return interaction.editReply({ content: '✅ Rencana dihitung ulang dengan saldo & riwayat terbaru.' });
-        }
-        if (action === 'manual') {
-            plan.status = 'manual'; await plan.save();
-            await Transaction.updateOne({ key: `inv:${id}` }, { $set: { poOutstanding: false } }).catch(() => {});
             await editPlanMessage(plan);
-            h.schedulePanelStockUpdate();
-            return interaction.reply({ content: '✔️ Ditandai selesai.', flags: MessageFlags.Ephemeral });
+            return interaction.editReply({ content: '✅ Opsi diperbarui dengan saldo & riwayat terbaru.' });
         }
-        if (action === 'sent') {
-            if (!plan.recipients.length) return interaction.reply({ content: '❌ Isi penerima dulu lewat **👥 Beberapa Username**.', flags: MessageFlags.Ephemeral });
-            plan.status = 'checking'; plan.checkAttempts = 0; plan.nextCheckAt = new Date(Date.now() + CHECK_DELAYS[0]);
-            await plan.save();
-            await editPlanMessage(plan);
-            return interaction.reply({ content: '🔎 Oke, bot akan mengecek audit log Roblox beberapa kali dalam ±15 menit ke depan.', flags: MessageFlags.Ephemeral });
-        }
-        return interaction.reply({ content: '❌ Aksi tidak dikenal.', flags: MessageFlags.Ephemeral });
+        return interaction.reply({ content: 'ℹ️ Tombol ini sudah tidak dipakai. Cukup tekan **✅ Done** di invoice setelah Robux dikirim.', flags: MessageFlags.Ephemeral });
     }
 
     async function handleModal(interaction) {
@@ -321,85 +286,21 @@ module.exports = function createPayout(ctx, core, eligible) {
         const total = recipients.reduce((s, r) => s + r.amount, 0);
         if (total !== plan.robux) return interaction.reply({ content: `❌ Total ${fmt(total)} R$ tidak sama dengan pesanan ${fmt(plan.robux)} R$.`, flags: MessageFlags.Ephemeral });
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-        const res = await computePlan(recipients);
-        plan.recipients = recipients; plan.allocations = res.allocations; plan.shortfall = res.shortfall; plan.status = 'planned';
+        plan.recipients = recipients;
         await plan.save();
-        await editPlanMessage(plan, res.notes);
+        await editPlanMessage(plan);
         await syncFormRecipients(interaction.channel, recipients);
-        return interaction.editReply({ content: '✅ Penerima diperbarui, rencana dihitung ulang & form tiket ikut diperbarui.' });
-    }
-
-    // ---------------- Verifikasi otomatis (tahan restart) ----------------
-    let verifying = false;
-    async function verifyTick() {
-        if (verifying || !client.isReady()) return;
-        verifying = true;
-        try {
-            const due = await PayoutPlan.find({ status: 'checking', nextCheckAt: { $lte: new Date() } }).limit(5);
-            if (!due.length) return;
-            await refreshAll('normal');
-            // Payout yang sudah "dipakai" tiket lain (username sama) tidak dihitung lagi untuk rencana ini
-            const others = await PayoutPlan.find({ status: { $in: ['verified', 'checking', 'mismatch'] }, claimedKeys: { $exists: true } }).select('invoiceMessageId claimedKeys').lean();
-            for (const plan of due) {
-                // Payout bisa dikirim kapan saja setelah invoice dibuat (sebelum Done) -> hitung sejak invoice dibuat
-                let since = new Date(plan.doneAt).getTime() - 5 * 60 * 1000;
-                try { since = Math.min(since, core.snowflakeTime(plan.invoiceMessageId) - 5 * 60 * 1000); } catch (e) {}
-                const claimedByOthers = new Set(others.filter(o => o.invoiceMessageId !== plan.invoiceMessageId).flatMap(o => o.claimedKeys || []));
-                const found = [];
-                const keys = [];
-                let ok = true;
-                for (const r of plan.recipients) {
-                    const u = await eligible.resolveUser(r.username).catch(() => null);
-                    const names = u ? [u.name.toLowerCase(), (u.displayName || '').toLowerCase()] : [r.username.toLowerCase()];
-                    // ambil payout dari yang paling awal sejak Done, sampai jumlahnya cukup
-                    const entries = [];
-                    for (const num of Object.keys(ledgers)) {
-                        if (!ledgers[num].ready) continue;
-                        for (const x of ledgers[num].entries) if (x.ts >= since && names.includes(x.name) && !claimedByOthers.has(`${num}:${x.key}`)) entries.push({ num, ...x });
-                    }
-                    entries.sort((a, b) => a.ts - b.ts);
-                    let sum = 0;
-                    const per = {};
-                    for (const x of entries) {
-                        if (sum >= r.amount) break;
-                        sum += x.amount; per[x.num] = (per[x.num] || 0) + x.amount; keys.push(`${x.num}:${x.key}`);
-                    }
-                    for (const [num, amt] of Object.entries(per)) found.push({ num, username: u?.name || r.username, amount: amt });
-                    if (sum < r.amount) ok = false;
-                }
-                plan.claimedKeys = keys;
-                const notReady = Object.values(ledgers).some(L => !L.ready);
-                plan.found = found;
-                plan.foundTotal = found.reduce((s, f) => s + f.amount, 0);
-                plan.checkAttempts += 1;
-                if (ok) {
-                    plan.status = 'verified';
-                    await Transaction.updateOne({ key: `inv:${plan.invoiceMessageId}` }, { $set: { poOutstanding: false } }).catch(() => {});
-                    h.schedulePanelStockUpdate();
-                    core.stat('payout_terverifikasi');
-                } else if (plan.checkAttempts >= CHECK_DELAYS.length) {
-                    plan.status = 'mismatch';
-                    core.alarm(`payout_${plan.invoiceMessageId}`, `⚠️ **Payout belum cocok** (invoice sudah Done) di <#${plan.channelId}>: terdeteksi ${fmt(plan.foundTotal)} dari ${fmt(plan.robux)} R$${notReady ? ' (sebagian riwayat community belum termuat)' : ''}. Cek salah username / nominal.`, 24 * 60 * 60 * 1000);
-                } else {
-                    plan.nextCheckAt = new Date(Date.now() + CHECK_DELAYS[plan.checkAttempts]);
-                }
-                await plan.save();
-                await editPlanMessage(plan);
-            }
-        } catch (e) {
-            console.error('[PAYOUT] Verifikasi error:', e.message);
-        } finally { verifying = false; }
+        return interaction.editReply({ content: '✅ Username diperbarui & form tiket ikut diperbarui.' });
     }
 
     async function onChannelDelete(channelId) {
-        await PayoutPlan.updateMany({ channelId, status: { $in: ['planned', 'checking'] } }, { $set: { status: 'manual' } }).catch(() => {});
+        await PayoutPlan.updateMany({ channelId, status: { $ne: 'done' } }, { $set: { status: 'done' } }).catch(() => {});
     }
 
     function start() {
         setTimeout(() => refreshAll('low').catch(() => {}), 60000);
         setInterval(() => refreshAll('low').catch(() => {}), 4 * 60 * 1000);
-        setInterval(verifyTick, 30 * 1000);
     }
 
-    return { start, refreshAll, computePlan, ensurePlan, planButton, handlePlanButton, onCommunityDone, handleButton, handleModal, verifyTick, onChannelDelete, ledgers, planPayload, parseEntry };
+    return { start, refreshAll, computeOptions, ensurePlan, planButton, handlePlanButton, onCommunityDone, handleButton, handleModal, onChannelDelete, ledgers, planPayload, parseEntry };
 };

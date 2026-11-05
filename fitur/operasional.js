@@ -8,7 +8,7 @@ const METHOD_LABEL = { qris: 'QRIS', bca: 'BCA', dana: 'Dana', gopay: 'GoPay', l
 const STAT_LABEL = {
     tiket_dibuka: '🎫 Tiket dibuka', tiket_ditutup: '🔒 Tiket ditutup', tiket_mati_ditutup: '💤 Tiket tanpa kabar ditutup',
     invoice_dibuat: '🧾 Invoice dibuat', invoice_batal: '❌ Invoice dibatalkan', bukti_bayar: '📸 Bukti bayar masuk',
-    vouch: '🗣️ Vouch masuk', payout_terverifikasi: '✅ Payout terverifikasi', tiket_ditolak_ketat: '⛔ Tiket ditolak (mode Ketat)'
+    vouch: '🗣️ Vouch masuk', tiket_ditolak_ketat: '⛔ Tiket ditolak (mode Ketat)'
 };
 
 const QUICK_REPLIES = {
@@ -174,13 +174,13 @@ module.exports = function createOperasional(ctx, core, stok) {
                     return `**C${n} ${g.name}**\n└ Saldo ${typeof f === 'number' ? `${fmt(f)} · Jual ${fmt(stok.sellable(f))}` : '?'}${typeof p === 'number' ? ` · Pending ${fmt(p)}` : ''}`;
                 });
                 const po = await stok.poStatus();
-                const [openTickets, pendingVouch, waiting, openInv, planOpen] = await Promise.all([
+                const [openTickets, pendingVouch, waiting, openInv] = await Promise.all([
                     Ticket.countDocuments({}), TicketVouch.countDocuments({ vouched: false }), InvoiceRecord.countDocuments({ status: 'waiting' }),
-                    InvoiceRecord.countDocuments({ status: 'open' }), PayoutPlan.countDocuments({ status: { $in: ['planned', 'checking', 'mismatch'] } })
+                    InvoiceRecord.countDocuments({ status: 'open' })
                 ]);
                 embed.addFields(
                     { name: '📦 Stok Community (saat laporan)', value: `${lines.join('\n')}\n**PO:** kuota ${fmt(po.quota)} · terpakai ${fmt(po.used)} · sisa ${fmt(po.left)}`.slice(0, 1024), inline: false },
-                    { name: '📌 Masih Terbuka', value: `🎫 Tiket aktif: **${openTickets}**\n🧾 Invoice belum dibayar: **${openInv}**\n🟡 Menunggu verifikasi: **${waiting}**\n🗣️ Belum vouch: **${pendingVouch}**\n📤 Payout belum terverifikasi: **${planOpen}**`, inline: false }
+                    { name: '📌 Masih Terbuka', value: `🎫 Tiket aktif: **${openTickets}**\n🧾 Invoice belum dibayar: **${openInv}**\n🟡 Menunggu verifikasi: **${waiting}**\n🗣️ Belum vouch: **${pendingVouch}**`, inline: false }
                 );
             } catch (e) { /* bagian snapshot opsional */ }
         }
