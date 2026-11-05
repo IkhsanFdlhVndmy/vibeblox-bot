@@ -13,6 +13,16 @@ const Restock = require('./models/Restock');            // <--- TAMBAHAN RESTOCK
 const InvoiceTracker = require('./models/InvoiceTracker'); // <--- TAMBAHAN PANEL STOCK
 const PanelStock = require('./models/PanelStock');          // <--- TAMBAHAN PANEL STOCK
 const TicketVouch = require('./models/TicketVouch');         // <--- TAMBAHAN VOUCH TRACKING (per-ticket, BUKAN global)
+// --- FITUR OTOMATIS BARU (folder fitur/): riwayat, eligible borongan, stok/PO, pembayaran, payout, laporan ---
+const Transaction = require('./models/Transaction');
+const BotState = require('./models/BotState');
+const InvoiceRecord = require('./models/InvoiceRecord');
+const PayoutPlan = require('./models/PayoutPlan');
+const StockReminder = require('./models/StockReminder');
+const DailyStat = require('./models/DailyStat');
+const InvoiceDraft = require('./models/InvoiceDraft');
+const setupFitur = require('./fitur');
+let FX = null; // diisi di bagian paling bawah file (setelah semua fungsi siap)
 
 const client = new Client({
     intents: [
@@ -467,7 +477,7 @@ const slashCommands = [
     },
     {
         name: 'buttonticket',
-        description: 'Enable/Disable tombol metode pada Ticket Panel',
+        description: 'Enable/Disable tombol tiket · Community: Normal / Ketat (War) / Pre-Order / Disable',
         options: [
             {
                 name: 'tipe', description: 'Pilih tipe via', type: 3, required: true,
@@ -482,10 +492,13 @@ const slashCommands = [
                 ]
             },
             {
-                name: 'status', description: 'Enable atau Disable?', type: 3, required: true,
+                name: 'status', description: 'Enable/Disable · khusus Community: Normal, Ketat (War), Pre-Order', type: 3, required: true,
                 choices: [
                     { name: 'Enable', value: 'enable' },
-                    { name: 'Disable', value: 'disable' }
+                    { name: 'Disable', value: 'disable' },
+                    { name: 'Community: Normal', value: 'normal' },
+                    { name: 'Community: Ketat (War) — tolak username belum eligible', value: 'ketat' },
+                    { name: 'Community: Pre-Order', value: 'preorder' }
                 ]
             }
         ]
@@ -565,7 +578,7 @@ client.once('ready', async () => {
     }
     
        try {
-        await client.application.commands.set(slashCommands);
+        await client.application.commands.set([...slashCommands, ...(FX?.commands || [])]);
         console.log('✅ Slash Commands berhasil didaftarkan!');
     } catch (err) {
         console.error('❌ Gagal mendaftarkan Slash Commands:', err);
@@ -883,6 +896,7 @@ async function processVouchMessage(message) {
             // 3. Update tampilan form (dengan percobaan ulang). Kalau tetap gagal,
             //    diulang otomatis tiap 2 menit — vouch TIDAK pindah ke tiket lain.
             await syncVouchEmbed(tv, ch);
+            if (FX) FX.onVouch();
             evaluateAutoClose(tv.channelId, true).catch(() => {}); // AUTO-CLOSE: cek apakah tiket siap ditutup
             break; // 1 pesan vouch hanya untuk 1 tiket
         }
@@ -896,6 +910,7 @@ async function processVouchMessage(message) {
 client.on('messageCreate', async (message) => {
     if (message.author.bot) return;
     handleAutoCloseActivity(message); // AUTO-CLOSE: pantau aktivitas di tiket yang sedang hitung mundur
+    if (FX) FX.onTicketMessage(message); // ANTREAN "SUDAH BAYAR": bukti bayar di tiket yang punya invoice
     if (message.channel.id !== VOUCH_CHANNEL_ID) return;
 
     try {
@@ -2135,12 +2150,16 @@ async function runEligibilityCheck(targetUsername, cacheKey) {
             if (!userGroups.includes(grp.id)) {
                 fieldValue = `${emojiNotJoin} Belum Bergabung`;
             } else {
-                await sleep(350); // request audit-log (pakai cookie akun dummy)
+                // FITUR: daftar join 16 hari terakhir sudah tersimpan -> tidak perlu request audit-log per orang
+                const fxJoin = FX ? FX.eligible.cachedJoin(grp.id, userId) : null;
+                if (!fxJoin) await sleep(350); // request audit-log (pakai cookie akun dummy)
                 try {
-                    if (rbxIsPaused()) throw new Error('RBX_PAUSED'); // sedang kena rate limit -> jangan tambah request
-                    const auditRes = await axios.get(`https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=JoinGroup&userId=${userId}&limit=10`, {
-                        headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
-                    });
+                    if (!fxJoin && rbxIsPaused()) throw new Error('RBX_PAUSED'); // sedang kena rate limit -> jangan tambah request
+                    const auditRes = fxJoin
+                        ? { data: { data: fxJoin.joinMs ? [{ created: new Date(fxJoin.joinMs).toISOString() }] : [] } }
+                        : await axios.get(`https://groups.roblox.com/v1/groups/${grp.id}/audit-log?actionType=JoinGroup&userId=${userId}&limit=10`, {
+                            headers: { 'Cookie': `.ROBLOSECURITY=${process.env.ROBLOX_COOKIE}` }
+                        });
 
                     if (auditRes.data && auditRes.data.data && auditRes.data.data.length > 0) {
                         const rawJoin = auditRes.data.data[0].created;
@@ -2613,6 +2632,7 @@ async function refreshPanelFunds() {
             }
         }
         panelFunds.at = Date.now();
+        if (FX) FX.onFundsUpdated(panelFunds.data); // alarm saldo menipis
         schedulePanelStockUpdate(); // tampilkan saldo terbaru di panel
     } catch (e) {
         console.error('Gagal ambil saldo Group Funds:', e.message);
@@ -2635,7 +2655,7 @@ async function buildPanelStockPages() {
     let anyFundsFailed = false;
     for (const num of Object.keys(RESTOCK_COMMUNITIES)) {
         const funds = fundsPerCommunity[num];
-        if (typeof funds === 'number') totalStock += funds;
+        if (typeof funds === 'number') totalStock += FX ? FX.sellableFunds(funds) : funds; // stok BISA DIJUAL (saldo - sisa wajib)
         else if (panelFunds.at) anyFundsFailed = true; // (sebelum saldo pertama terambil = masih memuat, bukan gagal)
         if (panelFunds.failed.has(num)) anyFundsFailed = true; // saldo lama karena tarikan terakhir gagal
     }
@@ -2657,7 +2677,7 @@ async function buildPanelStockPages() {
     const communityLines = [];
     for (const [num, grp] of Object.entries(RESTOCK_COMMUNITIES)) {
         const val = fundsPerCommunity[num];
-        communityLines.push(`🏢 **Community ${num} (${grp.name}):** ${val !== null ? `\`${fmt(val)} Robux\`` : (panelFunds.at ? '⚠️ *Gagal ambil data*' : '*memuat...*')}`);
+        communityLines.push(FX ? FX.panelCommunityLine(num, grp, val, panelFunds.at) : `🏢 **Community ${num} (${grp.name}):** ${val !== null ? `\`${fmt(val)} Robux\`` : (panelFunds.at ? '⚠️ *Gagal ambil data*' : '*memuat...*')}`);
 
         const p = pendingCache[num];
         if (!p) {
@@ -2677,7 +2697,7 @@ async function buildPanelStockPages() {
     }
 
     const summaryLines = [
-        `💎 **Total Stock:** \`${fmt(totalStock)} Robux\``,
+        `💎 **Total Stock${FX ? ' (bisa dijual)' : ''}:** \`${fmt(totalStock)} Robux\``,
         `⏳ **Total Pending:** \`${fmt(totalPending)} Robux\``,
         `🧾 **Ter-invoice:** \`${fmt(totalInvoiced)} Robux\` *(${activeInvoices.length} invoice)*`,
         `${sisaStock < 0 ? '🔴' : '🟢'} **Sisa Stock:** \`${fmt(sisaStock)} Robux\``
@@ -2687,6 +2707,7 @@ async function buildPanelStockPages() {
         summaryLines.push('⚠️ **PERINGATAN: Total invoice sudah MELEBIHI stock!**');
     }
     if (anyFundsFailed || anyPendingFailed) summaryLines.push('*(Sebagian data gagal ditarik, kemungkinan sementara — akan otomatis re-sync)*');
+    if (FX) await FX.decoratePanel(summaryLines); // kuota Pre-Order (dari pending) + estimasi masuk (dari /restock)
     if (pendingLastUpdated) {
         summaryLines.push(`*Pending dicek tiap 5 menit · terakhir <t:${Math.floor(pendingLastUpdated.getTime() / 1000)}:R> · refund = ${PENDING_LOOKBACK_DAYS} hari terakhir*`);
     }
@@ -2970,6 +2991,7 @@ client.on('messageDelete', async (message) => {
         if (removedInvoice.deletedCount > 0) schedulePanelStockUpdate();
 
         await TicketVouch.deleteOne({ messageId: message.id });
+        if (FX) await FX.onMessageDelete(message.id);
     } catch (e) {
         // Diamkan saja — ini cuma pembersihan, tidak kritikal kalau sesekali gagal
     }
@@ -3007,12 +3029,14 @@ client.on('channelDelete', async (channel) => {
         if (removed.deletedCount > 0) schedulePanelStockUpdate();
 
         await TicketVouch.deleteOne({ channelId: channel.id });
+        if (FX) await FX.onChannelDelete(channel);
     } catch (e) {
         // Diamkan saja — pembersihan, tidak kritikal
     }
 });
 
 client.on('interactionCreate', async (interaction) => {
+    if (FX?.owns(interaction)) return; // command/tombol fitur baru ditangani di fitur/index.js
 // =========================================================================
     // === TICKET SYSTEM - AI OPTIMIZED FOR ALWAYSDATA ===
     // =========================================================================
@@ -3064,7 +3088,7 @@ client.on('interactionCreate', async (interaction) => {
             // Set Warna Dinamis: Hijau (Success) jika Aktif, Merah (Danger) jika Mati
             const btn = new ButtonBuilder()
                 .setCustomId(`tc_${b.id}`)
-                .setLabel(b.label)
+                .setLabel(FX ? FX.panelLabel(b.id, b.label, config) : b.label)
                 .setStyle(isEnabled ? ButtonStyle.Success : ButtonStyle.Primary)
                 .setDisabled(!isEnabled);
 
@@ -3082,6 +3106,7 @@ client.on('interactionCreate', async (interaction) => {
         for (let i = 0; i < sortedButtons.length; i += 5) {
             components.push(new ActionRowBuilder().addComponents(sortedButtons.slice(i, i + 5)));
         }
+        if (FX) components.push(...FX.extraPanelRows(config)); // tombol "Ingatkan saya" saat Community ditutup
 
         return { embeds: [embedTicket], components };
     };
@@ -3117,14 +3142,20 @@ client.on('interactionCreate', async (interaction) => {
         
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const tipe = interaction.options.getString('tipe');
-        const status = interaction.options.getString('status') === 'enable';
+        const rawStatus = interaction.options.getString('status');
 
         let config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
         if (!config) config = new TicketConfig();
+
+        // Community punya mode Normal / Ketat (War) / Pre-Order (lihat fitur/eligible.js)
+        const applied = FX ? FX.applyButtonTicket(config, tipe, rawStatus) : { status: rawStatus === 'enable' };
+        if (applied.error) return interaction.editReply(applied.error);
+        const status = applied.status;
         
         // Update status di database
         config.buttonStates.set(tipe, status);
         await config.save();
+        if (FX) FX.afterButtonTicket(tipe, applied, config.panelChannelId);
 
         let updateMsg = '';
 
@@ -3138,7 +3169,7 @@ client.on('interactionCreate', async (interaction) => {
                     if (panelMsg) {
                         const panelData = await renderTicketPanel();
                         await panelMsg.edit(panelData);
-                        updateMsg = `✅ Button **${tipe}** berhasil di-${status ? 'Enable' : 'Disable'} dan Panel ter-update realtime!`;
+                        updateMsg = `✅ Button **${tipe}** berhasil di-${applied.modeLabel ? `set ke mode **${applied.modeLabel}**` : (status ? 'Enable' : 'Disable')} dan Panel ter-update realtime!`;
                     }
                 }
             } catch (e) {
@@ -3194,6 +3225,13 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // Balas aman dulu
         
         const type = interaction.customId.replace('tm_', '');
+
+        // --- FITUR: mode Community (Ketat/War menolak username belum eligible), 1 username = 1 tiket Community ---
+        const fxGate = FX ? await FX.beforeTicket(interaction, type) : {};
+        if (fxGate?.block) {
+            if (FX) FX.ticketBlocked();
+            return interaction.editReply({ content: fxGate.block });
+        }
 
         // =====================================================================
         // === VALIDASI PINTAR MIDDLEMAN (SEBELUM MEMBUAT TIKET) ===
@@ -3285,7 +3323,9 @@ client.on('interactionCreate', async (interaction) => {
             'limited': 'limited',
             'mm': 'mm'
         };
-        const channelName = `${channelPrefixes[type] || 'ticket'}-${config.ticketCounter}`;
+        const baseChannelName = `${channelPrefixes[type] || 'ticket'}-${config.ticketCounter}`;
+        const channelName = FX ? FX.channelNameFor(type, baseChannelName, fxGate) : baseChannelName; // mode Pre-Order -> langsung "-po"
+
         try {
             // Setup Permission
             const permissionOverwrites = [
@@ -3307,6 +3347,9 @@ client.on('interactionCreate', async (interaction) => {
             // Buat Channel + Simpan DB — KEDUANYA DI DALAM KUNCI ANTRIAN,
             // supaya proses auto-geser tidak pernah melihat channel baru yang belum tercatat di DB
             const ticketChannel = await withTicketLock(async () => {
+                // Cek ulang DI DALAM kunci: 2 form dengan username sama yang masuk bersamaan tidak bisa lolos dua-duanya
+                const fxTaken = FX ? await FX.inLockCheck(interaction, type) : null;
+                if (fxTaken) return { fxBlock: fxTaken };
                 const activeCategoryId = await pickTicketCategory(interaction.guild);
                 if (!activeCategoryId) return null; // semua kategori penuh
 
@@ -3321,7 +3364,8 @@ client.on('interactionCreate', async (interaction) => {
                     await Ticket.create({
                         channelId: newChannel.id,
                         creatorId: interaction.user.id,
-                        ticketType: type
+                        ticketType: type,
+                        ...(FX ? FX.ticketExtraFields(interaction, type) : {})
                     });
                 } catch (dbErr) {
                     // DB gagal -> hapus channel lagi, jangan sampai ada channel "yatim" yang tidak bisa di-close/dipindah
@@ -3332,6 +3376,7 @@ client.on('interactionCreate', async (interaction) => {
                 return newChannel;
             });
 
+            if (ticketChannel?.fxBlock) return interaction.editReply({ content: ticketChannel.fxBlock });
             if (!ticketChannel) {
                 return interaction.editReply('❌ Semua kategori tiket sedang penuh. Silakan coba lagi beberapa saat lagi.');
             }
@@ -3399,7 +3444,10 @@ client.on('interactionCreate', async (interaction) => {
                 allowedMentions: { parse: ['users', 'roles'] }
             });
 
-            return interaction.editReply(`✅ Tiket berhasil dibuat! Silakan menuju ${ticketChannel}`);
+            await interaction.editReply(`✅ Tiket berhasil dibuat! Silakan menuju ${ticketChannel}`);
+            // --- FITUR: status eligible, info Pre-Order, draft invoice (di belakang, tidak menahan pembuatan tiket) ---
+            if (FX) FX.afterTicketCreated({ channel: ticketChannel, type, interaction, gate: fxGate });
+            return;
 
         } catch (e) {
             console.error(e);
@@ -3569,6 +3617,7 @@ client.on('interactionCreate', async (interaction) => {
                 await InvoiceTracker.deleteOne({ messageId: invoiceMsgId });
                 schedulePanelStockUpdate();
             } catch (e) {}
+            if (FX) FX.onInvoiceCancelled(invoiceMsgId); // lepas kode unik & antrean verifikasi
             return;
         }
 
@@ -3613,7 +3662,9 @@ client.on('interactionCreate', async (interaction) => {
                     embedPay.setColor(0x00AED6).setTitle('💚 Pembayaran GoPay VibeBlox').addFields({ name: '👤 Atas Nama', value: '**Muhammad Ikhsan Fadillah**' }, { name: '📱 Nomor GoPay', value: '**08119931329**' }, { name: '💳 Platform', value: '**GoPay**' }).setFooter({ text: 'VibeBlox Payment' });
                 }
 
-                await interaction.followUp({ embeds: [embedPay] });
+                // QRIS bernominal otomatis (kalau aktif & lolos semua pemeriksaan), selain itu QRIS statis lama
+                const fxQris = (action === 'qris' && FX) ? await FX.buildQrisPayment(interaction.message) : null;
+                await interaction.followUp(fxQris || { embeds: [embedPay] });
 
                 const newComponents = interaction.message.components.map(row => {
                     const newRow = ActionRowBuilder.from(row);
@@ -3778,6 +3829,9 @@ client.on('interactionCreate', async (interaction) => {
 
             await interaction.update({ content: '⏳ Memproses transaksi & generate vouch...', embeds: [], components: [] });
 
+            // --- FITUR: kunci anti dobel (1 invoice hanya bisa tercatat 1x) + catatan transaksi untuk /riwayat & laporan ---
+            const fxKey = `inv:${msgIdPart}`;
+            let fxMoneyCounted = false;
             try {
                 const invoiceMsg = await interaction.channel.messages.fetch(msgIdPart);
                 const invoiceEmbed = invoiceMsg.embeds[0];
@@ -3814,11 +3868,26 @@ client.on('interactionCreate', async (interaction) => {
                     return;
                 }
 
+                if (FX) {
+                    const fxRec = await FX.bayar.getRecord(msgIdPart);
+                    const fxBegin = await FX.beginDone({
+                        key: fxKey, source: 'invoice', buyerId: targetUserId, amount: totalHarga, robux: amountRobux,
+                        type: typeValue, method, category: `${typeNames[typeValue] || typeValue} - ${methodNames[method] || method}`,
+                        sumber: 'utama', channel: interaction.channel, staffId: interaction.user.id, kodeUnik: fxRec?.kodeUnik || 0
+                    });
+                    if (fxBegin?.duplicate) {
+                        fxMoneyCounted = true; // jangan hapus catatan lama
+                        await interaction.editReply({ content: FX.duplicateDoneMessage(fxBegin.existing) });
+                        return;
+                    }
+                }
+
                 // EKSEKUSI DATABASE
                 let userData = await User.findOne({ userId: targetUserId });
                 if (!userData) userData = new User({ userId: targetUserId });
                 userData.uangMasuk += totalHarga;
                 await userData.save();
+                fxMoneyCounted = true; // uang pembeli sudah bertambah -> jangan sampai bisa dihitung 2x
 
                 let storeData = await Store.findOne({ storeId: 'VIBEBLOX_FINANCE' });
                 if (!storeData) storeData = new Store({ storeId: 'VIBEBLOX_FINANCE' });
@@ -3946,9 +4015,12 @@ client.on('interactionCreate', async (interaction) => {
                 if (!interaction.channel.name.endsWith('-done')) {
                     interaction.channel.setName(`${interaction.channel.name}-done`).catch(e => console.log("Abaikan: Rate limit rename (Tambah done)"));
                 }
+                // --- FITUR: tutup antrean bayar / kode unik, rencana payout Community ---
+                if (FX) FX.afterDone({ kind: 'main', channel: interaction.channel, invoiceMessageId: msgIdPart, type: typeValue, buyerId: targetUserId, robux: amountRobux });
 
             } catch (err) {
                 console.error("Invoice confirm error:", err.message);
+                if (FX && !fxMoneyCounted) FX.abortDone(fxKey); // uang belum tercatat -> boleh di-Done ulang
                 await interaction.editReply({ content: '❌ Terjadi error saat memproses invoice.' });
                 try {
                     const invoiceMsg = await interaction.channel.messages.fetch(msgIdPart);
@@ -4069,6 +4141,8 @@ client.on('interactionCreate', async (interaction) => {
             
             await interaction.update({ content: '⏳ Memproses transaksi Partner...', embeds: [], components: [] });
 
+            const fxKey = `pinv:${invoiceMsgId}`;
+            let fxMoneyCounted = false;
             try {
                 const invoiceMsg = await interaction.channel.messages.fetch(invoiceMsgId);
                 const invoiceEmbed = invoiceMsg.embeds[0];
@@ -4085,11 +4159,25 @@ client.on('interactionCreate', async (interaction) => {
 
                 if (!targetUserId || !totalHarga) return await interaction.editReply({ content: '❌ Gagal baca invoice.' });
 
+                // --- FITUR: kunci anti dobel + catatan transaksi ---
+                if (FX) {
+                    const fxBegin = await FX.beginDone({
+                        key: fxKey, source: 'partner', buyerId: targetUserId, amount: totalHarga, robux: amountRobux || null,
+                        type: typeValue, category: typeValue, sumber: 'partner', channel: interaction.channel,
+                        staffId: interaction.user.id, partnerId: interaction.user.id
+                    });
+                    if (fxBegin?.duplicate) {
+                        fxMoneyCounted = true;
+                        return await interaction.editReply({ content: FX.duplicateDoneMessage(fxBegin.existing) });
+                    }
+                }
+
                 // 1. UPDATE USER SPENDING
                 let userData = await User.findOne({ userId: targetUserId });
                 if (!userData) userData = new User({ userId: targetUserId });
                 userData.uangMasuk += totalHarga;
                 await userData.save();
+                fxMoneyCounted = true; // uang pembeli sudah bertambah -> jangan sampai bisa dihitung 2x
 
                 // 2. UPDATE KEUANGAN PARTNER
                 let partnerData = await Partner.findOne({ partnerId: interaction.user.id });
@@ -4149,9 +4237,11 @@ client.on('interactionCreate', async (interaction) => {
                 if (!interaction.channel.name.endsWith('-done')) {
                     interaction.channel.setName(`${interaction.channel.name}-done`).catch(e => console.log("Abaikan: Rate limit rename (Tambah done)"));
                 }
+                if (FX) FX.afterDone({ kind: 'partner', channel: interaction.channel, invoiceMessageId: invoiceMsgId, type: typeValue, buyerId: targetUserId, robux: amountRobux });
 
             } catch (err) {
                 console.error("Partner Invoice error:", err);
+                if (FX && !fxMoneyCounted) FX.abortDone(fxKey);
                 await interaction.editReply({ content: '❌ Terjadi error sistem.' });
             } finally {
                 isUpdating.delete(`pinv_done_${invoiceMsgId}`);
@@ -4303,6 +4393,7 @@ client.on('interactionCreate', async (interaction) => {
 
             restockDoc.messageId = replyMessage.id;
             await restockDoc.save();
+            if (FX) FX.onRestockCreated(restockDoc, replyMessage); // tombol "Ingatkan Saya"
         } catch (err) {
             console.error('Gagal menjalankan /restock:', err);
             return interaction.editReply({ content: '❌ Waduh, gagal bikin restock countdown. Coba lagi ya (cek log kalau masih gagal).' }).catch(() => {});
@@ -4811,6 +4902,8 @@ Jumlah Robux: `;
             const newEmbed = EmbedBuilder.from(oldEmbed).setFields(fields);
             await formMsg.edit({ embeds: [newEmbed] });
 
+            if (FX) FX.onFormEdited(interaction.channel, { username: newUsername, robux: newRobux }); // draft invoice & cek eligible ikut diperbarui
+
             const changes = [];
             if (newUsername) changes.push(`Username Roblox → \`${newUsername}\``);
             if (newRobux !== null) changes.push(`Jumlah Robux → **${newRobux} R$**`);
@@ -4956,8 +5049,14 @@ Jumlah Robux: `;
             new ButtonBuilder().setCustomId(`inv_done_${type}_${invoiceMsgId}`).setLabel('✅ Done').setStyle(ButtonStyle.Success)
         );
 
+        // --- FITUR: kode unik di Total Bayar + data pembayaran (antrean verifikasi, QRIS bernominal) ---
+        if (FX) {
+            const fxPay = await FX.prepareInvoice({ messageId: invoiceMsgId, channel: interaction.channel, buyerId: target.id, type, robux: amount, price: totalHarga });
+            FX.applyKodeToEmbed(invoiceEmbed, totalHarga, fxPay.kode);
+        }
+
         const invoiceSent = await sendInvoiceMessage(interaction, invoiceMsgId, { embeds: [invoiceEmbed], components: [row1, row2] }, '/invoice');
-        if (!invoiceSent) return; // gagal total -> pesan sudah dihapus & staf sudah diberi tahu, jangan dicatat ke panel
+        if (!invoiceSent) { if (FX) FX.releaseInvoice(invoiceMsgId); return; } // gagal total -> pesan sudah dihapus & staf sudah diberi tahu, jangan dicatat ke panel
         autoCloseDisarm(interaction.channel.id, 'ada invoice baru').catch(() => {}); // AUTO-CLOSE: ada transaksi baru
         // TAG PEMBELI: dikirim sebagai pesan BARU (mention di pesan yang di-edit tidak memberi notifikasi)
         interaction.channel.send({
@@ -4982,6 +5081,11 @@ Jumlah Robux: `;
             }
         }
 
+        // --- FITUR: tandai draft terpakai + peringatan stok (hanya terlihat staf) ---
+        if (FX) {
+            const fxWarn = await FX.afterMainInvoice({ channel: interaction.channel, messageId: invoiceMsgId, type, robux: amount });
+            if (fxWarn) interaction.followUp({ content: fxWarn, flags: MessageFlags.Ephemeral }).catch(() => {});
+        }
         return;
     }
 
@@ -5178,6 +5282,7 @@ Jumlah Robux: `;
 
             await userData.save();
             await storeData.save();
+            if (FX) FX.recordManual({ id: interaction.id, add: command === 'adduangmasuk', target, amount, sumber, keterangan: interaction.options.getString('keterangan'), staffId: interaction.user.id });
 
             const targetMember = await interaction.guild.members.fetch(target.id).catch(() => null);
             await updateSpenderRoles(targetMember, userData);
@@ -5225,6 +5330,7 @@ Jumlah Robux: `;
             }
 
             await storeData.save();
+            if (FX) FX.recordExpense({ id: interaction.id, add: command === 'adduangkeluar', amount, keterangan, staffId: interaction.user.id });
             return interaction.reply({ embeds: [embed] });
         }
 
@@ -5266,6 +5372,21 @@ Jumlah Robux: `;
         }
     }
 });
+
+// =====================================================================
+// === FITUR OTOMATIS BARU (folder fitur/) — dipasang setelah semua fungsi di atas siap ===
+// =====================================================================
+FX = setupFitur({
+    client,
+    models: { User, Store, RobuxRate, Partner, TicketConfig, Ticket, Restock, InvoiceTracker, PanelStock, TicketVouch, Transaction, BotState, InvoiceRecord, PayoutPlan, StockReminder, DailyStat, InvoiceDraft },
+    h: {
+        axios, discordRetry, rbxRun, rbxIsPaused, RESTOCK_COMMUNITIES, TICKET_CATEGORY_IDS,
+        getPanelFunds: () => panelFunds, getPendingCache: () => pendingCache,
+        schedulePanelStockUpdate, autoCloseDisarm, acWithLock, acIsInvoiceMessage, closeTicketWithTranscript
+    }
+});
+client.on('interactionCreate', (interaction) => { if (FX.owns(interaction)) FX.handleInteraction(interaction); });
+client.once('ready', () => { FX.start(mongoose).catch(e => console.error('[FITUR] Gagal start:', e.message)); });
 
 // === GLOBAL ERROR HANDLER ===
 // Mencegah SATU error kecil (misal gagal fetch member) mematikan SELURUH bot.

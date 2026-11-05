@@ -8,6 +8,13 @@ const TicketSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now },
     // Pre-Order: tiket ini TIDAK PERNAH ditutup otomatis (disimpan di DB, tidak bergantung nama channel)
     isPreOrder: { type: Boolean, default: false },
+    // Username Roblox di form (huruf kecil) — untuk aturan "1 username = 1 tiket Community aktif"
+    robloxUsername: { type: String, default: null, index: true },
+    // Tiket tanpa kabar (tanpa invoice) -> diingatkan lalu ditutup otomatis
+    idle: {
+        warnedAt: { type: Date, default: null },
+        cancelled: { type: Boolean, default: false }
+    },
     // Status auto-close (disimpan di DB supaya tetap aman walau bot restart)
     autoClose: {
         state: { type: String, default: null },      // null | 'armed' | 'paused' | 'cancelled' | 'closing'

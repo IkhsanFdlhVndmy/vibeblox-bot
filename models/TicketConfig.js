@@ -5,6 +5,7 @@ const TicketConfigSchema = new mongoose.Schema({
     ticketCounter: { type: Number, default: 0 },
     panelChannelId: { type: String, default: null }, // <--- TAMBAHAN BARU
     panelMessageId: { type: String, default: null }, // <--- TAMBAHAN BARU
+    communityMode: { type: String, default: 'normal' }, // normal | ketat (war) | preorder — dipilih lewat /buttonticket
     buttonStates: {
         type: Map,
         of: Boolean,
