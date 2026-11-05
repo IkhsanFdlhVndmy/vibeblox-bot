@@ -2586,6 +2586,27 @@ function buildRestockDoneStatusEmbed(restock) {
         .setTimestamp();
 }
 
+// Kartu "Dana Grup" untuk pengumuman restock: saldo ASLI tiap community lokasi restock + totalnya.
+// Tidak ada angka karangan: community yang saldonya gagal diambil dilewati; kalau semuanya gagal -> tanpa gambar.
+async function buildRestockFundsImage(restock) {
+    try {
+        await refreshPanelFunds();
+        if (!panelFunds.at || Date.now() - panelFunds.at > 3 * 60 * 1000) return null;
+        const items = [];
+        for (const num of restock.communities || []) {
+            const key = String(num);
+            const val = panelFunds.data[key];
+            if (typeof val !== 'number' || panelFunds.failed.has(key) || !RESTOCK_COMMUNITIES[key]) continue;
+            items.push({ label: `C${key} · ${RESTOCK_COMMUNITIES[key].name}`, robux: val });
+        }
+        if (!items.length) return null;
+        return require('./fitur/gambar').danaGrupPng(items);
+    } catch (e) {
+        console.error('[Restock] Gagal membuat gambar Dana Grup:', e.message);
+        return null;
+    }
+}
+
 function buildRestockCompletedEmbed(restock) {
     const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
 
@@ -2982,9 +3003,14 @@ async function tickRestocks() {
                     // Pengumuman lengkapnya dikirim sebagai PESAN BARU + @everyone,
                     // biar semua orang beneran dapat notifikasi baru kalau stok udah ready
                     const finishedEmbed = await buildRestockCompletedEmbed(restock);
+                    // Gambar kartu "Dana Grup" dari saldo ASLI community restock (diambil dari Roblox saat ini juga).
+                    // Kalau saldo gagal diambil -> pengumuman tetap dikirim seperti biasa, tanpa gambar.
+                    const fundsImage = await buildRestockFundsImage(restock);
+                    if (fundsImage) finishedEmbed.setImage('attachment://dana-grup.png');
                     await channel.send({
                         content: '@everyone',
                         embeds: [finishedEmbed],
+                        files: fundsImage ? [{ attachment: fundsImage, name: 'dana-grup.png' }] : [],
                         allowedMentions: { parse: ['everyone'] }
                     }).catch(() => {});
 

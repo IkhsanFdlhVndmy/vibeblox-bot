@@ -12,6 +12,7 @@ Setiap fitur punya saklar **ON/OFF** lewat `/pengaturan` (khusus Vibe Owner, ter
 | `pembayaran.js` | Draft invoice, kode unik, QRIS bernominal, antrean "Sudah Bayar" |
 | `qris.js` + `qrcode-lite.js` | Pembuat QRIS bernominal + gambar QR (tanpa library tambahan) |
 | `payout.js` | Opsi payout Community per username (community yang bisa dipakai, maks kirim, total diterima 10 hari terakhir) |
+| `gambar.js` + `assets/` | Gambar kartu "Dana Grup" (saldo asli community) di pengumuman restock READY |
 | `operasional.js` | Tiket tanpa kabar, laporan harian/mingguan/bulanan, alarm, `/balas` |
 
 ## Command baru
