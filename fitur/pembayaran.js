@@ -6,6 +6,20 @@ const QR = require('./qris');
 
 const TYPE_LABEL = { community: 'Community', gamepass_after: 'Gamepass After', gamepass_before: 'Gamepass Before', gig: 'GIG', vilog: 'Vilog', robux_plus: 'Robux Plus' };
 const DRAFT_TYPE = { community: 'community', robux_plus: 'robux_plus', vilog: 'vilog', gamepass: 'gamepass_after', gig: 'gig' };
+// Kata yang boleh diketik staf di kolom "Tipe" (huruf besar/kecil & spasi bebas)
+const TYPE_ALIASES = {
+    community: 'community', commun: 'community', komunitas: 'community', payout: 'community', c: 'community',
+    robux_plus: 'robux_plus', plus: 'robux_plus', send: 'robux_plus', sendplus: 'robux_plus', send_plus: 'robux_plus', send_username: 'robux_plus', visend: 'robux_plus',
+    vilog: 'vilog', login: 'vilog', via_login: 'vilog',
+    gig: 'gig', gift: 'gig', gift_in_game: 'gig', giftingame: 'gig',
+    gamepass_after: 'gamepass_after', gamepass: 'gamepass_after', gp: 'gamepass_after', after: 'gamepass_after', gp_after: 'gamepass_after', gamepassafter: 'gamepass_after',
+    gamepass_before: 'gamepass_before', before: 'gamepass_before', gp_before: 'gamepass_before', gamepassbefore: 'gamepass_before'
+};
+const TYPE_HELP = 'community · plus · vilog · gig · gamepass (after) · before';
+function parseType(raw) {
+    const key = String(raw || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+    return TYPE_ALIASES[key] || TYPE_ALIASES[key.replace(/_/g, '')] || null;
+}
 const IMAGE_EXT = /\.(png|jpe?g|webp|gif|heic|bmp)(\?|$)/i;
 
 module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
@@ -406,9 +420,9 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         }
         if (action === 'edit') {
             if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Khusus Owner dan Handler.', flags: MessageFlags.Ephemeral });
-            const modal = new ModalBuilder().setCustomId(`vx_drm_${channelId}`).setTitle('Ubah Draft Invoice');
+            const modal = new ModalBuilder().setCustomId(`vx_drm_${channelId}`).setTitle('Ubah Draft Pesanan');
             modal.addComponents(
-                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('tipe').setLabel('Tipe (community/robux_plus/vilog/gig/...)').setStyle(TextInputStyle.Short).setRequired(true).setValue(draft.type).setPlaceholder('gamepass_after / gamepass_before juga bisa')),
+                new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('tipe').setLabel('Tipe (community/plus/vilog/gig/gamepass)').setStyle(TextInputStyle.Short).setRequired(true).setValue(draft.type).setPlaceholder(TYPE_HELP)),
                 new ActionRowBuilder().addComponents((() => { const t = new TextInputBuilder().setCustomId('jumlah').setLabel('Jumlah Robux').setStyle(TextInputStyle.Short).setRequired(true); if (draft.robux) t.setValue(String(draft.robux)); return t; })()),
                 new ActionRowBuilder().addComponents((() => { const t = new TextInputBuilder().setCustomId('harga').setLabel('Harga total khusus (kosong = pakai rate)').setStyle(TextInputStyle.Short).setRequired(false); if (draft.customTotal) t.setValue(String(draft.customTotal)); return t; })())
             );
@@ -444,8 +458,8 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
 
         if (isStaffModal) {
             if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Khusus Owner dan Handler.', flags: MessageFlags.Ephemeral });
-            const type = interaction.fields.getTextInputValue('tipe').trim().toLowerCase().replace(/\s+/g, '_');
-            if (!TYPE_LABEL[type]) return interaction.reply({ content: `❌ Tipe tidak dikenal. Pilihan: ${Object.keys(TYPE_LABEL).join(', ')}`, flags: MessageFlags.Ephemeral });
+            const type = parseType(interaction.fields.getTextInputValue('tipe'));
+            if (!type) return interaction.reply({ content: '❌ Tipe tidak dikenal. Ketik salah satu:\n• `community`\n• `plus` (Robux Send Username)\n• `vilog`\n• `gig` (Gift In-Game)\n• `gamepass` atau `after` (Gamepass After)\n• `before` (Gamepass Before)', flags: MessageFlags.Ephemeral });
             const hargaRaw = interaction.fields.getTextInputValue('harga') || '';
             const customTotal = hargaRaw.trim() ? parseInt(hargaRaw.replace(/[^\d]/g, ''), 10) || null : null;
             const updated = await InvoiceDraft.findOneAndUpdate({ channelId, used: false }, { $set: { type, robux, customTotal } }, { new: true }).lean();
@@ -527,6 +541,6 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         start, prepareInvoice, applyKodeToEmbed, onInvoiceDone, onInvoiceCancelled, getRecord, afterMainInvoice,
         buildQrisPayment, qrisTest, onTicketMessage, rebuildVerifPanel, scheduleVerifPanel, flushPing, catchUpProofs, cleanupStale,
         createDraft, markDraftUsed, handleDraftButton, handleDraftModal, onFormEdited, onChannelDelete, onMessageDelete,
-        createInvoiceFromDraft, priceFor, parseRobux, totalFromEmbed, isImage
+        createInvoiceFromDraft, priceFor, parseRobux, parseType, totalFromEmbed, isImage
     };
 };
