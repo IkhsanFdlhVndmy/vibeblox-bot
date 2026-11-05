@@ -17,6 +17,8 @@ module.exports = {
     CHANNEL_LAPORAN: '1567724447824093244',
     CHANNEL_VERIFIKASI: '1567723986262036650',
     CHANNEL_ALARM: '1567724076460417095',
+    // Channel tempat buka tiket (dipakai di pengumuman restock READY). Kosong = dicari otomatis dari nama channel "open-ticket".
+    CHANNEL_OPEN_TICKET: '',
     // Channel log keuangan lama (dibaca 1x untuk mengisi /riwayat)
     FINANCE_CHANNELS: ['1489665490770067678', '1519075561396371647', '1544599293451833444'],
 

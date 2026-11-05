@@ -2638,8 +2638,17 @@ async function tickRestockImages() {
     }
 }
 
-function buildRestockCompletedEmbed(restock) {
+// Channel buka tiket untuk diarahkan di pengumuman restock: ID dari config, atau dicari dari nama "open-ticket"
+function findOpenTicketChannelId(guild) {
+    const fixed = require('./fitur/config').CHANNEL_OPEN_TICKET;
+    if (fixed) return fixed;
+    const ch = guild?.channels?.cache?.find?.(c => c.type === 0 && /open[\s_-]*ticket/i.test(c.name || ''));
+    return ch ? ch.id : null;
+}
+
+function buildRestockCompletedEmbed(restock, guild = null) {
     const formattedAmount = restock.amount >= 1000 ? Math.floor(restock.amount / 1000) + 'K+' : restock.amount.toLocaleString('id-ID');
+    const openTicketId = findOpenTicketChannelId(guild);
 
     const description = [
         'Robux sudah masuk! Langsung merapat ke tiket sebelum diborong yang lain 🚀',
@@ -2647,7 +2656,9 @@ function buildRestockCompletedEmbed(restock) {
         '',
         '',
         '🏢 **Lokasi Restock**',
-        formatCommunityList(restock.communities)
+        formatCommunityList(restock.communities),
+        '',
+        `🎫 **Mau order via Community?** Buka tiket di ${openTicketId ? `<#${openTicketId}>` : '**#open-ticket**'}`
     ].join('\n');
 
     return new EmbedBuilder()
@@ -3033,7 +3044,7 @@ async function tickRestocks() {
 
                     // Pengumuman lengkapnya dikirim sebagai PESAN BARU + @everyone,
                     // biar semua orang beneran dapat notifikasi baru kalau stok udah ready
-                    const finishedEmbed = await buildRestockCompletedEmbed(restock);
+                    const finishedEmbed = await buildRestockCompletedEmbed(restock, channel.guild);
                     // Gambar kartu "Dana Grup" dari saldo ASLI community restock (diambil dari Roblox saat ini juga).
                     // Kalau saldo gagal diambil -> pengumuman tetap dikirim seperti biasa, tanpa gambar.
                     const fundsImage = await buildRestockFundsImage(restock);
