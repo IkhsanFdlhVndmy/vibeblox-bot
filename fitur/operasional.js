@@ -117,7 +117,16 @@ module.exports = function createOperasional(ctx, core, stok) {
             return Object.entries(m).sort((a, b) => b[1] - a[1]);
         };
         const robuxByType = {};
-        for (const t of income) if (t.robux && t.type) robuxByType[t.type] = (robuxByType[t.type] || 0) + t.robux * (t.direction || 1);
+        // R$ per tipe hanya dihitung kalau SEMUA transaksi tipe itu punya data robux
+        // (catatan lama hasil impor tidak punya jumlah robux -> kalau dicampur angkanya menyesatkan)
+        const robuxMissing = {};
+        for (const t of income) {
+            if (!t.type) continue;
+            if (t.robux) robuxByType[t.type] = (robuxByType[t.type] || 0) + t.robux * (t.direction || 1);
+            else if ((t.direction || 1) > 0) robuxMissing[t.type] = true;
+        }
+        let robuxHidden = false;
+        for (const k of Object.keys(robuxMissing)) { robuxHidden = true; delete robuxByType[k]; }
         const topBuyers = by(income, t => t.buyerId ? `<@${t.buyerId}>` : (t.buyerName ? `@${t.buyerName}` : null)).slice(0, 5);
         const days = [];
         for (let d = startMs; d < endMs; d += 86400000) days.push(core.dayKey(new Date(d)));
@@ -132,7 +141,7 @@ module.exports = function createOperasional(ctx, core, stok) {
             manual: sum(income.filter(t => t.source === 'manual')),
             byType: by(income, t => TYPE_LABEL[t.type] || (t.source === 'manual' ? 'Manual' : null)),
             byMethod: by(income, t => METHOD_LABEL[t.method] || null),
-            robuxByType, topBuyers, counters
+            robuxByType, robuxHidden, topBuyers, counters
         };
     }
     const pct = (now, before) => (!before ? (now ? ' 🆕' : '') : ` (${now >= before ? '▲' : '▼'} ${Math.abs(Math.round((now - before) / Math.abs(before) * 100))}%)`);
@@ -160,7 +169,7 @@ module.exports = function createOperasional(ctx, core, stok) {
             { name: '📊 Rata-rata / Terbesar', value: `${rp(cur.avg)} / ${rp(cur.max)}`, inline: true },
             { name: '🏪 Utama / Partner', value: `${rp(cur.utama)} / ${rp(cur.partner)}${cur.manual ? `\n-# termasuk manual ${rp(cur.manual)}` : ''}`, inline: true }
         );
-        if (cur.byType.length) embed.addFields({ name: '🛒 Per Tipe', value: cur.byType.map(([k, v]) => `• ${k}: ${rp(v)}${cur.robuxByType[Object.keys(TYPE_LABEL).find(t => TYPE_LABEL[t] === k)] ? ` · ${fmt(cur.robuxByType[Object.keys(TYPE_LABEL).find(t => TYPE_LABEL[t] === k)])} R$` : ''}`).join('\n').slice(0, 1024), inline: true });
+        if (cur.byType.length) embed.addFields({ name: '🛒 Per Tipe', value: cur.byType.map(([k, v]) => `• ${k}: ${rp(v)}${cur.robuxByType[Object.keys(TYPE_LABEL).find(t => TYPE_LABEL[t] === k)] ? ` · ${fmt(cur.robuxByType[Object.keys(TYPE_LABEL).find(t => TYPE_LABEL[t] === k)])} R$` : ''}`).join('\n').concat(cur.robuxHidden ? '\n-# R$ tidak ditampilkan untuk tipe yang ada transaksi lama (tanpa data R$)' : '').slice(0, 1024), inline: true });
         if (cur.byMethod.length) embed.addFields({ name: '💳 Per Metode Bayar', value: cur.byMethod.map(([k, v]) => `• ${k}: ${rp(v)}`).join('\n').slice(0, 1024), inline: true });
         if (cur.topBuyers.length) embed.addFields({ name: '🏆 Pembeli Terbesar', value: cur.topBuyers.map(([k, v], i) => `${i + 1}. ${k} — ${rp(v)}`).join('\n').slice(0, 1024), inline: false });
         const cl = Object.entries(STAT_LABEL).filter(([k]) => cur.counters[k]).map(([k, l]) => `${l}: **${cur.counters[k]}**`);
