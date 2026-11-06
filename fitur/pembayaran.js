@@ -83,7 +83,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             { $set: { status, codeActive: false, closedAt: new Date() } },
             { returnDocument: 'before' }
         ).lean().catch(() => null);
-        if (rec?.status === 'waiting') scheduleVerifPanel();
+        if (rec?.status === 'waiting' || rec?.status === 'paid') scheduleVerifPanel();
         return rec;
     }
     const onInvoiceDone = (messageId) => closeRecord(messageId, 'done');
@@ -180,7 +180,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             embeds: done ? msg.embeds : [EmbedBuilder.from(msg.embeds[0]).setColor(0x5865F2).setFooter({ text: `💳 Pembayaran diterima — menunggu Robux dikirim • VibeBlox Invoice` })],
             components
         });
-        if (rec.status === 'waiting') scheduleVerifPanel();
+        scheduleVerifPanel();
         return null;
     }
 
@@ -238,15 +238,21 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         if (panelBusy) { scheduleVerifPanel(); return; }
         panelBusy = true;
         try {
+            // 🟡 menunggu dicek -> ✅ sudah dibayar (tetap tampil sampai invoice di-Done / dibatalkan)
             const waiting = await InvoiceRecord.find({ status: 'waiting' }).sort({ proofAt: 1 }).lean();
-            const lines = waiting.map((r, i) => `**${i + 1}.** <#${r.channelId}> · **Rp ${fmt(r.total)}**\n└ ${r.kodeUnik ? `kode ${r.kodeUnik} · ` : ''}<@${r.buyerId}> · <t:${core.ts(r.proofAt)}:R> · [bukti](${r.proofUrl})`);
+            const paid = await InvoiceRecord.find({ status: 'paid' }).sort({ paidAt: 1 }).lean();
+            const bukti = (r) => (r.proofUrl ? ` · [bukti](${r.proofUrl})` : '');
+            const lines = [
+                ...waiting.map(r => `🟡 <#${r.channelId}> · **Rp ${fmt(r.total)}**\n└ ${r.kodeUnik ? `kode ${r.kodeUnik} · ` : ''}<@${r.buyerId}> · <t:${core.ts(r.proofAt)}:R>${bukti(r)}`),
+                ...paid.map(r => `✅ <#${r.channelId}> · **Rp ${fmt(r.total)}** · **Sudah dibayar**\n└ ${r.buyerId ? `<@${r.buyerId}> · ` : ''}dicek ${r.paidBy ? `<@${r.paidBy}> ` : ''}<t:${core.ts(r.paidAt || new Date())}:R> · tinggal kirim Robux & Done${bukti(r)}`)
+            ];
             let desc = '';
             let shown = 0;
             for (const l of lines) { if (desc.length + l.length + 2 > 3900) break; desc += (desc ? '\n\n' : '') + l; shown++; }
             if (shown < lines.length) desc += `\n…dan ${lines.length - shown} lainnya`;
             const embed = new EmbedBuilder().setColor(waiting.length ? 0xFEE75C : 0x57F287)
-                .setTitle(`🟡 Menunggu Verifikasi Pembayaran (${waiting.length})`)
-                .setDescription(desc || '✅ Tidak ada pembayaran yang menunggu verifikasi.')
+                .setTitle(`🟡 Menunggu Verifikasi (${waiting.length}) · ✅ Dibayar (${paid.length})`)
+                .setDescription(desc || '✅ Tidak ada pembayaran yang perlu dicek.')
                 .setTimestamp();
             const state = await core.getState('verif_panel');
             const ch = await client.channels.fetch(CFG.CHANNEL_VERIFIKASI).catch(() => null);
@@ -260,7 +266,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
                 const m = await ch.send({ embeds: [embed] });
                 await core.setState('verif_panel', { messageId: m.id });
             }
-            if (!waiting.length) await clearPing(ch);
+            if (!waiting.length && !paid.length) await clearPing(ch);
         } finally { panelBusy = false; }
     }
     // Semua pembayaran sudah diverifikasi -> pesan ping lama dihapus supaya tidak membingungkan
