@@ -98,7 +98,10 @@ module.exports = function createPayout(ctx, core, eligible) {
     async function computeOptions(recipients) {
         const funds = h.getPanelFunds().data;
         const out = [];
-        for (const rcp of recipients) {
+        for (const raw of recipients) {
+            // recipients dari database adalah subdokumen Mongoose: "...rcp" TIDAK membawa username/amount
+            // (itu penyebab jumlah per username tampil 0 R$) -> ambil field-nya secara eksplisit
+            const rcp = { username: String(raw.username || ''), amount: Number(raw.amount) || 0 };
             const check = await eligible.checkUsername(rcp.username, 20000);
             if (check.status !== 'ok') { out.push({ ...rcp, status: check.status }); continue; }
             const names = [check.user.name.toLowerCase(), (check.user.displayName || '').toLowerCase()].filter(Boolean);
