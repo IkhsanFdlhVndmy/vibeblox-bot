@@ -68,7 +68,12 @@ module.exports = function setupWar(ctx, core, bayar) {
     // DI DALAM kunci antrean tiket. Return pesan tolak, atau null (Robux sudah dipesan untuk tiket ini)
     async function reserve(interaction, mode) {
         if (mode && mode !== 'ketat') return null; // Normal / Pre-Order: tanpa batas stok
-        const war = await getWar();
+        let war = await getWar();
+        if (!war.active && mode === 'ketat') {
+            // mode Ketat tapi sesi War belum ada -> mulai sekarang (kalau saldo belum terbaca, tiket tetap diproses seperti biasa)
+            const r = await start().catch(() => ({}));
+            if (r.war) war = r.war;
+        }
         if (!war.active) return null;
         if (war.full) return FULL_MSG;
         let raw = '';
@@ -137,5 +142,23 @@ module.exports = function setupWar(ctx, core, bayar) {
         ];
     }
 
-    return { getWar, start, stop, quickBlock, reserve, abort, attach, onDone, onChannelDelete, panelLines, FULL_MSG };
+    // Saat bot menyala: kalau tombol Community sedang mode Ketat (War) tapi sesi War belum ada
+    // (mis. mode Ketat sudah dipasang sebelum fitur War ada) -> War dimulai otomatis begitu saldo terbaca.
+    function boot() {
+        let tries = 0;
+        const attempt = async () => {
+            tries++;
+            try {
+                const cfg = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' }).lean();
+                const war = await getWar();
+                if (cfg?.communityMode !== 'ketat' || war.active) return;
+                const r = await start();
+                if (r.error) { if (tries < 20) setTimeout(attempt, 60 * 1000); return; }
+                console.log(`[WAR] Mode Ketat aktif saat bot menyala -> War dimulai otomatis (stok awal ${fmt(r.war.capacity)}).`);
+            } catch (e) { if (tries < 20) setTimeout(attempt, 60 * 1000); }
+        };
+        setTimeout(attempt, 20 * 1000);
+    }
+
+    return { getWar, start, stop, boot, quickBlock, reserve, abort, attach, onDone, onChannelDelete, panelLines, FULL_MSG };
 };

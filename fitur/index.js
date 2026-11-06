@@ -250,6 +250,7 @@ module.exports = function setupFitur(ctx) {
             bayar.start();
             payout.start();
             ops.start(mongoose);
+            war.boot();
             const runImport = () => riwayat.runImport().catch(() => {});
             setTimeout(runImport, 60 * 1000);
             setInterval(async () => {
