@@ -201,13 +201,8 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         ).lean();
         if (!upd) return false;
         if (onWaitingCb) Promise.resolve(onWaitingCb(upd, message.channel)).catch(() => {});
-        const ch = message.channel;
-        try {
-            const inv = await ch.messages.fetch(rec.messageId);
-            if (inv?.embeds?.[0] && !/^✅/.test(inv.embeds[0].footer?.text || '')) {
-                await inv.edit({ embeds: [EmbedBuilder.from(inv.embeds[0]).setColor(0xFEE75C).setFooter({ text: '🟡 Menunggu Verifikasi Pembayaran • VibeBlox Invoice' })] });
-            }
-        } catch (e) { /* tampilan saja */ }
+        // Invoice TIDAK diubah: gambar dari pembeli belum tentu bukti bayar (bisa saja pertanyaan),
+        // jadi cukup masuk daftar di #verifikasi-pembayaran untuk dicek staf.
         return true;
     }
     async function onTicketMessage(message) {
@@ -275,23 +270,16 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         await ch.messages.delete(prev.messageId).catch(() => {});
         await core.setState('verif_ping', { messageId: null });
     }
+    // Tidak ada ping lagi: daftar di #verifikasi-pembayaran sudah diperbarui realtime.
+    // (Gambar dari pembeli belum tentu bukti bayar, jadi tidak perlu memanggil staf.)
+    // Sisa pesan ping versi lama dibersihkan sekali.
     async function flushPing() {
-        if (!newProofCount) return;
-        const n = newProofCount; newProofCount = 0;
-        try {
-            // sudah keburu diverifikasi semua sebelum ping terkirim -> tidak perlu ping
-            if (!(await InvoiceRecord.countDocuments({ status: 'waiting' }).catch(() => 1))) return;
-            const prev = await core.getState('verif_ping');
-            const ch = await client.channels.fetch(CFG.CHANNEL_VERIFIKASI).catch(() => null);
-            if (!ch) return;
-            if (prev?.messageId) await ch.messages.delete(prev.messageId).catch(() => {});
-            const m = await ch.send({ content: `${CFG.PING_ROLES.map(r => `<@&${r}>`).join(' ')} 🟡 **${n} pembayaran baru** menunggu verifikasi (lihat daftar di atas).`, allowedMentions: { roles: CFG.PING_ROLES } });
-            await core.setState('verif_ping', { messageId: m.id });
-        } catch (e) { console.error('[BAYAR] Gagal kirim ping verifikasi:', e.message); }
-    }
-    async function waitingAlarm() {
-        const old = await InvoiceRecord.find({ status: 'waiting', proofAt: { $lt: new Date(Date.now() - 15 * 60 * 1000) } }).lean().catch(() => []);
-        if (old.length) core.alarm('verif_lama', `⏰ **${old.length} pembayaran** menunggu verifikasi lebih dari 15 menit. Cek <#${CFG.CHANNEL_VERIFIKASI}>.`, 30 * 60 * 1000);
+        newProofCount = 0;
+        const prev = await core.getState('verif_ping').catch(() => null);
+        if (!prev?.messageId) return;
+        const ch = await client.channels.fetch(CFG.CHANNEL_VERIFIKASI).catch(() => null);
+        if (ch) await ch.messages.delete(prev.messageId).catch(() => {});
+        await core.setState('verif_ping', { messageId: null });
     }
 
     // Saat bot nyala: cari bukti bayar yang dikirim selama bot mati
@@ -643,8 +631,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
 
     function start() {
         setTimeout(() => { catchUpProofs().catch(() => {}); scheduleVerifPanel(); }, 25000);
-        setInterval(flushPing, 60 * 1000);
-        setInterval(() => { waitingAlarm().catch(() => {}); }, 5 * 60 * 1000);
+        setTimeout(() => { flushPing().catch(() => {}); }, 30000);
         setInterval(() => { cleanupStale().catch(() => {}); }, 30 * 60 * 1000);
     }
 
