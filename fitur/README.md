@@ -13,6 +13,7 @@ Setiap fitur punya saklar **ON/OFF** lewat `/pengaturan` (khusus Vibe Owner, ter
 | `qris.js` + `qrcode-lite.js` | Pembuat QRIS bernominal + gambar QR (tanpa library tambahan) |
 | `payout.js` | Opsi payout Community per username (community yang bisa dipakai, maks kirim, total diterima 10 hari terakhir) |
 | `gambar.js` + `assets/` | Gambar kartu "Dana Grup" (saldo asli community) di pengumuman restock READY |
+| `war.js` | War Community: stok awal saat War dimulai, Robux di form dipesan saat tiket dibuat, tolak & tutup tombol saat sisa 5.000 |
 | `operasional.js` | Tiket tanpa kabar, laporan harian/mingguan/bulanan, alarm, `/balas` |
 
 ## Command baru

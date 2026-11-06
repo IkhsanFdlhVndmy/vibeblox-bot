@@ -24,6 +24,7 @@ module.exports = {
 
     // --- STOK COMMUNITY ---
     STOCK_RESERVE: 1000,          // saldo minimal yang WAJIB tersisa di tiap community
+    WAR_STOP_REMAINING: 5000,     // War Community: tiket ditolak & tombol ditutup kalau stok tersisa tinggal segini
     STOCK_LOW: 2000,              // di bawah ini = menipis -> alarm & jangan beri invoice dari community ini
 
     // --- ASISTEN PAYOUT ---

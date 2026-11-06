@@ -76,7 +76,6 @@ module.exports = function createStok(ctx, core, riwayat) {
             summaryLines.push(`└ Kuota: \`${po.pendingKnown ? fmt(po.quota) : '…'} Robux\` · Terpakai: \`${fmt(po.used)} Robux\``);
             summaryLines.push(`└ ${po.left < 0 ? '🔴' : '🟢'} Sisa kuota PO: \`${po.pendingKnown ? fmt(po.left) : '…'} Robux\`${po.left < 0 ? ' · ⚠️ **kuota PO penuh**' : ''}`);
             summaryLines.push(`└ Estimasi masuk: ${etaText(restock)}`);
-            summaryLines.push(`-# Bisa dijual = saldo − ${fmt(CFG.STOCK_RESERVE)} (sisa wajib per community)\n-# 🔴⚠️ menipis = saldo < ${fmt(CFG.STOCK_LOW)}, jangan beri invoice dari community itu`);
         } catch (e) {
             console.error('[STOK] Gagal hitung PO untuk panel:', e.message);
         }

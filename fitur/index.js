@@ -15,6 +15,7 @@ module.exports = function setupFitur(ctx) {
     const bayar = require('./pembayaran')(ctx, core, riwayat, stok, eligible);
     const payout = require('./payout')(ctx, core, eligible);
     const ops = require('./operasional')(ctx, core, stok);
+    const war = require('./war')(ctx, core, bayar);
     // Rencana payout muncul SEBELUM Robux dikirim: saat bukti bayar masuk, atau lewat tombol di invoice
     bayar.setPlanButton((id) => payout.planButton(id));
     bayar.setOnWaiting(async (rec, channel) => {
@@ -127,7 +128,7 @@ module.exports = function setupFitur(ctx) {
     };
 
     const FX = {
-        core, riwayat, eligible, stok, bayar, payout, ops,
+        core, riwayat, eligible, stok, bayar, payout, ops, war,
         commands, owns, handleInteraction,
 
         // Transaksi
@@ -135,6 +136,7 @@ module.exports = function setupFitur(ctx) {
         abortDone: safe('abortDone', (key) => riwayat.abortDone(key)),
         afterDone: safe('afterDone', async ({ kind, channel, invoiceMessageId, type, buyerId, robux }) => {
             core.stat('transaksi_selesai');
+            if (channel?.id) war.onDone(channel.id).catch(() => {});
             if (kind === 'main') {
                 await bayar.onInvoiceDone(invoiceMessageId);
                 if (type === 'community') payout.onCommunityDone({ channel, invoiceMessageId, buyerId, robux }).catch(() => {});
@@ -147,17 +149,30 @@ module.exports = function setupFitur(ctx) {
 
         // Tiket
         beforeTicket: async (interaction, type) => {
-            try { return await eligible.beforeTicket(interaction, type); }
+            try {
+                if (type === 'community') { const full = await war.quickBlock(); if (full) return { block: full }; }
+                return await eligible.beforeTicket(interaction, type);
+            }
             catch (e) { console.error('[FITUR] Cek sebelum tiket gagal (tiket tetap dibuat):', e.message); return {}; }
         },
-        inLockCheck: async (interaction, type) => {
-            try { return await eligible.inLockCheck(interaction, type); }
-            catch (e) { console.error('[FITUR] Cek username gagal (tiket tetap dibuat):', e.message); return null; }
+        inLockCheck: async (interaction, type, gate) => {
+            let msg = null;
+            try { msg = await eligible.inLockCheck(interaction, type); }
+            catch (e) { console.error('[FITUR] Cek username gagal (tiket tetap dibuat):', e.message); }
+            if (msg) return msg;
+            // War: pesan Robux dari form (di dalam kunci -> tidak bisa rebutan melebihi kapasitas)
+            if (type === 'community') {
+                try { return await war.reserve(interaction, gate?.mode); }
+                catch (e) { console.error('[WAR] Cek kapasitas gagal:', e.message); return '❌ Sistem sedang sibuk, tiket belum dibuat. Coba kirim form lagi sebentar.'; }
+            }
+            return null;
         },
+        warAbort: safe('warAbort', (interaction) => war.abort(interaction)),
         ticketExtraFields: (interaction, type) => { try { return eligible.ticketExtraFields(interaction, type); } catch (e) { return {}; } },
         channelNameFor: (type, baseName, gate) => (type === 'community' && gate?.mode === 'preorder' ? `${baseName}-po` : baseName),
         afterTicketCreated: safe('afterTicketCreated', async ({ channel, type, interaction, gate }) => {
             core.stat('tiket_dibuka');
+            await war.attach(interaction, channel.id).catch(() => {});
             if (type === 'community') {
                 if (gate?.mode === 'preorder') await stok.postPreOrderInfo(channel);
                 await eligible.postEligibility(channel, gate);
@@ -168,6 +183,22 @@ module.exports = function setupFitur(ctx) {
 
         // /buttonticket & panel tiket
         applyButtonTicket: (config, tipe, rawStatus) => eligible.applyButtonTicket(config, tipe, rawStatus),
+        // War mulai / selesai mengikuti /buttonticket Community. Return { error } atau { info }
+        warOnButtonTicket: async (tipe, rawStatus) => {
+            if (tipe !== 'community') return {};
+            try {
+                if (rawStatus === 'ketat') {
+                    const r = await war.start();
+                    if (r.error) return r;
+                    const fmt = (n) => Number(n).toLocaleString('id-ID');
+                    return { info: r.resumed
+                        ? `\n⚔️ War dilanjutkan (pesanan sebelumnya tetap dihitung). Stok awal: **${fmt(r.war.capacity)}** Robux.`
+                        : `\n⚔️ War dimulai. Stok awal: **${fmt(r.war.capacity)}** Robux · tiket ditolak & tombol ditutup otomatis saat stok tersisa **${fmt(CFG.WAR_STOP_REMAINING)}**.` };
+                }
+                if (rawStatus !== 'disable') await war.stop(); // Normal / Pre-Order: tanpa batas stok
+            } catch (e) { console.error('[WAR] /buttonticket:', e.message); }
+            return {};
+        },
         afterButtonTicket: safe('afterButtonTicket', async (tipe, applied, panelChannelId) => {
             if (tipe === 'community') await stok.onCommunityModeChanged(applied.status ? (applied.modeLabel === 'Pre-Order' ? 'preorder' : 'normal') : 'disable', panelChannelId);
         }),
@@ -179,7 +210,10 @@ module.exports = function setupFitur(ctx) {
         panelCommunityBlock: (num, grp, val, at, p) => stok.panelCommunityBlock(num, grp, val, at, p),
         robuxFormText: (raw) => bayar.robuxFormText(raw),
         sellableFunds: (funds) => stok.sellable(funds),
-        decoratePanel: safe('decoratePanel', (summaryLines) => stok.decoratePanel(summaryLines)),
+        decoratePanel: safe('decoratePanel', async (summaryLines) => {
+            await stok.decoratePanel(summaryLines);
+            summaryLines.push(...await war.panelLines().catch(() => []));
+        }),
         onFundsUpdated: (data) => { stok.onFundsUpdated(data).catch(() => {}); },
 
         // Invoice & pembayaran
@@ -205,6 +239,7 @@ module.exports = function setupFitur(ctx) {
             if (h.TICKET_CATEGORY_IDS.includes(channel.parentId)) core.stat('tiket_ditutup');
             await bayar.onChannelDelete(channel.id);
             await payout.onChannelDelete(channel.id);
+            await war.onChannelDelete(channel.id);
         }),
         onMessageDelete: safe('onMessageDelete', (id) => bayar.onMessageDelete(id)),
 

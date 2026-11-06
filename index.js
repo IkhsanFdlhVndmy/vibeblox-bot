@@ -2586,6 +2586,30 @@ function buildRestockDoneStatusEmbed(restock) {
         .setTimestamp();
 }
 
+// War Community: stok ready SAAT INI = (saldo − sisa wajib) semua community − invoice Community ready yang masih aktif.
+// null kalau ada saldo community yang belum/gagal terbaca (supaya kapasitas War tidak salah).
+async function readyStockSnapshot() {
+    await refreshPanelFunds();
+    if (!panelFunds.at || Date.now() - panelFunds.at > 3 * 60 * 1000) return null;
+    let sellable = 0;
+    for (const num of Object.keys(RESTOCK_COMMUNITIES)) {
+        const v = panelFunds.data[num];
+        if (typeof v !== 'number' || panelFunds.failed.has(num)) return null;
+        sellable += FX ? FX.sellableFunds(v) : v;
+    }
+    const inv = await InvoiceTracker.find({}).lean();
+    const invoiced = inv.filter(i => !(FX && FX.isPOInvoice(i))).reduce((s, i) => s + (i.amount || 0), 0);
+    return { sellable, invoiced, sisa: sellable - invoiced };
+}
+// Perbarui pesan panel tiket (dipakai War saat menutup tombol Community otomatis)
+async function refreshTicketPanel() {
+    const config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
+    if (!config?.panelChannelId || !config?.panelMessageId) return;
+    const channel = await client.channels.fetch(config.panelChannelId).catch(() => null);
+    if (!channel) return;
+    await channel.messages.edit(config.panelMessageId, await renderTicketPanel());
+}
+
 // Kartu "Dana Grup" (desain owner) untuk pengumuman restock: satu baris per community lokasi restock, saldo ASLI.
 // Gambar hanya dibuat kalau saldo semua community restock berhasil diambil DAN totalnya sudah >= nominal /restock
 // (artinya Robux restock sudah benar-benar masuk). Kalau belum -> null, nanti dicoba lagi (lihat tickRestockImages).
@@ -2790,7 +2814,10 @@ async function buildPanelStockPages() {
     }
     if (anyFundsFailed || anyPendingFailed) summaryLines.push('*(Sebagian data gagal ditarik, kemungkinan sementara — akan otomatis re-sync)*');
     if (FX) await FX.decoratePanel(summaryLines); // kuota Pre-Order (dari pending) + estimasi masuk (dari /restock)
-    if (pendingLastUpdated) {
+    if (FX) {
+        // catatan dibuat 1 baris kecil supaya panel tidak penuh di HP
+        summaryLines.push(`-# Bisa dijual = saldo − 1.000 · ⚠️ saldo < 2.000${pendingLastUpdated ? ` · pending <t:${Math.floor(pendingLastUpdated.getTime() / 1000)}:R>` : ''}`);
+    } else if (pendingLastUpdated) {
         summaryLines.push(`*Pending dicek tiap 5 menit · terakhir <t:${Math.floor(pendingLastUpdated.getTime() / 1000)}:R> · refund = ${PENDING_LOOKBACK_DAYS} hari terakhir*`);
     }
 
@@ -2869,7 +2896,7 @@ async function buildPanelStockPages() {
     return pages.map((fields, idx) => {
         const embed = new EmbedBuilder().setColor(color).addFields(fields);
         if (idx === 0) embed.setTitle(PANEL_TITLE);
-        if (idx === pages.length - 1) embed.setTimestamp();
+        if (idx === pages.length - 1 && !FX) embed.setTimestamp(); // (fitur: jam update cukup di baris catatan, supaya bawah panel tidak penuh)
         return embed;
     });
 }
@@ -3134,6 +3161,76 @@ client.on('channelDelete', async (channel) => {
     }
 });
 
+// Fungsi Render Panel Ticket
+async function renderTicketPanel(channel) {
+    let config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
+    if (!config) config = new TicketConfig();
+
+    // Trik Garis Panjang agar Embed memiliki lebar (width) yang konsisten di PC, Tablet & Mobile
+    const separator = '──────────────────────────────────────────';
+
+    const embedTicket = new EmbedBuilder()
+        .setColor(0x4F4580)
+        .setTitle('🎫 VIBEBLOX - Ticket Order')
+        .setThumbnail('https://cdn.discordapp.com/attachments/1500317839507062897/1515115963928940706/iconbot.png')
+        .setDescription(`Silakan pilih kategori tiket dengan memencet tombol di bawah.👇\n`)
+        // MENGGUNAKAN ADDFIELDS AGAR SPASI RAPIH DAN TIDAK MELEBAR
+        .addFields(
+            { name: '💎 Robux Community', value: 'Top up robux cepat melalui sistem Payout Community.', inline: false },
+            { name: '🏷️ Robux Send Plus', value: 'Robux masuk secara instant tanpa pending via Roblox Plus.', inline: false },
+            { name: '💳 Robux Vilog', value: 'Top up Robux instant melalui metode login akun (100% Aman).', inline: false },
+            { name: '💰 Robux Gamepass', value: 'Sistem After Tax (Terima Bersih). Robux cair setelah 5 Hari.', inline: false },
+            { name: '🎁 Gift In-Game', value: 'Gift semua item atau gamepass di semua map Roblox.', inline: false },
+            { name: '👑 Limited Item', value: 'Pembelian item Limited Roblox.', inline: false },
+            { name: '💼 Middleman', value: 'Jasa perantara (Rekber) aman untuk segala transaksi.', inline: false }
+        )
+        .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1521628896938819805/server_banner.png?ex=6a4586d7&is=6a443557&hm=77ec74c8c32de11eae99a2b8baf14fc2b02da44c73b7581f36e478b0ff04be20&')
+        .setFooter({ text: 'Made by VibeBlox' });
+
+    // Array tombol dinamis
+    const allButtons = [
+        { id: 'community', label: '💎 Robux Community' },
+        { id: 'robux_plus', label: '🏷️ Robux Send' },
+        { id: 'vilog', label: '💳 Robux Vilog' },
+        { id: 'gamepass', label: '💰 Robux Gamepass' },
+        { id: 'gig', label: '🎁 Gift In-Game' },
+        { id: 'limited', label: '👑 Limited Item' },
+        { id: 'mm', label: '💼 Middleman' }
+    ];
+
+    // Pisahkan tombol enable dan disable untuk disorting (Kiri Aktif, Kanan Mati)
+    const enabledButtons = [];
+    const disabledButtons = [];
+
+    for (const b of allButtons) {
+        const isEnabled = config.buttonStates.get(b.id) !== false; // Default true
+
+        // Set Warna Dinamis: Hijau (Success) jika Aktif, Merah (Danger) jika Mati
+        const btn = new ButtonBuilder()
+            .setCustomId(`tc_${b.id}`)
+            .setLabel(FX ? FX.panelLabel(b.id, b.label, config) : b.label)
+            .setStyle(isEnabled ? ButtonStyle.Success : ButtonStyle.Primary)
+            .setDisabled(!isEnabled);
+
+        if (isEnabled) {
+            enabledButtons.push(btn);
+        } else {
+            disabledButtons.push(btn);
+        }
+    }
+
+    const sortedButtons = [...enabledButtons, ...disabledButtons];
+    const components = [];
+    
+    // Memecah menjadi max 5 tombol per baris (Aturan batas Discord)
+    for (let i = 0; i < sortedButtons.length; i += 5) {
+        components.push(new ActionRowBuilder().addComponents(sortedButtons.slice(i, i + 5)));
+    }
+    if (FX) components.push(...FX.extraPanelRows(config)); // tombol "Ingatkan saya" saat Community ditutup
+
+    return { embeds: [embedTicket], components };
+}
+
 client.on('interactionCreate', async (interaction) => {
     if (FX?.owns(interaction)) return; // command/tombol fitur baru ditangani di fitur/index.js
 // =========================================================================
@@ -3141,74 +3238,7 @@ client.on('interactionCreate', async (interaction) => {
     // =========================================================================
 
     // Fungsi Render Panel Ticket
-    const renderTicketPanel = async (channel) => {
-        let config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
-        if (!config) config = new TicketConfig();
-
-        // Trik Garis Panjang agar Embed memiliki lebar (width) yang konsisten di PC, Tablet & Mobile
-        const separator = '──────────────────────────────────────────';
-
-        const embedTicket = new EmbedBuilder()
-            .setColor(0x4F4580)
-            .setTitle('🎫 VIBEBLOX - Ticket Order')
-            .setThumbnail('https://cdn.discordapp.com/attachments/1500317839507062897/1515115963928940706/iconbot.png')
-            .setDescription(`Silakan pilih kategori tiket dengan memencet tombol di bawah.👇\n`)
-            // MENGGUNAKAN ADDFIELDS AGAR SPASI RAPIH DAN TIDAK MELEBAR
-            .addFields(
-                { name: '💎 Robux Community', value: 'Top up robux cepat melalui sistem Payout Community.', inline: false },
-                { name: '🏷️ Robux Send Plus', value: 'Robux masuk secara instant tanpa pending via Roblox Plus.', inline: false },
-                { name: '💳 Robux Vilog', value: 'Top up Robux instant melalui metode login akun (100% Aman).', inline: false },
-                { name: '💰 Robux Gamepass', value: 'Sistem After Tax (Terima Bersih). Robux cair setelah 5 Hari.', inline: false },
-                { name: '🎁 Gift In-Game', value: 'Gift semua item atau gamepass di semua map Roblox.', inline: false },
-                { name: '👑 Limited Item', value: 'Pembelian item Limited Roblox.', inline: false },
-                { name: '💼 Middleman', value: 'Jasa perantara (Rekber) aman untuk segala transaksi.', inline: false }
-            )
-            .setImage('https://cdn.discordapp.com/attachments/1500317839507062897/1521628896938819805/server_banner.png?ex=6a4586d7&is=6a443557&hm=77ec74c8c32de11eae99a2b8baf14fc2b02da44c73b7581f36e478b0ff04be20&')
-            .setFooter({ text: 'Made by VibeBlox' });
-
-        // Array tombol dinamis
-        const allButtons = [
-            { id: 'community', label: '💎 Robux Community' },
-            { id: 'robux_plus', label: '🏷️ Robux Send' },
-            { id: 'vilog', label: '💳 Robux Vilog' },
-            { id: 'gamepass', label: '💰 Robux Gamepass' },
-            { id: 'gig', label: '🎁 Gift In-Game' },
-            { id: 'limited', label: '👑 Limited Item' },
-            { id: 'mm', label: '💼 Middleman' }
-        ];
-
-        // Pisahkan tombol enable dan disable untuk disorting (Kiri Aktif, Kanan Mati)
-        const enabledButtons = [];
-        const disabledButtons = [];
-
-        for (const b of allButtons) {
-            const isEnabled = config.buttonStates.get(b.id) !== false; // Default true
-
-            // Set Warna Dinamis: Hijau (Success) jika Aktif, Merah (Danger) jika Mati
-            const btn = new ButtonBuilder()
-                .setCustomId(`tc_${b.id}`)
-                .setLabel(FX ? FX.panelLabel(b.id, b.label, config) : b.label)
-                .setStyle(isEnabled ? ButtonStyle.Success : ButtonStyle.Primary)
-                .setDisabled(!isEnabled);
-
-            if (isEnabled) {
-                enabledButtons.push(btn);
-            } else {
-                disabledButtons.push(btn);
-            }
-        }
-
-        const sortedButtons = [...enabledButtons, ...disabledButtons];
-        const components = [];
-        
-        // Memecah menjadi max 5 tombol per baris (Aturan batas Discord)
-        for (let i = 0; i < sortedButtons.length; i += 5) {
-            components.push(new ActionRowBuilder().addComponents(sortedButtons.slice(i, i + 5)));
-        }
-        if (FX) components.push(...FX.extraPanelRows(config)); // tombol "Ingatkan saya" saat Community ditutup
-
-        return { embeds: [embedTicket], components };
-    };
+    // (renderTicketPanel dipindah ke luar listener supaya bisa dipakai fitur War — isinya sama persis)
 
 // --- SLASH COMMAND: /ticket ---
     if (interaction.isChatInputCommand() && interaction.commandName === 'ticket') {
@@ -3249,6 +3279,9 @@ client.on('interactionCreate', async (interaction) => {
         // Community punya mode Normal / Ketat (War) / Pre-Order (lihat fitur/eligible.js)
         const applied = FX ? FX.applyButtonTicket(config, tipe, rawStatus) : { status: rawStatus === 'enable' };
         if (applied.error) return interaction.editReply(applied.error);
+        // War Community: catat stok awal saat mulai (ditolak kalau saldo belum terbaca), selesai saat pindah mode
+        const warRes = FX ? await FX.warOnButtonTicket(tipe, rawStatus) : {};
+        if (warRes?.error) return interaction.editReply(warRes.error);
         const status = applied.status;
         
         // Update status di database
@@ -3279,7 +3312,7 @@ client.on('interactionCreate', async (interaction) => {
             updateMsg = `✅ Button **${tipe}** di-${status ? 'Enable' : 'Disable'} (Belum ada panel tiket aktif yang didaftarkan. Silakan jalankan /ticket).`;
         }
 
-        return interaction.editReply(updateMsg);
+        return interaction.editReply(updateMsg + (warRes?.info || ''));
     }
 
     // --- BUTTON PANEL TICKET -> MODAL ---
@@ -3447,7 +3480,7 @@ client.on('interactionCreate', async (interaction) => {
             // supaya proses auto-geser tidak pernah melihat channel baru yang belum tercatat di DB
             const ticketChannel = await withTicketLock(async () => {
                 // Cek ulang DI DALAM kunci: 2 form dengan username sama yang masuk bersamaan tidak bisa lolos dua-duanya
-                const fxTaken = FX ? await FX.inLockCheck(interaction, type) : null;
+                const fxTaken = FX ? await FX.inLockCheck(interaction, type, fxGate) : null;
                 if (fxTaken) return { fxBlock: fxTaken };
                 const activeCategoryId = await pickTicketCategory(interaction.guild);
                 if (!activeCategoryId) return null; // semua kategori penuh
@@ -3477,6 +3510,7 @@ client.on('interactionCreate', async (interaction) => {
 
             if (ticketChannel?.fxBlock) return interaction.editReply({ content: ticketChannel.fxBlock });
             if (!ticketChannel) {
+                if (FX) await FX.warAbort(interaction); // War: pesanan Robux dikembalikan
                 return interaction.editReply('❌ Semua kategori tiket sedang penuh. Silakan coba lagi beberapa saat lagi.');
             }
 
@@ -3550,6 +3584,7 @@ client.on('interactionCreate', async (interaction) => {
 
         } catch (e) {
             console.error(e);
+            if (FX) await FX.warAbort(interaction); // War: pesanan Robux dikembalikan kalau tiket gagal dibuat
             return interaction.editReply('❌ Tiket Sudah ditutup😂!');
         }
     }
@@ -5483,7 +5518,8 @@ FX = setupFitur({
     h: {
         axios, discordRetry, rbxRun, rbxIsPaused, RESTOCK_COMMUNITIES, TICKET_CATEGORY_IDS,
         getPanelFunds: () => panelFunds, getPendingCache: () => pendingCache,
-        schedulePanelStockUpdate, autoCloseDisarm, acWithLock, acIsInvoiceMessage, closeTicketWithTranscript, buildRestockPendingEmbed
+        schedulePanelStockUpdate, autoCloseDisarm, acWithLock, acIsInvoiceMessage, closeTicketWithTranscript, buildRestockPendingEmbed,
+        readyStockSnapshot, refreshTicketPanel
     }
 });
 client.on('interactionCreate', (interaction) => { if (FX.owns(interaction)) FX.handleInteraction(interaction); });
