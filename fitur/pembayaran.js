@@ -244,7 +244,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             const bukti = (r) => (r.proofUrl ? ` · [bukti](${r.proofUrl})` : '');
             const lines = [
                 ...waiting.map(r => `🟡 <#${r.channelId}> · **Rp ${fmt(r.total)}**\n└ ${r.kodeUnik ? `kode ${r.kodeUnik} · ` : ''}<@${r.buyerId}> · <t:${core.ts(r.proofAt)}:R>${bukti(r)}`),
-                ...paid.map(r => `✅ <#${r.channelId}> · **Rp ${fmt(r.total)}** · **Sudah dibayar**\n└ ${r.buyerId ? `<@${r.buyerId}> · ` : ''}dicek ${r.paidBy ? `<@${r.paidBy}> ` : ''}<t:${core.ts(r.paidAt || new Date())}:R> · tinggal kirim Robux & Done${bukti(r)}`)
+                ...paid.map(r => `✅ <#${r.channelId}> · **Rp ${fmt(r.total)}** · **Dibayar**\n└ ${r.buyerId ? `<@${r.buyerId}> · ` : ''}<t:${core.ts(r.paidAt || new Date())}:R>`)
             ];
             let desc = '';
             let shown = 0;
