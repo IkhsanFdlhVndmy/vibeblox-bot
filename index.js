@@ -5519,7 +5519,8 @@ FX = setupFitur({
         axios, discordRetry, rbxRun, rbxIsPaused, RESTOCK_COMMUNITIES, TICKET_CATEGORY_IDS,
         getPanelFunds: () => panelFunds, getPendingCache: () => pendingCache,
         schedulePanelStockUpdate, autoCloseDisarm, acWithLock, acIsInvoiceMessage, closeTicketWithTranscript, buildRestockPendingEmbed,
-        readyStockSnapshot, refreshTicketPanel
+        readyStockSnapshot, refreshTicketPanel,
+        hasActiveInvoice: async (channelId) => !!(await InvoiceTracker.findOne({ channelId }).lean().catch(() => null))
     }
 });
 client.on('interactionCreate', (interaction) => { if (FX.owns(interaction)) FX.handleInteraction(interaction); });

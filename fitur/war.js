@@ -34,6 +34,18 @@ module.exports = function setupWar(ctx, core, bayar) {
         const snap = await h.readyStockSnapshot();
         if (!snap) return { error: '❌ Saldo community belum bisa dibaca dari Roblox, jadi kapasitas War tidak bisa dihitung. Coba lagi sebentar.' };
         const war = { active: true, session: Date.now(), capacity: snap.sisa, full: false };
+        // Tiket War sebelumnya yang MASIH BUKA & BELUM ada invoice-nya: Robux-nya masih dijanjikan ke pembeli,
+        // tapi belum masuk "ter-invoice" -> ikut dihitung di War baru supaya tidak oversell.
+        // (Yang sudah ada invoice-nya sudah terpotong lewat ter-invoice; yang sudah Done saldonya sudah berkurang.)
+        const old = await WarReservation.find({ released: false, done: false, channelId: { $ne: null } }).lean();
+        let carried = 0;
+        for (const r of old) {
+            if (!client.channels.cache.get(r.channelId)) continue;
+            if (await h.hasActiveInvoice(r.channelId)) continue;
+            await WarReservation.updateOne({ _id: r._id }, { $set: { session: war.session } });
+            carried++;
+        }
+        war.carried = carried;
         await core.setState('war', war);
         h.schedulePanelStockUpdate();
         return { war };

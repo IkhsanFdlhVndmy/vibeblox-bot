@@ -193,7 +193,7 @@ module.exports = function setupFitur(ctx) {
                     const fmt = (n) => Number(n).toLocaleString('id-ID');
                     return { info: r.resumed
                         ? `\n⚔️ War dilanjutkan (pesanan sebelumnya tetap dihitung). Stok awal: **${fmt(r.war.capacity)}** Robux.`
-                        : `\n⚔️ War dimulai. Stok awal: **${fmt(r.war.capacity)}** Robux · tiket ditolak & tombol ditutup otomatis saat stok tersisa **${fmt(CFG.WAR_STOP_REMAINING)}**.` };
+                        : `\n⚔️ War dimulai. Stok awal: **${fmt(r.war.capacity)}** Robux · tiket ditolak & tombol ditutup otomatis saat stok tersisa **${fmt(CFG.WAR_STOP_REMAINING)}**.${r.war.carried ? `\n-# ${r.war.carried} tiket War sebelumnya yang belum ada invoice-nya ikut dihitung.` : ''}` };
                 }
                 if (rawStatus !== 'disable') await war.stop(); // Normal / Pre-Order: tanpa batas stok
             } catch (e) { console.error('[WAR] /buttonticket:', e.message); }
