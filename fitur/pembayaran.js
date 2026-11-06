@@ -430,10 +430,16 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
     }
 
     // Membuat invoice dari draft (SAMA dengan /invoice: tampilan, tombol, panel stock, tag pembeli)
+    // Invoice dikirim SEKALI JALAN (embed + tombol bersamaan) lewat balasan interaksi yang sudah di-defer,
+    // sama seperti /invoice -> tombol tidak telat / hilang karena menunggu edit.
     async function createInvoiceFromDraft(interaction, draft) {
         const channel = interaction.channel;
         const p = await priceFor(draft.type, draft.robux, draft.customTotal);
         if (p.error) return { error: p.error };
+        let msgId;
+        try { msgId = (await h.discordRetry(() => interaction.fetchReply())).id; }
+        catch (e) { return { error: 'Gangguan koneksi Discord, invoice dibatalkan. Coba lagi.' }; }
+        const msg = { id: msgId };
         if (channel.name.endsWith('-done')) channel.setName(channel.name.replace('-done', '')).catch(() => {});
 
         const embed = new EmbedBuilder().setColor(0xFF0000).setTitle('🧾 Invoice VibeBlox')
@@ -447,7 +453,6 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             .setFooter({ text: '⏳ Belum Selesai • VibeBlox Invoice' })
             .setTimestamp();
 
-        const msg = await h.discordRetry(() => channel.send({ embeds: [embed] }));
         const pay = await prepareInvoice({ messageId: msg.id, channel, buyerId: draft.buyerId, type: draft.type, robux: draft.robux, price: p.price });
         applyKodeToEmbed(embed, p.price, pay.kode);
         const row1 = new ActionRowBuilder().addComponents(
@@ -463,9 +468,8 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             ...(draft.type === 'community' && planButtonFn ? [planButtonFn(msg.id)] : [])
         );
         try {
-            await h.discordRetry(() => msg.edit({ embeds: [embed], components: [row1, row2] }));
+            await h.discordRetry(() => interaction.editReply({ content: null, embeds: [embed], components: [row1, row2] }));
         } catch (e) {
-            await msg.delete().catch(() => {});
             await closeRecord(msg.id, 'cancelled');
             return { error: 'Gangguan koneksi Discord, invoice dibatalkan. Coba lagi.' };
         }
@@ -499,16 +503,18 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Hanya Owner dan Handler yang bisa membuat invoice.', flags: MessageFlags.Ephemeral });
             const claimed = await InvoiceDraft.findOneAndUpdate({ channelId, used: false }, { $set: { used: true, usedBy: interaction.user.id } }, { returnDocument: 'after' }).lean();
             if (!claimed) return interaction.reply({ content: '✅ Invoice sudah dibuat oleh staf lain.', flags: MessageFlags.Ephemeral });
-            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            await interaction.deferReply(); // balasan ini nanti BERUBAH menjadi invoice-nya (sekali kirim, langsung bertombol)
             let res;
             try { res = await createInvoiceFromDraft(interaction, claimed); }
             catch (e) { res = { error: e.message }; }
             if (res.error) {
                 await InvoiceDraft.updateOne({ channelId }, { $set: { used: false, usedBy: null } });
-                return interaction.editReply({ content: `❌ ${res.error}` });
+                await interaction.deleteReply().catch(() => {});
+                return interaction.followUp({ content: `❌ ${res.error}`, flags: MessageFlags.Ephemeral }).catch(() => {});
             }
             await refreshDraftMessage(claimed, interaction.channel);
-            return interaction.editReply({ content: `✅ Invoice dibuat.${res.warning ? `\n\n${res.warning}` : ''}` });
+            if (res.warning) interaction.followUp({ content: res.warning, flags: MessageFlags.Ephemeral }).catch(() => {});
+            return;
         }
         if (action === 'edit') {
             if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Khusus Owner dan Handler.', flags: MessageFlags.Ephemeral });
