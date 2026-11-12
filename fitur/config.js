@@ -24,6 +24,7 @@ module.exports = {
 
     // --- STOK COMMUNITY ---
     STOCK_RESERVE: 1000,          // saldo minimal yang WAJIB tersisa di tiap community
+    ELIGIBLE_FRESH_WAIT_MS: 6000, // cek eligible: maks menunggu daftar join diperbarui (yang baru join) sebelum 'sedang dimuat'
     WAR_STOP_REMAINING: 5000,
     WAR_MAX_ORDER: 100000,        // War Community: form di atas ini dianggap salah ketik & ditolak (mode lain tanpa batas)
     WAR_RESUME_HOURS: 6,          // /buttonticket War dalam X jam sejak War terakhir dimulai = lanjut; lebih lama = War BARU     // War Community: tiket ditolak & tombol ditutup kalau stok tersisa tinggal segini

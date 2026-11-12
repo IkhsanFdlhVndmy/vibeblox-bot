@@ -5,6 +5,7 @@
 // lewat antrean prioritas rendah). Cek per username cukup pakai API PUBLIK (tanpa akun dummy) + daftar itu.
 // -> 100 tiket bersamaan TIDAK menambah beban akun dummy sama sekali.
 const { EmbedBuilder } = require('discord.js');
+const CFG = require('./config');
 
 const JOIN_WINDOW_MS = 16 * 24 * 60 * 60 * 1000;   // simpan join 16 hari terakhir (syarat 14 hari + cadangan)
 const ELIGIBLE_MS = 14 * 24 * 60 * 60 * 1000;
@@ -29,10 +30,10 @@ module.exports = function createEligible(ctx, core) {
         return id != null ? String(id) : null;
     }
 
-    async function fetchJoinPage(groupId, cursor) {
+    async function fetchJoinPage(groupId, cursor, prio = 'low') {
         return h.rbxRun({
-            priority: 'low',
-            gapAfter: 700,
+            priority: prio,
+            gapAfter: prio === 'high' ? 300 : 700,
             run: async () => {
                 if (h.rbxIsPaused()) throw new Error('RBX_PAUSED');
                 const url = `https://groups.roblox.com/v1/groups/${groupId}/audit-log?actionType=JoinGroup&limit=100&sortOrder=Desc${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`;
@@ -42,7 +43,7 @@ module.exports = function createEligible(ctx, core) {
         });
     }
 
-    async function refreshCommunity(num) {
+    async function refreshCommunity(num, prio = 'low') {
         const grp = h.RESTOCK_COMMUNITIES[num];
         const c = caches[num];
         const full = !c.ready;
@@ -53,7 +54,7 @@ module.exports = function createEligible(ctx, core) {
         let cursor = '';
         let complete = false;
         for (let page = 0; page < maxPages; page++) {
-            const data = await fetchJoinPage(grp.groupId, cursor);
+            const data = await fetchJoinPage(grp.groupId, cursor, prio);
             const entries = Array.isArray(data.data) ? data.data : [];
             if (!sampleLogged && entries.length) {
                 sampleLogged = true;
@@ -94,20 +95,23 @@ module.exports = function createEligible(ctx, core) {
 
     // Satu refresh per community dalam satu waktu (dipakai jadwal rutin & cek on-demand)
     const inflight = {};
-    function refreshOne(num) {
-        if (!inflight[num]) inflight[num] = refreshCommunity(num).finally(() => { inflight[num] = null; });
+    function refreshOne(num, prio = 'low') {
+        if (!inflight[num]) inflight[num] = refreshCommunity(num, prio).finally(() => { inflight[num] = null; });
         return inflight[num];
     }
     // Username ADA di grup tapi TIDAK ada di daftar join 16 hari -> bisa jadi dia baru join SETELAH daftar terakhir
     // diperbarui. Ambil join terbaru dulu (biasanya 1 halaman) sebelum menganggapnya "lama / eligible".
     // Return true kalau daftar benar-benar segar (diperbarui setelah pengecekan ini dimulai / < 15 detik lalu).
     const FRESH_MS = 15 * 1000;
-    async function ensureFresh(num, waitMs = 8000) {
+    // PENTING: jangan dipanggil dari DALAM pekerjaan antrean akun dummy (mis. /cek-eligible) —
+    // pembaruan ini ikut antrean yang sama, jadi baru jalan setelah pekerjaan itu selesai (macet sampai waktu habis).
+    // Pembaruan memakai prioritas tinggi (1 halaman terbaru, cepat) dan dibagi bersama oleh semua yang menunggu.
+    async function ensureFresh(num, waitMs = CFG.ELIGIBLE_FRESH_WAIT_MS || 6000) {
         const c = caches[num];
         if (!c?.ready) return false;
         if (Date.now() - c.lastOk < FRESH_MS) return true;
         const startedAt = Date.now();
-        await Promise.race([refreshOne(num).catch(() => {}), new Promise(r => setTimeout(r, waitMs))]);
+        await Promise.race([refreshOne(num, 'high').catch(() => {}), new Promise(r => setTimeout(r, waitMs))]);
         return c.ready && c.lastOk >= startedAt;
     }
 
@@ -144,8 +148,10 @@ module.exports = function createEligible(ctx, core) {
         if (!c || !c.ready) return null;
         const hit = c.map.get(String(userId));
         if (hit) return { joinMs: hit };
-        if (!(await ensureFresh(num))) return null;
-        return { joinMs: c.map.get(String(userId)) || null };
+        // Daftar baru diperbarui < 15 dtk lalu -> pasti bukan baru join. Kalau lebih lama: null ->
+        // /cek-eligible langsung tanya audit log khusus orang ini (1 panggilan, di pekerjaan yang sama, tanpa menunggu).
+        if (Date.now() - c.lastOk < FRESH_MS) return { joinMs: null };
+        return null;
     }
 
     // ---------------- API publik (tanpa akun dummy) dengan pembatas kecepatan ----------------
@@ -201,19 +207,21 @@ module.exports = function createEligible(ctx, core) {
             const user = await resolveUser(username);
             if (!user) return { status: 'notfound', username };
             const groups = await userGroups(user.id);
+            // Member tapi tidak ada di daftar join -> perbarui daftar community itu, SEMUA SEKALIGUS (bukan satu-satu)
+            const need = Object.entries(h.RESTOCK_COMMUNITIES)
+                .filter(([num, grp]) => groups.has(String(grp.groupId)) && caches[num].ready && !caches[num].map.get(user.id))
+                .map(([num]) => num);
+            const fresh = {};
+            await Promise.all(need.map(async (num) => { fresh[num] = await ensureFresh(num); }));
             const rows = [];
             for (const [num, grp] of Object.entries(h.RESTOCK_COMMUNITIES)) {
                 let st, eligibleAt = null;
                 if (!groups.has(String(grp.groupId))) st = 'notjoin';
                 else if (!caches[num].ready) st = 'unknown';
                 else {
-                    let j = caches[num].map.get(user.id);
-                    if (!j) {
-                        // tidak ada di daftar join 16 hari: pastikan bukan karena baru join (daftar belum diperbarui)
-                        const fresh = await ensureFresh(num);
-                        j = caches[num].map.get(user.id);
-                        if (!j && !fresh) { rows.push({ num, name: grp.name, status: 'unknown', eligibleAt: null }); continue; }
-                    }
+                    const j = caches[num].map.get(user.id);
+                    // tidak ada di daftar & daftar gagal diperbarui -> bisa jadi baru join: jangan dianggap eligible
+                    if (!j && need.includes(num) && !fresh[num]) { rows.push({ num, name: grp.name, status: 'unknown', eligibleAt: null }); continue; }
                     if (j && j + ELIGIBLE_MS > Date.now()) { st = 'pending'; eligibleAt = j + ELIGIBLE_MS; }
                     else st = 'eligible';
                 }
