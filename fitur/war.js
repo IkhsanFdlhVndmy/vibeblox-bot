@@ -15,6 +15,7 @@ module.exports = function setupWar(ctx, core, bayar) {
     const fmt = (n) => Number(n || 0).toLocaleString('id-ID');
     const FULL_MSG = '❌ **Tidak bisa open ticket karena sudah melebihi kapasitas stock.**\nPantau pengumuman restock berikutnya ya!';
 
+    let startingInBg = false;
     async function getWar() { return (await core.getState('war')) || { active: false }; }
 
     async function totals(session) {
@@ -37,11 +38,16 @@ module.exports = function setupWar(ctx, core, bayar) {
         // Tiket War sebelumnya yang MASIH BUKA & BELUM ada invoice-nya: Robux-nya masih dijanjikan ke pembeli,
         // tapi belum masuk "ter-invoice" -> ikut dihitung di War baru supaya tidak oversell.
         // (Yang sudah ada invoice-nya sudah terpotong lewat ter-invoice; yang sudah Done saldonya sudah berkurang.)
-        const old = await WarReservation.find({ released: false, done: false, channelId: { $ne: null } }).lean();
+        const old = await WarReservation.find({ released: false, done: false }).lean();
         let carried = 0;
         for (const r of old) {
-            if (!client.channels.cache.get(r.channelId)) continue;
-            if (await h.hasActiveInvoice(r.channelId)) continue;
+            if (!r.channelId) {
+                // form yang masuk saat War sedang dimulai (sesi 0), tiketnya baru saja dibuat -> ikut dihitung
+                if (r.session !== 0) continue;
+            } else {
+                if (!client.channels.cache.get(r.channelId)) continue;
+                if (await h.hasActiveInvoice(r.channelId)) continue;
+            }
             await WarReservation.updateOne({ _id: r._id }, { $set: { session: war.session } });
             carried++;
         }
@@ -59,22 +65,40 @@ module.exports = function setupWar(ctx, core, bayar) {
 
     const limitOf = (war) => war.capacity - CFG.WAR_STOP_REMAINING;
 
-    // Sebelum kunci (jawaban cepat untuk yang telat saat sudah penuh)
-    async function quickBlock() {
+    // Sebelum masuk antrean: tolak LANGSUNG kalau sudah penuh / jumlah di form pasti tidak muat
+    // (tanpa menunggu antrean). Pemesanan sebenarnya tetap dicek ulang di dalam antrean.
+    async function quickBlock(interaction) {
         const war = await getWar();
-        return war.active && war.full ? FULL_MSG : null;
+        if (!war.active) return null;
+        if (war.full) return FULL_MSG;
+        let robux = 0;
+        try { robux = bayar.parseRobux(interaction.fields.getTextInputValue('jml_robux')); } catch (e) { return null; }
+        if (!robux) return null;
+        const left = limitOf(war) - (await totals(war.session)).robux;
+        return robux > left ? FULL_MSG : null;
     }
 
     // DI DALAM kunci antrean tiket. Return pesan tolak, atau null (Robux sudah dipesan untuk tiket ini)
     async function reserve(interaction, mode) {
         if (mode && mode !== 'ketat') return null; // Normal / Pre-Order: tanpa batas stok
-        let war = await getWar();
-        if (!war.active && mode === 'ketat') {
-            // mode Ketat tapi sesi War belum ada -> mulai sekarang (kalau saldo belum terbaca, tiket tetap diproses seperti biasa)
-            const r = await start().catch(() => ({}));
-            if (r.war) war = r.war;
+        const war = await getWar();
+        if (!war.active) {
+            if (mode !== 'ketat') return null;
+            // mode Ketat tapi sesi War belum ada -> mulai DI BELAKANG (baca saldo Roblox tidak boleh menahan antrean tiket).
+            // Pesanan form ini tetap dicatat (sesi 0) dan otomatis ikut dihitung begitu War berjalan.
+            let raw0 = '';
+            try { raw0 = interaction.fields.getTextInputValue('jml_robux'); } catch (e) {}
+            const r0 = bayar.parseRobux(raw0);
+            if (r0) {
+                await WarReservation.create({ key: interaction.id, session: 0, userId: interaction.user.id, robux: r0 });
+                interaction.__warKey = interaction.id;
+            }
+            if (!startingInBg) {
+                startingInBg = true;
+                start().catch(() => {}).finally(() => { startingInBg = false; });
+            }
+            return null;
         }
-        if (!war.active) return null;
         if (war.full) return FULL_MSG;
         let raw = '';
         try { raw = interaction.fields.getTextInputValue('jml_robux'); } catch (e) { return null; }

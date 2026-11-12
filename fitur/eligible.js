@@ -92,12 +92,31 @@ module.exports = function createEligible(ctx, core) {
         c.ready = true;
     }
 
+    // Satu refresh per community dalam satu waktu (dipakai jadwal rutin & cek on-demand)
+    const inflight = {};
+    function refreshOne(num) {
+        if (!inflight[num]) inflight[num] = refreshCommunity(num).finally(() => { inflight[num] = null; });
+        return inflight[num];
+    }
+    // Username ADA di grup tapi TIDAK ada di daftar join 16 hari -> bisa jadi dia baru join SETELAH daftar terakhir
+    // diperbarui. Ambil join terbaru dulu (biasanya 1 halaman) sebelum menganggapnya "lama / eligible".
+    // Return true kalau daftar benar-benar segar (diperbarui setelah pengecekan ini dimulai / < 15 detik lalu).
+    const FRESH_MS = 15 * 1000;
+    async function ensureFresh(num, waitMs = 8000) {
+        const c = caches[num];
+        if (!c?.ready) return false;
+        if (Date.now() - c.lastOk < FRESH_MS) return true;
+        const startedAt = Date.now();
+        await Promise.race([refreshOne(num).catch(() => {}), new Promise(r => setTimeout(r, waitMs))]);
+        return c.ready && c.lastOk >= startedAt;
+    }
+
     async function refreshAll() {
         if (refreshing || !client.isReady()) return;
         refreshing = true;
         try {
             for (const num of Object.keys(caches)) {
-                try { await refreshCommunity(num); }
+                try { await refreshOne(num); }
                 catch (e) {
                     const st = e.response?.status;
                     if (e.message !== 'RBX_PAUSED') console.error(`[ELIGIBLE] Gagal refresh join Community ${num}:`, st || e.message);
@@ -115,6 +134,17 @@ module.exports = function createEligible(ctx, core) {
         const num = Object.keys(h.RESTOCK_COMMUNITIES).find(n => String(h.RESTOCK_COMMUNITIES[n].groupId) === String(groupId));
         const c = num && caches[num];
         if (!c || !c.ready) return null;
+        return { joinMs: c.map.get(String(userId)) || null };
+    }
+    // Versi aman untuk /cek-eligible: kalau tidak ada di daftar, perbarui daftar dulu.
+    // null = daftar tidak bisa dipastikan segar -> /cek-eligible memakai cara lama (tanya audit log per orang).
+    async function cachedJoinFresh(groupId, userId) {
+        const num = Object.keys(h.RESTOCK_COMMUNITIES).find(n => String(h.RESTOCK_COMMUNITIES[n].groupId) === String(groupId));
+        const c = num && caches[num];
+        if (!c || !c.ready) return null;
+        const hit = c.map.get(String(userId));
+        if (hit) return { joinMs: hit };
+        if (!(await ensureFresh(num))) return null;
         return { joinMs: c.map.get(String(userId)) || null };
     }
 
@@ -177,7 +207,13 @@ module.exports = function createEligible(ctx, core) {
                 if (!groups.has(String(grp.groupId))) st = 'notjoin';
                 else if (!caches[num].ready) st = 'unknown';
                 else {
-                    const j = caches[num].map.get(user.id);
+                    let j = caches[num].map.get(user.id);
+                    if (!j) {
+                        // tidak ada di daftar join 16 hari: pastikan bukan karena baru join (daftar belum diperbarui)
+                        const fresh = await ensureFresh(num);
+                        j = caches[num].map.get(user.id);
+                        if (!j && !fresh) { rows.push({ num, name: grp.name, status: 'unknown', eligibleAt: null }); continue; }
+                    }
                     if (j && j + ELIGIBLE_MS > Date.now()) { st = 'pending'; eligibleAt = j + ELIGIBLE_MS; }
                     else st = 'eligible';
                 }
@@ -261,16 +297,8 @@ module.exports = function createEligible(ctx, core) {
             const existing = await Ticket.findOne({ ticketType: 'community', robloxUsername: norm(username) }).lean().catch(() => null);
             if (existing) return { block: `❌ Username Roblox **\`${username}\`** masih punya tiket Community aktif: <#${existing.channelId}>.\nSelesaikan tiket itu dulu, atau gunakan username lain.` };
         }
-        if (core.isOn('eligible_tiket') && username) {
-            const result = await checkUsername(username);
-            out.result = result;
-            if (mode === 'ketat') {
-                if (result.status === 'notfound') return { block: `❌ **Tiket tidak dibuat.** Username **\`${username}\`** tidak ditemukan di Roblox. Pastikan kamu menulis **username** (bukan display name).` };
-                if (result.status === 'ok' && result.allKnown && !result.anyEligible) {
-                    return { block: `❌ **Tiket tidak dibuat — username belum eligible.**\n\n${result.rows.map(rowText).join('\n')}\n\nSyarat: sudah join minimal **14 hari** di salah satu community. Cek kapan saja dengan /cek-eligible.` };
-                }
-            }
-        }
+        // Cek eligible TIDAK dilakukan di sini lagi (Roblox lambat saat war -> antrean "thinking" lama).
+        // Tiket langsung dibuat sesuai urutan form masuk, status eligible dikirim di dalam tiket.
         return out;
     }
     // Di DALAM kunci antrean tiket (anti dobel kalau 2 orang kirim form username sama bersamaan)
@@ -327,7 +355,7 @@ module.exports = function createEligible(ctx, core) {
     }
 
     return {
-        start, refreshAll, cachedJoin, checkUsername, buildEligibilityEmbed, rowText,
+        start, refreshAll, cachedJoin, cachedJoinFresh, ensureFresh, checkUsername, buildEligibilityEmbed, rowText,
         getCommunityMode, applyButtonTicket, panelLabel, beforeTicket, inLockCheck, ticketExtraFields, postEligibility,
         norm, caches, resolveUser, userGroups, MODE_LABEL
     };

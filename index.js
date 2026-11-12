@@ -70,9 +70,14 @@ const closingTicketChannels = new Set();
 // Semua proses "buka tiket" dan "geser antrian" lewat kunci ini satu per satu,
 // jadi tidak akan pernah tabrakan (misal: bot lagi mindahin channel, lalu ada yang open tiket).
 let ticketLockChain = Promise.resolve();
-function withTicketLock(task) {
+let ticketLockWaiting = 0; // jumlah form yang sedang antre / diproses (untuk info "antrean ke-N")
+function withTicketLock(task, maxHoldMs = 25000) {
+    ticketLockWaiting++;
     const run = ticketLockChain.then(task, task);
-    ticketLockChain = run.catch(() => {}); // error satu tugas tidak boleh macetin antrian
+    run.then(() => { ticketLockWaiting--; }, () => { ticketLockWaiting--; });
+    // Antrean berikutnya lanjut setelah tugas ini selesai ATAU paling lama maxHoldMs.
+    // (Satu tugas yang macet — mis. Discord/Roblox lambat di VPS gratis — tidak boleh membekukan semua tiket.)
+    ticketLockChain = Promise.race([run.catch(() => {}), new Promise(r => setTimeout(r, maxHoldMs))]);
     return run;
 }
 
@@ -2151,7 +2156,7 @@ async function runEligibilityCheck(targetUsername, cacheKey) {
                 fieldValue = `${emojiNotJoin} Belum Bergabung`;
             } else {
                 // FITUR: daftar join 16 hari terakhir sudah tersimpan -> tidak perlu request audit-log per orang
-                const fxJoin = FX ? FX.eligible.cachedJoin(grp.id, userId) : null;
+                const fxJoin = FX ? await FX.eligible.cachedJoinFresh(grp.id, userId).catch(() => null) : null; // baru join -> daftar diperbarui dulu
                 if (!fxJoin) await sleep(350); // request audit-log (pakai cookie akun dummy)
                 try {
                     if (!fxJoin && rbxIsPaused()) throw new Error('RBX_PAUSED'); // sedang kena rate limit -> jangan tambah request
@@ -2772,7 +2777,7 @@ async function buildPanelStockPages() {
     // FITUR: invoice di tiket Pre-Order (-po) memakai kuota PO (dari pending), BUKAN stok ready
     const readyInvoices = FX ? activeInvoices.filter(inv => !FX.isPOInvoice(inv)) : activeInvoices;
     const totalInvoiced = readyInvoices.reduce((sum, inv) => sum + inv.amount, 0);
-    const sisaStock = totalStock - totalInvoiced;
+    const sisaStock = (FX ? totalReal : totalStock) - totalInvoiced; // Sisa Stock = Total Stock (saldo asli) − Ter-invoice
     const color = sisaStock < 0 ? 0xED4245 : 0x5865F2;
 
     // --- Stock Overview ---
@@ -3358,7 +3363,7 @@ client.on('interactionCreate', async (interaction) => {
         
         const type = interaction.customId.replace('tm_', '');
 
-        // --- FITUR: mode Community (Ketat/War menolak username belum eligible), 1 username = 1 tiket Community ---
+        // --- FITUR: mode Community (War: tolak cepat kalau stok habis), 1 username = 1 tiket Community. Cek eligible di DALAM tiket ---
         const fxGate = FX ? await FX.beforeTicket(interaction, type) : {};
         if (fxGate?.block) {
             if (FX) FX.ticketBlocked();
@@ -3478,6 +3483,11 @@ client.on('interactionCreate', async (interaction) => {
 
             // Buat Channel + Simpan DB — KEDUANYA DI DALAM KUNCI ANTRIAN,
             // supaya proses auto-geser tidak pernah melihat channel baru yang belum tercatat di DB
+            // Info antrean (supaya tidak cuma "thinking..." saat war / ramai)
+            let queueNote = null;
+            if (ticketLockWaiting >= 2) {
+                queueNote = interaction.editReply({ content: `⏳ Kamu di **antrean ke-${ticketLockWaiting + 1}**, tiket sedang dibuat sesuai urutan form masuk. Jangan kirim form ulang ya…` }).catch(() => {});
+            }
             const ticketChannel = await withTicketLock(async () => {
                 // Cek ulang DI DALAM kunci: 2 form dengan username sama yang masuk bersamaan tidak bisa lolos dua-duanya
                 const fxTaken = FX ? await FX.inLockCheck(interaction, type, fxGate) : null;
@@ -3508,6 +3518,7 @@ client.on('interactionCreate', async (interaction) => {
                 return newChannel;
             });
 
+            if (queueNote) await queueNote; // pesan antrean pasti terkirim duluan, baru hasilnya
             if (ticketChannel?.fxBlock) return interaction.editReply({ content: ticketChannel.fxBlock });
             if (!ticketChannel) {
                 if (FX) await FX.warAbort(interaction); // War: pesanan Robux dikembalikan

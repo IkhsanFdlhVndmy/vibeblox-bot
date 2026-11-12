@@ -150,7 +150,7 @@ module.exports = function setupFitur(ctx) {
         // Tiket
         beforeTicket: async (interaction, type) => {
             try {
-                if (type === 'community') { const full = await war.quickBlock(); if (full) return { block: full }; }
+                if (type === 'community') { const full = await war.quickBlock(interaction); if (full) return { block: full }; }
                 return await eligible.beforeTicket(interaction, type);
             }
             catch (e) { console.error('[FITUR] Cek sebelum tiket gagal (tiket tetap dibuat):', e.message); return {}; }

@@ -246,26 +246,37 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
                 ...waiting.map(r => `🟡 <#${r.channelId}> · **Rp ${fmt(r.total)}**\n└ ${r.kodeUnik ? `kode ${r.kodeUnik} · ` : ''}<@${r.buyerId}> · <t:${core.ts(r.proofAt)}:R>${bukti(r)}`),
                 ...paid.map(r => `✅ <#${r.channelId}> · **Rp ${fmt(r.total)}** · **Dibayar**\n└ ${r.buyerId ? `<@${r.buyerId}> · ` : ''}<t:${core.ts(r.paidAt || new Date())}:R>`)
             ];
-            let desc = '';
-            let shown = 0;
-            for (const l of lines) { if (desc.length + l.length + 2 > 3900) break; desc += (desc ? '\n\n' : '') + l; shown++; }
-            if (shown < lines.length) desc += `\n…dan ${lines.length - shown} lainnya`;
-            const embed = new EmbedBuilder().setColor(waiting.length ? 0xFEE75C : 0x57F287)
-                .setTitle(`🟡 Menunggu Verifikasi (${waiting.length}) · ✅ Dibayar (${paid.length})`)
-                .setDescription(desc || '✅ Tidak ada pembayaran yang perlu dicek.')
-                .setTimestamp();
-            const state = await core.getState('verif_panel');
+            // Daftar TIDAK dipotong: kalau satu pesan penuh, lanjut ke pesan berikutnya (lanjutan 2, 3, …)
+            const chunks = [];
+            let cur = '';
+            for (const l of lines) {
+                if (cur && cur.length + l.length + 2 > 3800) { chunks.push(cur); cur = ''; }
+                cur += (cur ? '\n\n' : '') + l;
+            }
+            if (cur || !chunks.length) chunks.push(cur);
+            const color = waiting.length ? 0xFEE75C : 0x57F287;
+            const embeds = chunks.map((d, i) => {
+                const e = new EmbedBuilder().setColor(color)
+                    .setTitle(i === 0 ? `🟡 Menunggu Verifikasi (${waiting.length}) · ✅ Dibayar (${paid.length})` : `↪️ Lanjutan ${i + 1}/${chunks.length}`)
+                    .setDescription(d || '✅ Tidak ada pembayaran yang perlu dicek.');
+                if (i === chunks.length - 1) e.setTimestamp();
+                return e;
+            });
+            const state = (await core.getState('verif_panel')) || {};
+            const ids = state.messageIds || (state.messageId ? [state.messageId] : []);
             const ch = await client.channels.fetch(CFG.CHANNEL_VERIFIKASI).catch(() => null);
             if (!ch) return;
-            let ok = false;
-            if (state?.messageId) {
-                try { await ch.messages.edit(state.messageId, { embeds: [embed] }); ok = true; }
-                catch (e) { if (e?.code !== 10008) throw e; }
+            const newIds = [];
+            for (let i = 0; i < embeds.length; i++) {
+                let ok = false;
+                if (ids[i]) {
+                    try { await ch.messages.edit(ids[i], { embeds: [embeds[i]] }); ok = true; newIds.push(ids[i]); }
+                    catch (e) { if (e?.code !== 10008) throw e; }
+                }
+                if (!ok) { const m = await ch.send({ embeds: [embeds[i]] }); newIds.push(m.id); }
             }
-            if (!ok) {
-                const m = await ch.send({ embeds: [embed] });
-                await core.setState('verif_panel', { messageId: m.id });
-            }
+            for (const extra of ids.slice(embeds.length)) await ch.messages.delete(extra).catch(() => {}); // daftar memendek
+            await core.setState('verif_panel', { messageId: newIds[0], messageIds: newIds });
             if (!waiting.length && !paid.length) await clearPing(ch);
         } finally { panelBusy = false; }
     }
