@@ -381,6 +381,26 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         }
         return Math.max(0, Math.round(total));
     }
+    // Versi KETAT untuk form tiket Community: setiap bagian harus angka yang jelas
+    // ("1000", "1.000", "1,000 robux", "1k", "1k rbx", "1.5k", "2rb", "109 + 119"). Tidak jelas -> null.
+    function parseRobuxStrict(raw) {
+        const s = String(raw || '').toLowerCase().replace(/\s+/g, '').replace(/robux|rbx|r\$/g, '');
+        if (!s || !/\d/.test(s)) return null;
+        let total = 0;
+        for (const part of s.split(/\+|&|dan/)) {
+            if (!part) return null;
+            let v = 1;
+            for (const f of part.split(/[x×*]/)) {
+                if (!f) return null;
+                const n = parseRobuxTerm(f);
+                if (!Number.isFinite(n)) return null;
+                v *= n;
+            }
+            total += v;
+        }
+        total = Math.round(total);
+        return total > 0 ? total : null;
+    }
     // Teks "Jumlah Robux" di form tiket: kalau ditulis tidak biasa, tampilkan juga hasil hitungnya
     function robuxFormText(raw) {
         const txt = String(raw || '').trim();
@@ -662,6 +682,6 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         start, prepareInvoice, applyKodeToEmbed, onInvoiceDone, onInvoiceCancelled, getRecord, afterMainInvoice,
         buildQrisPayment, qrisTest, onTicketMessage, rebuildVerifPanel, scheduleVerifPanel, flushPing, catchUpProofs, cleanupStale,
         createDraft, markDraftUsed, handleDraftButton, handleDraftModal, onFormEdited, onChannelDelete, onMessageDelete,
-        createInvoiceFromDraft, paidButton, handlePaidButton, setOnWaiting, setPlanButton, syncFormWithInvoices, updateFormFields, priceFor, parseRobux, robuxFormText, parseType, totalFromEmbed, isImage
+        createInvoiceFromDraft, paidButton, handlePaidButton, setOnWaiting, setPlanButton, syncFormWithInvoices, updateFormFields, priceFor, parseRobux, parseRobuxStrict, robuxFormText, parseType, totalFromEmbed, isImage
     };
 };

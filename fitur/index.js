@@ -150,7 +150,21 @@ module.exports = function setupFitur(ctx) {
         // Tiket
         beforeTicket: async (interaction, type) => {
             try {
-                if (type === 'community') { const full = await war.quickBlock(); if (full) return { block: full }; }
+                if (type === 'community') {
+                    // Jumlah Robux WAJIB angka yang jelas (dipakai War, draft invoice, auto-close). Username boleh apa saja.
+                    let raw = '';
+                    try { raw = interaction.fields.getTextInputValue('jml_robux'); } catch (e) {}
+                    const robux = bayar.parseRobuxStrict(raw);
+                    if (!robux) return { block: `❌ **Tiket belum dibuat — jumlah Robux tidak jelas** (\`${String(raw).slice(0, 40)}\`).\nTulis angkanya saja, contoh: \`1000\`, \`1.000\`, \`1k\`, \`1,5k\`, \`1000 robux\`. Lalu kirim form lagi ya.` };
+                    const full = await war.quickBlock(); // War penuh -> pesan "melebihi kapasitas" (tombol juga sudah ditutup)
+                    if (full) return { block: full };
+                    const gate = await eligible.beforeTicket(interaction, type);
+                    if (gate?.block) return gate;
+                    if (gate?.mode === 'ketat' && robux > CFG.WAR_MAX_ORDER) {
+                        return { block: `❌ **Tiket belum dibuat.** Jumlah **${robux.toLocaleString('id-ID')} Robux** melebihi batas saat War (maks **${CFG.WAR_MAX_ORDER.toLocaleString('id-ID')}** per tiket). Kalau salah ketik, kirim form lagi dengan jumlah yang benar.` };
+                    }
+                    return gate;
+                }
                 return await eligible.beforeTicket(interaction, type);
             }
             catch (e) { console.error('[FITUR] Cek sebelum tiket gagal (tiket tetap dibuat):', e.message); return {}; }

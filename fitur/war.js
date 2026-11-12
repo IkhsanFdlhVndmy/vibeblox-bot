@@ -47,9 +47,15 @@ module.exports = function setupWar(ctx, core, bayar) {
         bgRetry = setTimeout(tick, 1000);
     }
     async function doStart(opts) {
-        const cur = await getWar();
+        let cur = await getWar();
+        if (cur.active && Date.now() - cur.session > CFG.WAR_RESUME_HOURS * 3600 * 1000) {
+            // War lama yang tidak pernah ditutup (mis. berhari-hari lalu) -> akhiri, mulai War BARU.
+            // Tiket lama yang masih buka & belum ada invoice tetap ikut dihitung (lihat "carry" di bawah).
+            await core.setState('war', { ...cur, active: false, full: false, endedAt: Date.now() });
+            cur = { active: false };
+        }
         if (cur.active) {
-            // sudah War: lanjutkan sesi yang sama (pesanan tetap dihitung), buka lagi kalau sebelumnya penuh
+            // War yang sama (dibuka lagi dalam beberapa jam, mis. setelah Disable / penuh): lanjutkan, pesanan tetap dihitung
             const war = { ...cur, full: false };
             await core.setState('war', war);
             return { war, resumed: true };
