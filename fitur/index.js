@@ -188,7 +188,9 @@ module.exports = function setupFitur(ctx) {
             if (tipe !== 'community') return {};
             try {
                 if (rawStatus === 'ketat') {
-                    const r = await war.start();
+                    // tombol dibuka SEKARANG; stok awal dari saldo tersimpan (atau dihitung di belakang)
+                    const r = await war.start({ fast: true });
+                    if (r.pending) return { info: `\n⚔️ War dibuka. Saldo Roblox sedang dibaca di belakang untuk stok awal — form yang masuk tetap tercatat & ikut dihitung.` };
                     if (r.error) return r;
                     const fmt = (n) => Number(n).toLocaleString('id-ID');
                     return { info: r.resumed

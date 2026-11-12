@@ -2593,8 +2593,9 @@ function buildRestockDoneStatusEmbed(restock) {
 
 // War Community: stok ready SAAT INI = (saldo − sisa wajib) semua community − invoice Community ready yang masih aktif.
 // null kalau ada saldo community yang belum/gagal terbaca (supaya kapasitas War tidak salah).
-async function readyStockSnapshot() {
-    await refreshPanelFunds();
+async function readyStockSnapshot(useCache = false) {
+    // useCache: saldo yang sudah tersimpan (diperbarui otomatis tiap 30 dtk) -> tidak menunggu Roblox
+    if (!useCache) await refreshPanelFunds();
     if (!panelFunds.at || Date.now() - panelFunds.at > 3 * 60 * 1000) return null;
     let sellable = 0;
     for (const num of Object.keys(RESTOCK_COMMUNITIES)) {

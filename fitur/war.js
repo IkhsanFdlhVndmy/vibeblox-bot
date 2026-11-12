@@ -15,7 +15,6 @@ module.exports = function setupWar(ctx, core, bayar) {
     const fmt = (n) => Number(n || 0).toLocaleString('id-ID');
     const FULL_MSG = '❌ **Tidak bisa open ticket karena sudah melebihi kapasitas stock.**\nPantau pengumuman restock berikutnya ya!';
 
-    let startingInBg = false;
     async function getWar() { return (await core.getState('war')) || { active: false }; }
 
     async function totals(session) {
@@ -24,7 +23,30 @@ module.exports = function setupWar(ctx, core, bayar) {
     }
 
     // /buttonticket community -> Ketat (War). Return { war } atau { error }
-    async function start() {
+    // Hanya SATU proses "mulai War" dalam satu waktu (tombol /buttonticket, form pertama, & bot menyala bisa bersamaan)
+    let startFlight = null;
+    function start(opts = {}) {
+        if (!startFlight) startFlight = doStart(opts).finally(() => { startFlight = null; });
+        return startFlight;
+    }
+    // Saldo belum bisa dibaca -> coba terus di belakang (tiap 15 dtk, maks ±5 menit). Form yang masuk
+    // selama itu tetap dicatat (sesi 0) dan ikut dihitung begitu War berjalan.
+    let bgRetry = null;
+    function startInBackground() {
+        if (bgRetry) return;
+        let n = 0;
+        const tick = async () => {
+            n++;
+            const cfg = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' }).lean().catch(() => null);
+            const cur = await getWar().catch(() => ({}));
+            if (cfg?.communityMode !== 'ketat' || cur.active) { bgRetry = null; return; }
+            const r = await start().catch(() => ({}));
+            if (r.war || n >= 20) { bgRetry = null; return; }
+            bgRetry = setTimeout(tick, 15000);
+        };
+        bgRetry = setTimeout(tick, 1000);
+    }
+    async function doStart(opts) {
         const cur = await getWar();
         if (cur.active) {
             // sudah War: lanjutkan sesi yang sama (pesanan tetap dihitung), buka lagi kalau sebelumnya penuh
@@ -32,8 +54,12 @@ module.exports = function setupWar(ctx, core, bayar) {
             await core.setState('war', war);
             return { war, resumed: true };
         }
-        const snap = await h.readyStockSnapshot();
-        if (!snap) return { error: '❌ Saldo community belum bisa dibaca dari Roblox, jadi kapasitas War tidak bisa dihitung. Coba lagi sebentar.' };
+        // fast: pakai saldo yang sudah tersimpan (diperbarui otomatis tiap 30 dtk) -> tombol TIDAK menunggu Roblox
+        const snap = await h.readyStockSnapshot(!!opts.fast);
+        if (!snap) {
+            if (opts.fast) { startInBackground(); return { pending: true }; }
+            return { error: '❌ Saldo community belum bisa dibaca dari Roblox, jadi kapasitas War tidak bisa dihitung. Coba lagi sebentar.' };
+        }
         const war = { active: true, session: Date.now(), capacity: snap.sisa, full: false };
         // Tiket War sebelumnya yang MASIH BUKA & BELUM ada invoice-nya: Robux-nya masih dijanjikan ke pembeli,
         // tapi belum masuk "ter-invoice" -> ikut dihitung di War baru supaya tidak oversell.
@@ -91,10 +117,7 @@ module.exports = function setupWar(ctx, core, bayar) {
                 await WarReservation.create({ key: interaction.id, session: 0, userId: interaction.user.id, robux: r0 });
                 interaction.__warKey = interaction.id;
             }
-            if (!startingInBg) {
-                startingInBg = true;
-                start().catch(() => {}).finally(() => { startingInBg = false; });
-            }
+            startInBackground();
             return null;
         }
         if (war.full) return FULL_MSG;
