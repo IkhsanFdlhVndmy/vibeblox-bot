@@ -177,7 +177,11 @@ module.exports = function setupFitur(ctx) {
             // War: pesan Robux dari form (di dalam kunci -> tidak bisa rebutan melebihi kapasitas)
             if (type === 'community') {
                 try { return await war.reserve(interaction, gate?.mode); }
-                catch (e) { console.error('[WAR] Cek kapasitas gagal:', e.message); return '❌ Sistem sedang sibuk, tiket belum dibuat. Coba kirim form lagi sebentar.'; }
+                catch (e) {
+                    console.error('[WAR] Cek kapasitas gagal:', e.message);
+                    await war.abort(interaction).catch(() => {}); // jangan sampai pesanan tercatat tanpa tiket
+                    return '❌ Sistem sedang sibuk, tiket belum dibuat. Coba kirim form lagi sebentar.';
+                }
             }
             return null;
         },

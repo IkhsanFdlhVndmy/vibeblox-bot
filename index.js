@@ -154,6 +154,11 @@ function scheduleTicketRebalance(guild, delayMs = 1500) {
     if (!guild || pendingRebalance.has(guild.id)) return;
     pendingRebalance.add(guild.id);
     setTimeout(() => {
+        // Saat banyak orang sedang membuat tiket (war), geser antrian DITUNDA supaya tidak memperlambat tiket baru
+        if (ticketLockWaiting > 0) {
+            pendingRebalance.delete(guild.id);
+            return scheduleTicketRebalance(guild, 15000);
+        }
         withTicketLock(async () => {
             pendingRebalance.delete(guild.id); // close baru selama proses berjalan -> dijadwalkan ulang
             await rebalanceTicketCategories(guild);
@@ -3361,7 +3366,10 @@ client.on('interactionCreate', async (interaction) => {
 
    // --- SUBMIT MODAL -> CREATE TICKET CHANNEL ---
     if (interaction.isModalSubmit() && interaction.customId.startsWith('tm_')) {
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral }); // Balas aman dulu
+        // Balas aman dulu. Kalau sudah lewat 3 detik (VPS sangat lambat), Discord menolak -> berhenti dengan tenang
+        // (pembeli melihat "interaction failed" & bisa kirim form lagi; tidak ada tiket setengah jadi)
+        try { await interaction.deferReply({ flags: MessageFlags.Ephemeral }); }
+        catch (e) { console.error('[TIKET] Form terlambat dijawab (>3 dtk), dilewati:', e.code || e.message); return; }
         
         const type = interaction.customId.replace('tm_', '');
 
@@ -3598,7 +3606,7 @@ client.on('interactionCreate', async (interaction) => {
         } catch (e) {
             console.error(e);
             if (FX) await FX.warAbort(interaction); // War: pesanan Robux dikembalikan kalau tiket gagal dibuat
-            return interaction.editReply('❌ Tiket Sudah ditutup😂!');
+            return interaction.editReply('❌ Tiket gagal dibuat karena Discord sedang sibuk. Silakan kirim form lagi ya.').catch(() => {});
         }
     }
 
