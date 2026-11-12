@@ -156,6 +156,19 @@ module.exports = function setupWar(ctx, core, bayar) {
         if (!interaction?.__warKey) return;
         await WarReservation.updateOne({ key: interaction.__warKey }, { $set: { channelId } }).catch(() => {});
     }
+    // Jumlah di tiket berubah (invoice dibuat / dibatalkan, atau /editform sebelum ada invoice)
+    // -> hitungan War tiket itu ikut berubah. Tidak membuka tombol yang sudah ditutup otomatis.
+    async function syncChannel(channelId, robux) {
+        if (!channelId || !(robux > 0)) return;
+        const r = await WarReservation.updateMany({ channelId, released: false, done: false, robux: { $ne: robux } }, { $set: { robux } }).catch(() => null);
+        if (!r?.modifiedCount) return;
+        h.schedulePanelStockUpdate();
+        const war = await getWar();
+        if (war.active && !war.full && limitOf(war) - (await totals(war.session)).robux <= 0) {
+            await core.setState('war', { ...war, full: true, fullAt: Date.now() });
+            markFull(war, true).catch(() => {});
+        }
+    }
     async function onDone(channelId) {
         const r = await WarReservation.updateMany({ channelId, released: false }, { $set: { done: true } }).catch(() => null);
         if (r?.modifiedCount) h.schedulePanelStockUpdate();
@@ -214,5 +227,5 @@ module.exports = function setupWar(ctx, core, bayar) {
         setTimeout(attempt, 20 * 1000);
     }
 
-    return { getWar, start, stop, boot, quickBlock, reserve, abort, attach, onDone, onChannelDelete, panelLines, FULL_MSG };
+    return { getWar, start, stop, boot, syncChannel, quickBlock, reserve, abort, attach, onDone, onChannelDelete, panelLines, FULL_MSG };
 };

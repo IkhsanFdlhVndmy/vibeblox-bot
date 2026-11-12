@@ -635,12 +635,15 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
     }
 
     // Form tiket mengikuti invoice: "Jumlah Robux" = total invoice yang masih berlaku di tiket ini
+    let onRobuxChanged = null; // diisi fitur War
+    function setOnRobuxChanged(fn) { onRobuxChanged = fn; }
     async function syncFormWithInvoices(channel) {
         try {
             const recs = await InvoiceRecord.find({ channelId: channel.id, status: { $in: ['open', 'waiting', 'paid', 'done'] }, messageId: { $not: /^tmp:/ } }).lean();
             if (!recs.length) return;
             const total = recs.reduce((s2, r) => s2 + (r.robux || 0), 0);
             if (!total) return;
+            if (onRobuxChanged) onRobuxChanged(channel.id, total); // War: hitungan ikut jumlah invoice
             const text = recs.length === 1 ? `**${fmt(total)} R$**` : `**${fmt(total)} R$**\n-# total dari ${recs.length} invoice`;
             await updateFormFields(channel, null, null, text);
         } catch (e) { /* tampilan saja */ }
@@ -655,6 +658,10 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
                 if (ticket?.ticketType === 'community') eligible.postEligibility(channel, { username }).catch(() => {});
             }
             if (robux) {
+                // War: belum ada invoice di tiket ini -> hitungan War ikut jumlah form yang baru
+                const hasInv = await InvoiceRecord.exists({ channelId: channel.id, status: { $in: ['open', 'waiting', 'paid', 'done'] } }).catch(() => null);
+                const n = parseRobux(robux);
+                if (!hasInv && n && onRobuxChanged) onRobuxChanged(channel.id, n);
                 const d = await InvoiceDraft.findOneAndUpdate({ channelId: channel.id, used: false }, { $set: { robux } }, { returnDocument: 'after' }).lean();
                 if (d) await refreshDraftMessage(d, channel);
             }
@@ -682,6 +689,6 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
         start, prepareInvoice, applyKodeToEmbed, onInvoiceDone, onInvoiceCancelled, getRecord, afterMainInvoice,
         buildQrisPayment, qrisTest, onTicketMessage, rebuildVerifPanel, scheduleVerifPanel, flushPing, catchUpProofs, cleanupStale,
         createDraft, markDraftUsed, handleDraftButton, handleDraftModal, onFormEdited, onChannelDelete, onMessageDelete,
-        createInvoiceFromDraft, paidButton, handlePaidButton, setOnWaiting, setPlanButton, syncFormWithInvoices, updateFormFields, priceFor, parseRobux, parseRobuxStrict, robuxFormText, parseType, totalFromEmbed, isImage
+        createInvoiceFromDraft, paidButton, handlePaidButton, setOnWaiting, setPlanButton, syncFormWithInvoices, updateFormFields, setOnRobuxChanged, priceFor, parseRobux, parseRobuxStrict, robuxFormText, parseType, totalFromEmbed, isImage
     };
 };

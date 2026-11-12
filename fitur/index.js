@@ -16,6 +16,7 @@ module.exports = function setupFitur(ctx) {
     const payout = require('./payout')(ctx, core, eligible);
     const ops = require('./operasional')(ctx, core, stok);
     const war = require('./war')(ctx, core, bayar);
+    bayar.setOnRobuxChanged((channelId, robux) => { war.syncChannel(channelId, robux).catch(() => {}); });
     // Rencana payout muncul SEBELUM Robux dikirim: saat bukti bayar masuk, atau lewat tombol di invoice
     bayar.setPlanButton((id) => payout.planButton(id));
     bayar.setOnWaiting(async (rec, channel) => {
