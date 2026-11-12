@@ -52,6 +52,11 @@ module.exports = function setupWar(ctx, core, bayar) {
             carried++;
         }
         war.carried = carried;
+        // Tiket lama yang masih buka sudah menghabiskan stok -> War langsung penuh (tombol ditutup setelah /buttonticket tersimpan)
+        if (carried && limitOf(war) - (await totals(war.session)).robux <= 0) {
+            war.full = true; war.fullAt = Date.now();
+            setTimeout(() => { markFull(war, true).catch(() => {}); }, 3000);
+        }
         await core.setState('war', war);
         h.schedulePanelStockUpdate();
         return { war };
@@ -65,17 +70,10 @@ module.exports = function setupWar(ctx, core, bayar) {
 
     const limitOf = (war) => war.capacity - CFG.WAR_STOP_REMAINING;
 
-    // Sebelum masuk antrean: tolak LANGSUNG kalau sudah penuh / jumlah di form pasti tidak muat
-    // (tanpa menunggu antrean). Pemesanan sebenarnya tetap dicek ulang di dalam antrean.
-    async function quickBlock(interaction) {
+    // Sebelum masuk antrean: kalau War sudah penuh -> tolak langsung tanpa ikut antre
+    async function quickBlock() {
         const war = await getWar();
-        if (!war.active) return null;
-        if (war.full) return FULL_MSG;
-        let robux = 0;
-        try { robux = bayar.parseRobux(interaction.fields.getTextInputValue('jml_robux')); } catch (e) { return null; }
-        if (!robux) return null;
-        const left = limitOf(war) - (await totals(war.session)).robux;
-        return robux > left ? FULL_MSG : null;
+        return war.active && war.full ? FULL_MSG : null;
     }
 
     // DI DALAM kunci antrean tiket. Return pesan tolak, atau null (Robux sudah dipesan untuk tiket ini)
@@ -100,19 +98,21 @@ module.exports = function setupWar(ctx, core, bayar) {
             return null;
         }
         if (war.full) return FULL_MSG;
+        // Form TIDAK ditolak karena jumlahnya: tiket langsung dibuat (VPS lambat, jangan bikin pembeli menunggu).
+        // Begitu stok tersisa <= 5.000 (boleh sampai minus sedikit) -> tombol ditutup, form berikutnya ditolak.
+        // Kelebihan pesanan ditutup manual oleh staf.
         let raw = '';
-        try { raw = interaction.fields.getTextInputValue('jml_robux'); } catch (e) { return null; }
-        const robux = bayar.parseRobux(raw);
-        if (!robux) return '❌ **Tiket tidak dibuat.** Jumlah Robux di form tidak terbaca. Tulis angkanya saja, contoh: `1000`.';
+        try { raw = interaction.fields.getTextInputValue('jml_robux'); } catch (e) {}
+        const robux = bayar.parseRobux(raw); // tidak terbaca -> 0 (tiket tetap dibuat, staf cek manual)
         const used = (await totals(war.session)).robux;
-        const left = limitOf(war) - used;
-        if (robux > left) {
-            if (left <= 0) await markFull(war);
-            return FULL_MSG;
-        }
         await WarReservation.create({ key: interaction.id, session: war.session, userId: interaction.user.id, robux });
         interaction.__warKey = interaction.id;
-        if (left - robux <= 0) await markFull(war);
+        if (limitOf(war) - used - robux <= 0) {
+            // tandai penuh SEKARANG (form berikutnya di antrean langsung ditolak),
+            // urusan Discord (tutup tombol, info alarm) di belakang supaya antrean tidak tertahan
+            await core.setState('war', { ...war, full: true, fullAt: Date.now() });
+            markFull(war, true).catch(() => {});
+        }
         h.schedulePanelStockUpdate();
         return null;
     }
@@ -137,10 +137,11 @@ module.exports = function setupWar(ctx, core, bayar) {
         if (r?.modifiedCount) h.schedulePanelStockUpdate();
     }
 
-    async function markFull(war) {
+    async function markFull(war, flagged = false) {
         const fresh = await getWar();
-        if (!fresh.active || fresh.full || fresh.session !== war.session) return;
-        await core.setState('war', { ...fresh, full: true, fullAt: Date.now() });
+        if (!fresh.active || fresh.session !== war.session) return;
+        if (fresh.full && !flagged) return;
+        if (!fresh.full) await core.setState('war', { ...fresh, full: true, fullAt: Date.now() });
         try {
             const config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
             if (config) { config.buttonStates.set('community', false); await config.save(); }
@@ -161,7 +162,7 @@ module.exports = function setupWar(ctx, core, bayar) {
             `⚔️ **War Community** · mulai <t:${Math.floor(war.session / 1000)}:R>`,
             `└ Stok awal: \`${fmt(war.capacity)}\` · Diisi form: \`${fmt(t.robux)}\` *(${t.tickets} tiket)*`,
             war.full || left <= 0
-                ? `└ 🔴 **Penuh** — tombol Community ditutup${left > 0 ? ` · ada yang batal, sisa \`${fmt(left)}\` (buka: /buttonticket War)` : ''}`
+                ? `└ 🔴 **Penuh** — tombol Community ditutup · ${left < 0 ? `lebih \`${fmt(-left)}\` (tutup manual tiket berlebih)` : `sisa \`${fmt(left)}\` (buka lagi: /buttonticket War)`}`
                 : `└ 🟢 Sisa: \`${fmt(left)} Robux\` · tutup otomatis saat stok sisa ${fmt(CFG.WAR_STOP_REMAINING)}`
         ];
     }

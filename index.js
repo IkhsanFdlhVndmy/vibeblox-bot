@@ -3000,12 +3000,13 @@ async function updatePanelStockMessage() {
 // Debounce — supaya kalau beberapa invoice berubah beruntun dalam waktu singkat,
 // panel tidak di-edit berkali-kali (hemat rate limit Discord & CPU).
 let panelStockTimeout = null;
+// Paling sering 1x tiap 5 detik (VPS lambat + saat war banyak perubahan sekaligus -> digabung jadi 1 update)
 function schedulePanelStockUpdate() {
-    if (panelStockTimeout) clearTimeout(panelStockTimeout);
+    if (panelStockTimeout) return;
     panelStockTimeout = setTimeout(() => {
-        updatePanelStockMessage();
         panelStockTimeout = null;
-    }, 2000);
+        updatePanelStockMessage();
+    }, 5000);
 }
 
 // Loop utama: jalan tiap 15 detik, urus SEMUA restock aktif dari database.

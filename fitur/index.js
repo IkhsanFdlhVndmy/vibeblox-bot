@@ -150,7 +150,7 @@ module.exports = function setupFitur(ctx) {
         // Tiket
         beforeTicket: async (interaction, type) => {
             try {
-                if (type === 'community') { const full = await war.quickBlock(interaction); if (full) return { block: full }; }
+                if (type === 'community') { const full = await war.quickBlock(); if (full) return { block: full }; }
                 return await eligible.beforeTicket(interaction, type);
             }
             catch (e) { console.error('[FITUR] Cek sebelum tiket gagal (tiket tetap dibuat):', e.message); return {}; }
@@ -193,7 +193,7 @@ module.exports = function setupFitur(ctx) {
                     const fmt = (n) => Number(n).toLocaleString('id-ID');
                     return { info: r.resumed
                         ? `\n⚔️ War dilanjutkan (pesanan sebelumnya tetap dihitung). Stok awal: **${fmt(r.war.capacity)}** Robux.`
-                        : `\n⚔️ War dimulai. Stok awal: **${fmt(r.war.capacity)}** Robux · tiket ditolak & tombol ditutup otomatis saat stok tersisa **${fmt(CFG.WAR_STOP_REMAINING)}**.${r.war.carried ? `\n-# ${r.war.carried} tiket War sebelumnya yang belum ada invoice-nya ikut dihitung.` : ''}` };
+                        : `\n⚔️ War dimulai. Stok awal: **${fmt(r.war.capacity)}** Robux · tiket ditolak & tombol ditutup otomatis saat stok tersisa **${fmt(CFG.WAR_STOP_REMAINING)}**.${r.war.carried ? `\n-# ${r.war.carried} tiket War sebelumnya yang belum ada invoice-nya ikut dihitung.` : ''}${r.war.full ? `\n⚠️ Stok sudah habis untuk tiket yang masih buka → War langsung **penuh**, tombol Community ditutup.` : ''}` };
                 }
                 if (rawStatus !== 'disable') await war.stop(); // Normal / Pre-Order: tanpa batas stok
             } catch (e) { console.error('[WAR] /buttonticket:', e.message); }
