@@ -171,25 +171,29 @@ module.exports = function createStok(ctx, core, riwayat) {
             await StockReminder.deleteOne({ userId: interaction.user.id, target: msgId });
             return interaction.update({ content: '🔕 Pengingat dibatalkan.', components: [] });
         }
+        // Pastikan DM-nya bisa dikirim SEKARANG (kalau tertutup, kasih tahu langsung, jangan didaftarkan)
+        await interaction.deferUpdate();
+        const when = values.map(v => OFFSETS[v].label.toLowerCase()).join(', ');
+        try {
+            await interaction.user.send({ content: `🔔 Pengingat restock aktif — kamu akan diingatkan di sini: ${when}.` });
+        } catch (e) {
+            return interaction.editReply({ content: '❌ **DM kamu tertutup**, jadi bot tidak bisa mengingatkan.\nBuka dulu: klik nama server → **Privacy Settings** → aktifkan **Direct Messages**, lalu tekan 🔔 Ingatkan Saya lagi.', components: [] });
+        }
         await StockReminder.updateOne({ userId: interaction.user.id, target: msgId }, { $set: { offsets: values }, $setOnInsert: { sent: [] } }, { upsert: true });
-        return interaction.update({ content: `✅ Kamu akan diingatkan lewat DM: ${values.map(v => OFFSETS[v].label.toLowerCase()).join(', ')}.\n-# Pastikan DM dari member server ini tidak kamu tutup.`, components: [] });
+        return interaction.editReply({ content: `✅ Kamu akan diingatkan lewat DM: ${when}.\n-# Jangan tutup DM dari member server ini ya.`, components: [] });
     }
 
-    async function dmMany(userIds, payload, fallbackChannelId) {
-        const failed = [];
+    // Pengingat HANYA lewat DM. DM tertutup -> dilewati (tidak ditulis di channel pengumuman restock).
+    async function dmMany(userIds, payload) {
+        let failed = 0;
         for (const uid of userIds) {
             try {
                 const u = await client.users.fetch(uid);
                 await u.send(payload);
-            } catch (e) { failed.push(uid); }
+            } catch (e) { failed++; }
             await new Promise(r => setTimeout(r, 400));
         }
-        if (failed.length && fallbackChannelId) {
-            for (let i = 0; i < failed.length; i += 40) {
-                const chunk = failed.slice(i, i + 40);
-                await core.sendTo(fallbackChannelId, { content: `🔔 ${chunk.map(id => `<@${id}>`).join(' ')}\n${payload.content || ''}\n-# (DM kalian tertutup, jadi diingatkan di sini)`, allowedMentions: { users: chunk } }).catch(() => {});
-            }
-        }
+        if (failed) console.log(`[STOK] ${failed} pengingat tidak terkirim (DM tertutup) — dilewati.`);
     }
 
     let tickRunning = false;
@@ -219,7 +223,7 @@ module.exports = function createStok(ctx, core, riwayat) {
                     const content = isReady
                         ? `✅ **Robux Community sudah READY!** Stok restock (${formatComm(restock.communities)}) sudah masuk. Langsung buka tiket sebelum kehabisan 🚀`
                         : `🔔 **Pengingat restock:** stok Robux Community (${formatComm(restock.communities)}) masuk <t:${core.ts(arrival)}:R> (<t:${core.ts(arrival)}:F>).`;
-                    await dmMany(users, { content }, restock.channelId);
+                    await dmMany(users, { content });
                 }
                 if (restock.status === 'completed') {
                     const remaining = await StockReminder.find({ target: msgId }).lean();
@@ -267,7 +271,7 @@ module.exports = function createStok(ctx, core, riwayat) {
         if (!list.length) return;
         await StockReminder.deleteMany({ target: 'community_open', _id: { $in: list.map(l => l._id) } });
         const label = newMode === 'preorder' ? ' (Pre-Order)' : '';
-        dmMany(list.map(l => l.userId), { content: `✅ **Tiket Robux Community${label} sudah dibuka lagi!**${panelChannelId ? ` Buka tiket di <#${panelChannelId}>.` : ''}` }, null)
+        dmMany(list.map(l => l.userId), { content: `✅ **Tiket Robux Community${label} sudah dibuka lagi!**${panelChannelId ? ` Buka tiket di <#${panelChannelId}>.` : ''}` })
             .catch(() => {});
     }
 
