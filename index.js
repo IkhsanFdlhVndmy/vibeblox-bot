@@ -86,6 +86,14 @@ function withTicketLock(task, maxHoldMs = 10000) {
     return run;
 }
 
+// Pesan ke pembeli kalau tiket TIDAK bisa dibuat karena gangguan (Discord / server / kategori penuh).
+// Sengaja TIDAK menyebut error/Discord — pembeli cukup tahu tiket sedang ditutup (detail error tetap di log bot).
+function ticketClosedReply(type) {
+    if (type === 'mm') return '❌ **Tiket Middleman sudah ditutup untuk sementara.**\nSilakan pantau pengumuman (announce) untuk info selanjutnya ya!';
+    const label = { community: 'Robux Community', robux_plus: 'Robux Send Plus', vilog: 'Robux Vilog', gamepass: 'Robux Gamepass', gig: 'Gift In-Game', limited: 'Limited Item' }[type] || 'ini';
+    return `❌ **Tiket ${label} sudah ditutup karena stok sudah habis.**\nSilakan tunggu stok selanjutnya di pengumuman (announce) ya!`;
+}
+
 // Cari kategori PERTAMA (paling atas) yang masih punya slot.
 // Karena auto-geser selalu menjaga kategori atas tetap penuh, ini otomatis jatuh ke posisi antrian yang benar.
 async function pickTicketCategory(guild, skip = null) {
@@ -3568,7 +3576,7 @@ client.on('interactionCreate', async (interaction) => {
             if (ticketChannel?.fxBlock) return interaction.editReply({ content: ticketChannel.fxBlock });
             if (!ticketChannel) {
                 if (FX) await FX.warAbort(interaction); // War: pesanan Robux dikembalikan
-                return interaction.editReply('❌ Semua kategori tiket sedang penuh. Silakan coba lagi beberapa saat lagi.').catch(() => {});
+                return interaction.editReply(ticketClosedReply(type)).catch(() => {}); // semua kategori penuh
             }
 
             // Mulai di sini channel tiket SUDAH JADI & tercatat. Apa pun yang gagal setelah ini (kirim form, balasan)
@@ -3652,7 +3660,7 @@ client.on('interactionCreate', async (interaction) => {
             if (FX) { FX.warDequeue(interaction); await FX.warAbort(interaction); } // War: pesanan & antrean dikembalikan
             // Community sudah ditutup sementara itu -> pesan "ditutup", bukan pesan error
             const closedMsg = FX ? FX.closedInLock(interaction, type) : null;
-            return interaction.editReply(closedMsg || '❌ Tiket gagal dibuat karena Discord sedang sibuk. Silakan kirim form lagi ya.').catch(() => {});
+            return interaction.editReply(closedMsg || ticketClosedReply(type)).catch(() => {}); // gangguan -> pesan "ditutup", bukan pesan error
         }
     }
 

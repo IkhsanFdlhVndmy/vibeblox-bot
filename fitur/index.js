@@ -186,7 +186,7 @@ module.exports = function setupFitur(ctx) {
                     console.error('[WAR] Cek kapasitas gagal:', e.message);
                     eligible.lockAbort(interaction);
                     await war.abort(interaction).catch(() => {}); // jangan sampai pesanan tercatat tanpa tiket
-                    return '❌ Sistem sedang sibuk, tiket belum dibuat. Coba kirim form lagi sebentar.';
+                    return eligible.CLOSED_MSG; // gangguan -> pesan "ditutup", bukan pesan error
                 }
             }
             return null;
