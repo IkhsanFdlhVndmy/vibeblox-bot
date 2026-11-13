@@ -177,15 +177,21 @@ module.exports = function setupFitur(ctx) {
             if (msg) return msg;
             // War: pesan Robux dari form (di dalam kunci -> tidak bisa rebutan melebihi kapasitas)
             if (type === 'community') {
-                try { return await war.reserve(interaction, gate?.mode); }
+                try {
+                    const warMsg = await war.reserve(interaction, gate?.mode);
+                    if (warMsg) eligible.lockAbort(interaction); // ditolak War -> username tidak boleh tertahan
+                    return warMsg;
+                }
                 catch (e) {
                     console.error('[WAR] Cek kapasitas gagal:', e.message);
+                    eligible.lockAbort(interaction);
                     await war.abort(interaction).catch(() => {}); // jangan sampai pesanan tercatat tanpa tiket
                     return '❌ Sistem sedang sibuk, tiket belum dibuat. Coba kirim form lagi sebentar.';
                 }
             }
             return null;
         },
+        usernameLocked: (interaction, channelId) => { try { eligible.lockCreated(interaction, channelId); } catch (e) {} },
         warAbort: safe('warAbort', async (interaction) => { eligible.lockAbort(interaction); await war.abort(interaction); }),
         // Sebelum masuk antrean tiket: hanya boleh antre kalau tiketnya masih bisa dibuat (War)
         warAdmit: async (interaction, type, gate) => {

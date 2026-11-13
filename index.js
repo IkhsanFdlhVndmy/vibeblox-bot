@@ -3527,6 +3527,7 @@ client.on('interactionCreate', async (interaction) => {
                         ticketType: type,
                         ...(FX ? FX.ticketExtraFields(interaction, type) : {})
                     });
+                    if (FX) FX.usernameLocked(interaction, newChannel.id); // username -> tiket ini (daftar di memori)
                 } catch (dbErr) {
                     // DB gagal -> hapus channel lagi, jangan sampai ada channel "yatim" yang tidak bisa di-close/dipindah
                     console.error('❌ Gagal simpan tiket ke DB, channel dibatalkan:', dbErr.message);
