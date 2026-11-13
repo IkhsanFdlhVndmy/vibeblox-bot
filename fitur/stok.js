@@ -308,7 +308,7 @@ module.exports = function createStok(ctx, core, riwayat) {
         }
         const link = `https://discord.com/channels/${restock.guildId || interaction.guildId}/${restock.channelId}/${restock.messageId}`;
         return interaction.editReply({ content: sold
-            ? `🔴 Restock **${fmt(restock.amount)} Robux** ditandai **SOLD OUT (Pre-Order)**.\n• Tampilan countdown berubah jadi SOLD OUT, tombol Ingatkan Saya dimatikan\n• ${removed} pengingat DM dibatalkan\n• Saat stok masuk **tidak** ada pengumuman @everyone\n${link}`
+            ? `🔴 Restock **${fmt(restock.amount)} Robux** ditandai **SOLD OUT (Pre-Order)**.\n• Tampilan berubah jadi SOLD OUT (countdown tetap jalan), tombol Ingatkan Saya dimatikan\n• ${removed} pengingat DM dibatalkan\n• Saat stok masuk **tidak** ada pengumuman @everyone\n${link}`
             : `✅ Status SOLD OUT dibatalkan — countdown & tombol Ingatkan Saya aktif lagi.\n${link}` });
     }
 

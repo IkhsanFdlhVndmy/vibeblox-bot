@@ -2575,6 +2575,10 @@ function buildRestockPendingEmbed(restock) {
                 '## 🔴 SOLD OUT (Pre-Order)',
                 'Stok restock ini **sudah habis dipesan lewat Pre-Order**. Terima kasih Vibies! 💜',
                 '',
+                // countdown tetap jalan: penanda kapan Robux masuk & Pre-Order mulai dikirim
+                restock.arrivalTimestamp.getTime() > Date.now()
+                    ? `## ⏳ ${countdown}`
+                    : '## ✅ Robux sudah masuk — pesanan Pre-Order sedang dikirim',
                 `-# Pesanan Pre-Order dikirim mulai: ${formatWIB(restock.arrivalTimestamp)}`
             ].join('\n'));
     }
