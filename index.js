@@ -3501,7 +3501,7 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.editReply({ content: warFull });
             }
             let queueNote = null;
-            if (ticketLockWaiting >= 2) {
+            if (ticketLockWaiting >= 1) {
                 queueNote = interaction.editReply({ content: `⏳ Kamu di **antrean ke-${ticketLockWaiting + 1}**, tiket sedang dibuat sesuai urutan form masuk. Jangan kirim form ulang ya…` }).catch(() => {});
             }
             const ticketChannel = await withTicketLock(async () => { try {

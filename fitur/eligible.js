@@ -302,8 +302,12 @@ module.exports = function createEligible(ctx, core) {
         try { username = interaction.fields.getTextInputValue('user_roblox').trim(); } catch (e) {}
         const out = { mode, username };
         if (core.isOn('batas_username') && username) {
-            const existing = await Ticket.findOne({ ticketType: 'community', robloxUsername: norm(username) }).lean().catch(() => null);
-            if (existing) return { block: `❌ Username Roblox **\`${username}\`** masih punya tiket Community aktif: <#${existing.channelId}>.\nSelesaikan tiket itu dulu, atau gunakan username lain.` };
+            // daftar username aktif sudah di memori -> jawab instan (tanpa tanya database)
+            const held = unameLoaded ? unameIdx.get(norm(username)) : undefined;
+            const existingId = unameLoaded
+                ? (held && !String(held).startsWith('pending:') ? held : null)
+                : (await Ticket.findOne({ ticketType: 'community', robloxUsername: norm(username) }).lean().catch(() => null))?.channelId;
+            if (existingId) return { block: `❌ Username Roblox **\`${username}\`** masih punya tiket Community aktif: <#${existingId}>.\nSelesaikan tiket itu dulu, atau gunakan username lain.` };
         }
         // Cek eligible TIDAK dilakukan di sini lagi (Roblox lambat saat war -> antrean "thinking" lama).
         // Tiket langsung dibuat sesuai urutan form masuk, status eligible dikirim di dalam tiket.

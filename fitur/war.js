@@ -101,6 +101,7 @@ module.exports = function setupWar(ctx, core, bayar) {
         }
         await setWar(war);
         h.schedulePanelStockUpdate();
+        ensureMem(war).catch(() => {}); // total pesanan langsung dimuat ke memori (pembeli pertama tidak menunggu)
         return { war };
     }
     async function stop() {
@@ -121,10 +122,16 @@ module.exports = function setupWar(ctx, core, bayar) {
     const waiting = new Set(); // interaksi yang sedang antre (untuk ditolak serentak kalau War penuh)
     // Total pesanan sesi War di MEMORI: dimuat dari database sekali (mulai War / bot menyala),
     // lalu ditambah/dikurangi langsung setiap ada pesanan baru, batal, atau jumlah berubah.
+    let memLoading = null; // { session, promise } — dimuat SEKALI per sesi (tidak saling menimpa)
     async function ensureMem(war) {
         if (mem.session === war.session) return;
-        const used = (await totals(war.session)).robux;
-        mem.session = war.session; mem.used = used;
+        if (!memLoading || memLoading.session !== war.session) {
+            const session = war.session;
+            memLoading = { session, promise: totals(session).then(t => {
+                if (mem.session !== session) { mem.session = session; mem.used = t.robux; }
+            }).finally(() => { if (memLoading?.session === session) memLoading = null; }) };
+        }
+        await memLoading.promise;
     }
     function memAdd(session, delta) { if (mem.session === session) mem.used += delta; }
     // Return pesan tolak (langsung, tanpa antre) atau null (boleh antre)
