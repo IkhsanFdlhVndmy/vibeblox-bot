@@ -15,7 +15,17 @@ module.exports = function setupWar(ctx, core, bayar) {
     const fmt = (n) => Number(n || 0).toLocaleString('id-ID');
     const FULL_MSG = '❌ **Tidak bisa open ticket karena sudah melebihi kapasitas stock.**\nPantau pengumuman restock berikutnya ya!';
 
-    async function getWar() { return (await core.getState('war')) || { active: false }; }
+    // Status War disimpan di MEMORI (hanya modul ini yang mengubahnya) -> dibaca instan di dalam antrean tiket.
+    // Database tetap ditulis (tahan restart), tapi antrean tidak menunggu tulisannya.
+    let warState;
+    async function getWar() {
+        if (warState === undefined) warState = (await core.getState('war')) || { active: false };
+        return warState;
+    }
+    function setWar(v) {
+        warState = v;
+        return core.setState('war', v).catch(e => console.error('[WAR] Gagal simpan status:', e.message));
+    }
 
     async function totals(session) {
         const rows = await WarReservation.find({ session, released: false }).select('robux').lean();
@@ -51,13 +61,13 @@ module.exports = function setupWar(ctx, core, bayar) {
         if (cur.active && Date.now() - cur.session > CFG.WAR_RESUME_HOURS * 3600 * 1000) {
             // War lama yang tidak pernah ditutup (mis. berhari-hari lalu) -> akhiri, mulai War BARU.
             // Tiket lama yang masih buka & belum ada invoice tetap ikut dihitung (lihat "carry" di bawah).
-            await core.setState('war', { ...cur, active: false, full: false, endedAt: Date.now() });
+            await setWar({ ...cur, active: false, full: false, endedAt: Date.now() });
             cur = { active: false };
         }
         if (cur.active) {
             // War yang sama (dibuka lagi dalam beberapa jam, mis. setelah Disable / penuh): lanjutkan, pesanan tetap dihitung
             const war = { ...cur, full: false };
-            await core.setState('war', war);
+            await setWar(war);
             return { war, resumed: true };
         }
         // fast: pakai saldo yang sudah tersimpan (diperbarui otomatis tiap 30 dtk) -> tombol TIDAK menunggu Roblox
@@ -89,14 +99,14 @@ module.exports = function setupWar(ctx, core, bayar) {
             war.full = true; war.fullAt = Date.now();
             setTimeout(() => { markFull(war, true).catch(() => {}); }, 3000);
         }
-        await core.setState('war', war);
+        await setWar(war);
         h.schedulePanelStockUpdate();
         return { war };
     }
     async function stop() {
         const cur = await getWar();
         if (!cur.active) return;
-        await core.setState('war', { ...cur, active: false, full: false, endedAt: Date.now() });
+        await setWar({ ...cur, active: false, full: false, endedAt: Date.now() });
         h.schedulePanelStockUpdate();
     }
 
@@ -106,15 +116,17 @@ module.exports = function setupWar(ctx, core, bayar) {
     // mem.used  = total pesanan tersimpan (cache, disegarkan dari database)
     // queued    = total Robux form yang SUDAH masuk antrean tapi belum diproses
     // Form baru boleh antre hanya kalau (tersimpan + yang sedang antre) belum mencapai batas.
-    const mem = { session: null, used: 0, at: 0 };
+    const mem = { session: null, used: 0 };
     let queued = 0;
     const waiting = new Set(); // interaksi yang sedang antre (untuk ditolak serentak kalau War penuh)
-    function memDirty() { mem.at = 0; }
+    // Total pesanan sesi War di MEMORI: dimuat dari database sekali (mulai War / bot menyala),
+    // lalu ditambah/dikurangi langsung setiap ada pesanan baru, batal, atau jumlah berubah.
     async function ensureMem(war) {
-        if (mem.session === war.session && Date.now() - mem.at < 5000) return;
+        if (mem.session === war.session) return;
         const used = (await totals(war.session)).robux;
-        mem.session = war.session; mem.used = used; mem.at = Date.now();
+        mem.session = war.session; mem.used = used;
     }
+    function memAdd(session, delta) { if (mem.session === session) mem.used += delta; }
     // Return pesan tolak (langsung, tanpa antre) atau null (boleh antre)
     async function admit(interaction, mode) {
         if (mode && mode !== 'ketat') return null;
@@ -183,14 +195,18 @@ module.exports = function setupWar(ctx, core, bayar) {
         let raw = '';
         try { raw = interaction.fields.getTextInputValue('jml_robux'); } catch (e) {}
         const robux = bayar.parseRobux(raw); // tidak terbaca -> 0 (tiket tetap dibuat, staf cek manual)
-        const used = (await totals(war.session)).robux;
-        await WarReservation.create({ key: interaction.id, session: war.session, userId: interaction.user.id, robux });
+        await ensureMem(war); // biasanya instan (sudah dimuat)
+        const used = mem.used;
+        mem.used = used + robux;
+        // simpan ke database TANPA menahan antrean (attach/abort menunggu penyimpanan ini selesai)
         interaction.__warKey = interaction.id;
-        if (mem.session === war.session) { mem.used = used + robux; mem.at = Date.now(); }
+        interaction.__warSave = WarReservation.create({ key: interaction.id, session: war.session, userId: interaction.user.id, robux })
+            .catch(e => { console.error('[WAR] Gagal simpan pesanan:', e.message); });
+        interaction.__warRobux = { robux, session: war.session };
         if (limitOf(war) - used - robux <= 0) {
-            // tandai penuh SEKARANG; yang masih antre langsung ditolak (tidak menunggu giliran),
-            // urusan Discord (tutup tombol, info alarm) di belakang supaya antrean tidak tertahan
-            await core.setState('war', { ...war, full: true, fullAt: Date.now() });
+            // tandai penuh SEKARANG (di memori, langsung berlaku); yang masih antre langsung ditolak;
+            // urusan Discord (tutup tombol, info alarm) & database di belakang
+            setWar({ ...war, full: true, fullAt: Date.now() });
             rejectWaiting();
             markFull(war, true).catch(() => {});
         }
@@ -200,26 +216,30 @@ module.exports = function setupWar(ctx, core, bayar) {
     // Tiket batal dibuat setelah dipesan (kategori penuh / error Discord) -> kembalikan
     async function abort(interaction) {
         if (!interaction?.__warKey) return;
+        if (interaction.__warSave) await interaction.__warSave;
         await WarReservation.deleteOne({ key: interaction.__warKey }).catch(() => {});
         interaction.__warKey = null;
-        memDirty();
+        if (interaction.__warRobux) { memAdd(interaction.__warRobux.session, -interaction.__warRobux.robux); interaction.__warRobux = null; }
         h.schedulePanelStockUpdate();
     }
     async function attach(interaction, channelId) {
         if (!interaction?.__warKey) return;
+        if (interaction.__warSave) await interaction.__warSave;
         await WarReservation.updateOne({ key: interaction.__warKey }, { $set: { channelId } }).catch(() => {});
     }
     // Jumlah di tiket berubah (invoice dibuat / dibatalkan, atau /editform sebelum ada invoice)
     // -> hitungan War tiket itu ikut berubah. Tidak membuka tombol yang sudah ditutup otomatis.
     async function syncChannel(channelId, robux) {
         if (!channelId || !(robux > 0)) return;
+        const before = await WarReservation.find({ channelId, released: false, done: false, robux: { $ne: robux } }).lean().catch(() => []);
+        if (!before.length) return;
         const r = await WarReservation.updateMany({ channelId, released: false, done: false, robux: { $ne: robux } }, { $set: { robux } }).catch(() => null);
         if (!r?.modifiedCount) return;
-        memDirty();
+        for (const b of before) memAdd(b.session, robux - (b.robux || 0));
         h.schedulePanelStockUpdate();
         const war = await getWar();
-        if (war.active && !war.full && limitOf(war) - (await totals(war.session)).robux <= 0) {
-            await core.setState('war', { ...war, full: true, fullAt: Date.now() });
+        if (war.active && !war.full && mem.session === war.session && limitOf(war) - mem.used <= 0) {
+            await setWar({ ...war, full: true, fullAt: Date.now() });
             rejectWaiting();
             markFull(war, true).catch(() => {});
         }
@@ -230,15 +250,17 @@ module.exports = function setupWar(ctx, core, bayar) {
     }
     // Tiket ditutup tanpa ada Done -> pesanan dibatalkan, kapasitas kembali (tombol TIDAK dibuka otomatis)
     async function onChannelDelete(channelId) {
+        const rows = await WarReservation.find({ channelId, done: false, released: false }).lean().catch(() => []);
+        if (!rows.length) return;
         const r = await WarReservation.updateMany({ channelId, done: false, released: false }, { $set: { released: true } }).catch(() => null);
-        if (r?.modifiedCount) { memDirty(); h.schedulePanelStockUpdate(); }
+        if (r?.modifiedCount) { for (const x of rows) memAdd(x.session, -(x.robux || 0)); h.schedulePanelStockUpdate(); }
     }
 
     async function markFull(war, flagged = false) {
         const fresh = await getWar();
         if (!fresh.active || fresh.session !== war.session) return;
         if (fresh.full && !flagged) return;
-        if (!fresh.full) await core.setState('war', { ...fresh, full: true, fullAt: Date.now() });
+        if (!fresh.full) await setWar({ ...fresh, full: true, fullAt: Date.now() });
         try {
             const config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
             if (config) { config.buttonStates.set('community', false); await config.save(); }

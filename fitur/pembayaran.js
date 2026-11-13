@@ -655,6 +655,7 @@ module.exports = function createPembayaran(ctx, core, riwayat, stok, eligible) {
             if (username) {
                 const ticket = await Ticket.findOne({ channelId: channel.id });
                 if (ticket) { ticket.robloxUsername = eligible.norm(username); await ticket.save(); }
+                if (ticket?.ticketType === 'community') eligible.setChannelUsername(channel.id, username);
                 if (ticket?.ticketType === 'community') eligible.postEligibility(channel, { username }).catch(() => {});
             }
             if (robux) {

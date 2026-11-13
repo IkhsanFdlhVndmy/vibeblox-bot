@@ -310,14 +310,51 @@ module.exports = function createEligible(ctx, core) {
         return out;
     }
     // Di DALAM kunci antrean tiket (anti dobel kalau 2 orang kirim form username sama bersamaan)
+    // Daftar username tiket Community yang masih aktif, di MEMORI (username -> channelId / 'pending').
+    // Dimuat dari database saat bot menyala; diperbarui saat tiket dibuat / ditutup / username diubah.
+    // Dipakai di DALAM antrean tiket supaya tidak perlu tanya database (antrean tetap cepat saat war).
+    const unameIdx = new Map();
+    let unameLoaded = false;
+    async function loadUsernameIndex() {
+        try {
+            const rows = await Ticket.find({ ticketType: 'community', robloxUsername: { $ne: null } }).select('channelId robloxUsername').lean();
+            unameIdx.clear();
+            for (const r of rows) if (r.robloxUsername) unameIdx.set(r.robloxUsername, r.channelId);
+            unameLoaded = true;
+        } catch (e) { console.error('[ELIGIBLE] Gagal memuat daftar username tiket:', e.message); }
+    }
+    function forgetChannel(channelId) {
+        for (const [k, v] of unameIdx) if (v === channelId) unameIdx.delete(k);
+    }
+    function setChannelUsername(channelId, username) {
+        forgetChannel(channelId);
+        if (username) unameIdx.set(norm(username), channelId);
+    }
     async function inLockCheck(interaction, type) {
         if (type !== 'community' || !core.isOn('batas_username')) return null;
         let username = '';
         try { username = interaction.fields.getTextInputValue('user_roblox').trim(); } catch (e) { return null; }
         if (!username) return null;
-        const existing = await Ticket.findOne({ ticketType: 'community', robloxUsername: norm(username) }).lean();
-        if (existing) return `❌ Username Roblox **\`${username}\`** masih punya tiket Community aktif: <#${existing.channelId}>.`;
+        const key = norm(username);
+        if (!unameLoaded) {
+            // daftar belum termuat (bot baru menyala) -> cara lama lewat database
+            const existing = await Ticket.findOne({ ticketType: 'community', robloxUsername: key }).lean();
+            if (existing) return `❌ Username Roblox **\`${username}\`** masih punya tiket Community aktif: <#${existing.channelId}>.`;
+        }
+        const held = unameIdx.get(key);
+        if (held && String(held).startsWith('pending:')) return `❌ Username Roblox **\`${username}\`** masih punya tiket Community (sedang dibuat dari form lain). Tunggu tiketnya muncul ya.`;
+        if (held) return `❌ Username Roblox **\`${username}\`** masih punya tiket Community aktif: <#${held}>.`;
+        unameIdx.set(key, `pending:${interaction.id}`); // dipegang sampai tiketnya jadi / batal
+        interaction.__unameKey = key;
         return null;
+    }
+    function lockCreated(interaction, channelId) {
+        if (interaction?.__unameKey) unameIdx.set(interaction.__unameKey, channelId);
+    }
+    function lockAbort(interaction) {
+        const k = interaction?.__unameKey;
+        if (k && unameIdx.get(k) === `pending:${interaction.id}`) unameIdx.delete(k);
+        if (interaction) interaction.__unameKey = null;
     }
     function ticketExtraFields(interaction, type) {
         try {
@@ -349,6 +386,7 @@ module.exports = function createEligible(ctx, core) {
                 const f = form?.embeds?.[0]?.fields?.find(x => x.name.includes('Username Roblox'));
                 if (!f) continue;
                 await Ticket.updateOne({ channelId: t.channelId }, { $set: { robloxUsername: norm(f.value.replace(/`/g, '')) } });
+                unameIdx.set(norm(f.value.replace(/`/g, '')), t.channelId);
                 n++;
                 await new Promise(r => setTimeout(r, 300));
             }
@@ -357,6 +395,7 @@ module.exports = function createEligible(ctx, core) {
     }
 
     function start() {
+        loadUsernameIndex();
         setTimeout(refreshAll, 20000);
         setInterval(refreshAll, REFRESH_MS);
         setTimeout(backfillUsernames, 30000);
@@ -364,7 +403,7 @@ module.exports = function createEligible(ctx, core) {
 
     return {
         start, refreshAll, cachedJoin, cachedJoinFresh, ensureFresh, checkUsername, buildEligibilityEmbed, rowText,
-        getCommunityMode, applyButtonTicket, panelLabel, beforeTicket, inLockCheck, ticketExtraFields, postEligibility,
+        getCommunityMode, applyButtonTicket, panelLabel, beforeTicket, inLockCheck, lockCreated, lockAbort, forgetChannel, setChannelUsername, loadUsernameIndex, ticketExtraFields, postEligibility,
         norm, caches, resolveUser, userGroups, MODE_LABEL
     };
 };

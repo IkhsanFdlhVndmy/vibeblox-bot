@@ -186,7 +186,7 @@ module.exports = function setupFitur(ctx) {
             }
             return null;
         },
-        warAbort: safe('warAbort', (interaction) => war.abort(interaction)),
+        warAbort: safe('warAbort', async (interaction) => { eligible.lockAbort(interaction); await war.abort(interaction); }),
         // Sebelum masuk antrean tiket: hanya boleh antre kalau tiketnya masih bisa dibuat (War)
         warAdmit: async (interaction, type, gate) => {
             if (type !== 'community') return null;
@@ -199,6 +199,7 @@ module.exports = function setupFitur(ctx) {
         channelNameFor: (type, baseName, gate) => (type === 'community' && gate?.mode === 'preorder' ? `${baseName}-po` : baseName),
         afterTicketCreated: safe('afterTicketCreated', async ({ channel, type, interaction, gate }) => {
             core.stat('tiket_dibuka');
+            eligible.lockCreated(interaction, channel.id);
             await war.attach(interaction, channel.id).catch(() => {});
             if (type === 'community') {
                 if (gate?.mode === 'preorder') await stok.postPreOrderInfo(channel);
@@ -269,6 +270,7 @@ module.exports = function setupFitur(ctx) {
             await bayar.onChannelDelete(channel.id);
             await payout.onChannelDelete(channel.id);
             await war.onChannelDelete(channel.id);
+            eligible.forgetChannel(channel.id);
         }),
         onMessageDelete: safe('onMessageDelete', (id) => bayar.onMessageDelete(id)),
 
