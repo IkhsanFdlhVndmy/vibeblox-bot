@@ -3549,6 +3549,9 @@ client.on('interactionCreate', async (interaction) => {
                         }
                         if (attempt >= 3 || [50013, 30013].includes(createErr.code)) throw createErr; // izin / batas server -> tidak bisa diulang
                         await new Promise(r => setTimeout(r, 1500 * attempt));
+                        // Timeout tapi channel ternyata SUDAH terbuat di Discord -> pakai itu, jangan buat dobel
+                        const made = interaction.guild.channels.cache.find(c => c.name === channelName && TICKET_CATEGORY_IDS.includes(c.parentId));
+                        if (made) newChannel = made;
                     }
                 }
 
