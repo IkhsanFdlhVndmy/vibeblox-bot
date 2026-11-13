@@ -91,6 +91,18 @@ module.exports = function createCore(ctx) {
     }
     function clearAlarm(key) { alarmLast.delete(key); }
 
+    // Status tombol Community di MEMORI -> dibaca instan di dalam antrean tiket (tanpa tanya database).
+    // closed: null = belum diketahui (dianggap buka), true = ditutup (Disable / War penuh), false = buka
+    const commGate = { closed: null, ver: 0, at: 0 };
+    function setCommunityClosed(v) { commGate.closed = !!v; commGate.ver++; commGate.at = Date.now(); }
+    // dari bacaan database: hanya dipakai kalau sejak bacaan dimulai tidak ada perubahan lewat /buttonticket
+    // (dan bukan sesaat setelah perubahan, saat database mungkin belum selesai ditulis)
+    function syncCommunityClosed(v, verAtRead) {
+        if (commGate.ver === verAtRead && Date.now() - commGate.at > 15000) commGate.closed = !!v;
+    }
+    const communityClosed = () => commGate.closed === true;
+    const communityGateVer = () => commGate.ver;
+
     const fmt = (n) => Number(n || 0).toLocaleString('id-ID');
     const rp = (n) => `Rp ${fmt(n)}`;
     const snowflakeTime = (id) => Number((BigInt(id) >> 22n) + 1420070400000n);
@@ -100,6 +112,7 @@ module.exports = function createCore(ctx) {
         dayKey, dayStart, addDays, wibDate, ts, stat,
         isStaff, isInvoiceStaff, isOwner, hasAnyRole,
         sendTo, alarm, clearAlarm, fmt, rp, snowflakeTime,
+        setCommunityClosed, syncCommunityClosed, communityClosed, communityGateVer,
         get settingsLoaded() { return settingsLoaded; }
     };
 };

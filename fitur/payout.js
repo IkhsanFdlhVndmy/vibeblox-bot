@@ -158,6 +158,7 @@ module.exports = function createPayout(ctx, core, eligible) {
                 blocks.join('\n\n') || '⚠️ Username belum ada — tekan **👥 Beberapa Username**'
             ].join('\n').slice(0, 4000));
         if (done) return { embeds: [embed], components: [] };
+        embed.setFooter({ text: 'Pembeli & staf bisa mengubah username lewat tombol 👥 Beberapa Username' });
         const id = plan.invoiceMessageId;
         const row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId(`vx_po_split_${id}`).setLabel('👥 Beberapa Username').setStyle(ButtonStyle.Secondary),
@@ -183,6 +184,7 @@ module.exports = function createPayout(ctx, core, eligible) {
         try {
             if (!recipients.length) return;
             await Ticket.updateOne({ channelId: channel.id }, { $set: { robloxUsername: eligible.norm(recipients[0].username) } });
+            eligible.setChannelUsername(channel.id, recipients[0].username); // daftar username di memori ikut
             const msgs = await channel.messages.fetch({ limit: 5, after: channel.id });
             const form = [...msgs.values()].find(m => m.author?.id === client.user.id && m.embeds?.[0]?.title?.startsWith('🎫 Order Tiket'));
             if (!form) return;
@@ -234,18 +236,29 @@ module.exports = function createPayout(ctx, core, eligible) {
         } catch (e) { console.error('[PAYOUT] Gagal menandai opsi payout selesai:', e.message); }
     }
 
+    // Yang boleh mengubah opsi payout: staf invoice (Owner/Handler) ATAU pembeli tiket itu sendiri
+    async function isBuyer(interaction, buyerId) {
+        const uid = interaction.user?.id;
+        if (!uid) return false;
+        if (buyerId && buyerId === uid) return true;
+        const t = await Ticket.findOne({ channelId: interaction.channel?.id || interaction.channelId }).lean().catch(() => null);
+        return !!t && t.creatorId === uid;
+    }
+    const recalcAt = new Map(); // invoiceMessageId -> waktu terakhir pembeli menekan 🔄 Perbarui
+    const NO_ACCESS = '❌ Opsi payout hanya bisa diubah oleh pembeli tiket ini atau staf.';
+
     // Tombol "📤 Rencana Payout" di invoice Community
     function planButton(invoiceMessageId) {
         return new ButtonBuilder().setCustomId(`vx_plan_${invoiceMessageId}`).setLabel('📤 Opsi Payout').setStyle(ButtonStyle.Primary);
     }
     async function handlePlanButton(interaction) {
-        if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Khusus Owner dan Handler.', flags: MessageFlags.Ephemeral });
         if (!core.isOn('asisten_payout')) return interaction.reply({ content: '❌ Asisten payout sedang OFF (/pengaturan).', flags: MessageFlags.Ephemeral });
         const id = interaction.customId.replace('vx_plan_', '');
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         const embed = interaction.message?.embeds?.[0];
         const robux = parseInt(String((embed?.fields || []).find(f => f.name.includes('Jumlah Robux'))?.value || '').replace(/[^\d]/g, ''), 10) || 0;
         const buyerId = (String((embed?.fields || []).find(f => f.name.includes('Pembeli'))?.value || '').match(/<@!?(\d+)>/) || [])[1] || null;
+        if (!core.isInvoiceStaff(interaction.member) && !(await isBuyer(interaction, buyerId))) return interaction.editReply({ content: NO_ACCESS });
         if (!robux) return interaction.editReply({ content: '❌ Jumlah Robux di invoice tidak terbaca.' });
         const plan = await ensurePlan({ channel: interaction.channel, invoiceMessageId: id, buyerId, robux });
         if (!plan?.messageId) return interaction.editReply({ content: '❌ Gagal membuat opsi payout.' });
@@ -255,9 +268,10 @@ module.exports = function createPayout(ctx, core, eligible) {
     async function handleButton(interaction) {
         const parts = interaction.customId.split('_'); // vx_po_<aksi>_<invoiceMsgId>
         const action = parts[2], id = parts[3];
-        if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Khusus Owner dan Handler.', flags: MessageFlags.Ephemeral });
         const plan = await PayoutPlan.findOne({ invoiceMessageId: id });
         if (!plan) return interaction.reply({ content: '❌ Opsi payout tidak ditemukan.', flags: MessageFlags.Ephemeral });
+        if (!core.isInvoiceStaff(interaction.member) && !(await isBuyer(interaction, plan.buyerId))) return interaction.reply({ content: NO_ACCESS, flags: MessageFlags.Ephemeral });
+        if (plan.status === 'done' && ['split', 'recalc'].includes(action)) return interaction.reply({ content: '✅ Invoice ini sudah selesai, opsi payout tidak bisa diubah lagi.', flags: MessageFlags.Ephemeral });
 
         if (action === 'split') {
             const modal = new ModalBuilder().setCustomId(`vx_pom_${id}`).setTitle('Bagi ke Beberapa Username');
@@ -269,6 +283,13 @@ module.exports = function createPayout(ctx, core, eligible) {
             return interaction.showModal(modal);
         }
         if (action === 'recalc') {
+            if (!core.isInvoiceStaff(interaction.member)) {
+                // pembeli: maks 1x per 60 detik (cek ke Roblox tidak boleh di-spam, apalagi saat War)
+                const last = recalcAt.get(id) || 0;
+                if (Date.now() - last < 60000) return interaction.reply({ content: `⏳ Baru saja diperbarui. Coba lagi <t:${Math.ceil((last + 60000) / 1000)}:R>.`, flags: MessageFlags.Ephemeral });
+                recalcAt.set(id, Date.now());
+                if (recalcAt.size > 500) recalcAt.clear();
+            }
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             if (!plan.recipients.length) return interaction.editReply({ content: '❌ Isi username dulu lewat **👥 Beberapa Username**.' });
             await refreshAll('normal').catch(() => {});
@@ -280,9 +301,11 @@ module.exports = function createPayout(ctx, core, eligible) {
 
     async function handleModal(interaction) {
         const id = interaction.customId.replace('vx_pom_', '');
-        if (!core.isInvoiceStaff(interaction.member)) return interaction.reply({ content: '❌ Khusus Owner dan Handler.', flags: MessageFlags.Ephemeral });
         const plan = await PayoutPlan.findOne({ invoiceMessageId: id });
         if (!plan) return interaction.reply({ content: '❌ Rencana tidak ditemukan.', flags: MessageFlags.Ephemeral });
+        const staff = core.isInvoiceStaff(interaction.member);
+        if (!staff && !(await isBuyer(interaction, plan.buyerId))) return interaction.reply({ content: NO_ACCESS, flags: MessageFlags.Ephemeral });
+        if (plan.status === 'done') return interaction.reply({ content: '✅ Invoice ini sudah selesai, opsi payout tidak bisa diubah lagi.', flags: MessageFlags.Ephemeral });
         const lines = interaction.fields.getTextInputValue('daftar').split('\n').map(l => l.trim()).filter(Boolean);
         const recipients = [];
         for (const l of lines) {
@@ -293,10 +316,16 @@ module.exports = function createPayout(ctx, core, eligible) {
         const total = recipients.reduce((s, r) => s + r.amount, 0);
         if (total !== plan.robux) return interaction.reply({ content: `❌ Total ${fmt(total)} R$ tidak sama dengan pesanan ${fmt(plan.robux)} R$.`, flags: MessageFlags.Ephemeral });
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        const before = plan.recipients.map(r => `${r.username} ${r.amount}`).join(' · ');
         plan.recipients = recipients;
         await plan.save();
         await editPlanMessage(plan);
         await syncFormRecipients(interaction.channel, recipients);
+        if (!staff) {
+            // diubah pembeli -> staf melihat perubahannya di tiket (supaya tidak kirim ke username lama)
+            const after = recipients.map(r => `\`${r.username}\` ${fmt(r.amount)} R$`).join(' · ');
+            await interaction.channel.send({ content: `✏️ <@${interaction.user.id}> mengubah username payout → ${after}${before ? `\n-# sebelumnya: ${before}` : ''}`, allowedMentions: { parse: [] } }).catch(() => {});
+        }
         return interaction.editReply({ content: '✅ Username diperbarui & form tiket ikut diperbarui.' });
     }
 

@@ -263,12 +263,16 @@ module.exports = function createEligible(ctx, core) {
 
     // ---------------- Mode tiket Community ----------------
     async function getCommunityMode() {
+        const ver = core.communityGateVer();
         const cfg = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' }).lean();
         if (!cfg) return 'normal';
         const enabled = cfg.buttonStates ? (cfg.buttonStates instanceof Map ? cfg.buttonStates.get('community') : cfg.buttonStates.community) : true;
+        core.syncCommunityClosed(enabled === false, ver); // salinan di memori untuk cek di dalam antrean
         if (enabled === false) return 'disable';
         return cfg.communityMode || 'normal';
     }
+    // Pesan untuk form Community saat tombol sudah ditutup (Disable manual / War penuh), termasuk yang sedang antre
+    const CLOSED_MSG = '❌ **Tiket Robux Community sudah ditutup karena stok Robux sudah habis.**\nSilakan tunggu stok selanjutnya di pengumuman (announce) ya!';
     const MODE_LABEL = { normal: 'Normal', ketat: 'Ketat (War)', preorder: 'Pre-Order', disable: 'Disable' };
     // Dipanggil /buttonticket: kembalikan { status: boolean, modeLabel } atau { error }
     function applyButtonTicket(config, tipe, rawStatus) {
@@ -278,7 +282,10 @@ module.exports = function createEligible(ctx, core) {
             return { status: rawStatus === 'enable' };
         }
         const mode = rawStatus === 'enable' ? 'normal' : rawStatus;
-        if (mode === 'disable') return { status: false, modeLabel: 'Disable' };
+        if (mode === 'disable') {
+            core.setCommunityClosed(true); // LANGSUNG: yang masih antre ditolak saat gilirannya tiba
+            return { status: false, modeLabel: 'Disable' };
+        }
         config.communityMode = mode;
         return { status: true, modeLabel: MODE_LABEL[mode] };
     }
@@ -297,7 +304,7 @@ module.exports = function createEligible(ctx, core) {
     async function beforeTicket(interaction, type) {
         if (type !== 'community') return {};
         const mode = await getCommunityMode().catch(() => 'normal');
-        if (mode === 'disable') return { block: '❌ Tiket **Robux Community** sedang ditutup. Pantau pengumuman restock ya!' };
+        if (mode === 'disable' || core.communityClosed()) return { block: CLOSED_MSG };
         let username = '';
         try { username = interaction.fields.getTextInputValue('user_roblox').trim(); } catch (e) {}
         const out = { mode, username };
@@ -400,6 +407,7 @@ module.exports = function createEligible(ctx, core) {
 
     function start() {
         loadUsernameIndex();
+        getCommunityMode().catch(() => {}); // status buka/tutup Community langsung ada di memori
         setTimeout(refreshAll, 20000);
         setInterval(refreshAll, REFRESH_MS);
         setTimeout(backfillUsernames, 30000);
@@ -408,6 +416,6 @@ module.exports = function createEligible(ctx, core) {
     return {
         start, refreshAll, cachedJoin, cachedJoinFresh, ensureFresh, checkUsername, buildEligibilityEmbed, rowText,
         getCommunityMode, applyButtonTicket, panelLabel, beforeTicket, inLockCheck, lockCreated, lockAbort, forgetChannel, setChannelUsername, loadUsernameIndex, ticketExtraFields, postEligibility,
-        norm, caches, resolveUser, userGroups, MODE_LABEL
+        norm, caches, resolveUser, userGroups, MODE_LABEL, CLOSED_MSG
     };
 };

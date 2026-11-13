@@ -73,18 +73,24 @@ let ticketLockChain = Promise.resolve();
 let ticketLockWaiting = 0; // jumlah form yang sedang antre / diproses (untuk info "antrean ke-N")
 function withTicketLock(task, maxHoldMs = 10000) {
     ticketLockWaiting++;
-    const run = ticketLockChain.then(task, task);
+    let markStarted;
+    const started = new Promise(r => { markStarted = r; });
+    const turn = () => { markStarted(); return task(); };
+    const run = ticketLockChain.then(turn, turn);
     run.then(() => { ticketLockWaiting--; }, () => { ticketLockWaiting--; });
-    // Antrean berikutnya lanjut setelah tugas ini selesai ATAU paling lama maxHoldMs (10 dtk).
+    // Antrean berikutnya lanjut setelah tugas ini selesai ATAU paling lama maxHoldMs (10 dtk) SEJAK GILIRANNYA DIMULAI.
     // (Satu tugas yang macet — mis. Discord/Roblox lambat di VPS gratis — tidak boleh membekukan semua tiket.)
-    ticketLockChain = Promise.race([run.catch(() => {}), new Promise(r => setTimeout(r, maxHoldMs))]);
+    // Penting: hitungan 10 dtk dimulai saat giliran tiba, BUKAN saat masuk antrean — kalau tidak, antrean panjang
+    // (>10 dtk) berhenti berurutan & semua channel dibuat bersamaan (kategori kelebihan isi -> "gagal").
+    ticketLockChain = Promise.race([run.catch(() => {}), started.then(() => new Promise(r => setTimeout(r, maxHoldMs)))]);
     return run;
 }
 
 // Cari kategori PERTAMA (paling atas) yang masih punya slot.
 // Karena auto-geser selalu menjaga kategori atas tetap penuh, ini otomatis jatuh ke posisi antrian yang benar.
-async function pickTicketCategory(guild) {
+async function pickTicketCategory(guild, skip = null) {
     for (const catId of TICKET_CATEGORY_IDS) {
+        if (skip?.has(catId)) continue; // Discord bilang kategori ini sudah penuh
         let cat = guild.channels.cache.get(catId);
         if (!cat) {
             cat = await guild.channels.fetch(catId).catch(err => {
@@ -3507,18 +3513,36 @@ client.on('interactionCreate', async (interaction) => {
             const ticketChannel = await withTicketLock(async () => { try {
                 if (interaction.__warRejected) return { fxBlock: null, alreadyReplied: true }; // sudah ditolak saat antre (stok habis)
                 if (FX) FX.warStartTurn(interaction); // giliran tiba: tidak ikut ditolak serentak lagi
+                // Tombol Community sudah ditutup (/buttonticket Disable / War penuh) saat giliran tiba -> tidak dibuatkan tiket
+                const fxClosed = FX ? FX.closedInLock(interaction, type) : null;
+                if (fxClosed) return { fxBlock: fxClosed };
                 // Cek ulang DI DALAM kunci: 2 form dengan username sama yang masuk bersamaan tidak bisa lolos dua-duanya
                 const fxTaken = FX ? await FX.inLockCheck(interaction, type, fxGate) : null;
                 if (fxTaken) return { fxBlock: fxTaken };
-                const activeCategoryId = await pickTicketCategory(interaction.guild);
-                if (!activeCategoryId) return null; // semua kategori penuh
 
-                const newChannel = await interaction.guild.channels.create({
-                    name: channelName,
-                    type: 0, // Text Channel
-                    parent: activeCategoryId,
-                    permissionOverwrites: permissionOverwrites
-                });
+                // Buat channel. Discord sesekali menolak/timeout saat ramai -> coba lagi (kategori penuh -> kategori berikutnya)
+                let newChannel = null;
+                const fullCats = new Set();
+                for (let attempt = 1; !newChannel; attempt++) {
+                    const activeCategoryId = await pickTicketCategory(interaction.guild, fullCats);
+                    if (!activeCategoryId) return null; // semua kategori penuh
+                    try {
+                        newChannel = await interaction.guild.channels.create({
+                            name: channelName,
+                            type: 0, // Text Channel
+                            parent: activeCategoryId,
+                            permissionOverwrites: permissionOverwrites
+                        });
+                    } catch (createErr) {
+                        console.error(`[TIKET] Gagal membuat channel (percobaan ${attempt}):`, createErr.code || '', createErr.message);
+                        if (/MAX_CHANNELS|Maximum number of channels in category/i.test(createErr.message || '') && attempt < 6) {
+                            fullCats.add(activeCategoryId); // kategori ternyata penuh -> pakai kategori berikutnya
+                            continue;
+                        }
+                        if (attempt >= 3 || [50013, 30013].includes(createErr.code)) throw createErr; // izin / batas server -> tidak bisa diulang
+                        await new Promise(r => setTimeout(r, 1500 * attempt));
+                    }
+                }
 
                 try {
                     await Ticket.create({
@@ -3544,8 +3568,12 @@ client.on('interactionCreate', async (interaction) => {
             if (ticketChannel?.fxBlock) return interaction.editReply({ content: ticketChannel.fxBlock });
             if (!ticketChannel) {
                 if (FX) await FX.warAbort(interaction); // War: pesanan Robux dikembalikan
-                return interaction.editReply('❌ Semua kategori tiket sedang penuh. Silakan coba lagi beberapa saat lagi.');
+                return interaction.editReply('❌ Semua kategori tiket sedang penuh. Silakan coba lagi beberapa saat lagi.').catch(() => {});
             }
+
+            // Mulai di sini channel tiket SUDAH JADI & tercatat. Apa pun yang gagal setelah ini (kirim form, balasan)
+            // TIDAK boleh membuat pembeli mengira tiketnya gagal, dan pesanan War-nya tidak boleh dikembalikan.
+            try {
 
             // Susun Embed Tiket
             const typeLabels = {
@@ -3603,22 +3631,28 @@ client.on('interactionCreate', async (interaction) => {
             const msgContent = type === 'mm' && mmPings !== ''
                 ? `Memanggil para pihak: ${mmPings}\n<@&${roleVibeOwner}> <@${userHandlerId}>`
                 : `<@${interaction.user.id}> <@&${roleVibeOwner}> <@${userHandlerId}>`;
-            await ticketChannel.send({
+            await discordRetry(() => ticketChannel.send({
                 content: msgContent,
                 embeds: [ticketEmbed],
                 components: [actionRow],
                 allowedMentions: { parse: ['users', 'roles'] }
-            });
+            }));
+            } catch (sendErr) {
+                console.error('[TIKET] Channel tiket sudah dibuat, tapi pesan form gagal dikirim:', sendErr.code || '', sendErr.message);
+                await ticketChannel.send({ content: `<@${interaction.user.id}> Tiket kamu sudah dibuat. Silakan tulis pesananmu di sini, staf akan segera membantu.`, allowedMentions: { users: [interaction.user.id] } }).catch(() => {});
+            }
 
-            await interaction.editReply(`✅ Tiket berhasil dibuat! Silakan menuju ${ticketChannel}`);
+            await interaction.editReply(`✅ Tiket berhasil dibuat! Silakan menuju ${ticketChannel}`).catch(e => console.error('[TIKET] Balasan "tiket dibuat" gagal terkirim:', e.code || '', e.message));
             // --- FITUR: status eligible, info Pre-Order, draft invoice (di belakang, tidak menahan pembuatan tiket) ---
             if (FX) FX.afterTicketCreated({ channel: ticketChannel, type, interaction, gate: fxGate });
             return;
 
         } catch (e) {
-            console.error(e);
+            console.error('[TIKET] Tiket gagal dibuat:', e?.code || '', e?.message || e);
             if (FX) { FX.warDequeue(interaction); await FX.warAbort(interaction); } // War: pesanan & antrean dikembalikan
-            return interaction.editReply('❌ Tiket gagal dibuat karena Discord sedang sibuk. Silakan kirim form lagi ya.').catch(() => {});
+            // Community sudah ditutup sementara itu -> pesan "ditutup", bukan pesan error
+            const closedMsg = FX ? FX.closedInLock(interaction, type) : null;
+            return interaction.editReply(closedMsg || '❌ Tiket gagal dibuat karena Discord sedang sibuk. Silakan kirim form lagi ya.').catch(() => {});
         }
     }
 

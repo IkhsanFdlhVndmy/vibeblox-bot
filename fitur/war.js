@@ -274,6 +274,7 @@ module.exports = function setupWar(ctx, core, bayar) {
         if (!fresh.full) await setWar({ ...fresh, full: true, fullAt: Date.now() });
         try {
             const config = await TicketConfig.findOne({ configId: 'VIBEBLOX_TICKET' });
+            core.setCommunityClosed(true);
             if (config) { config.buttonStates.set('community', false); await config.save(); }
             await h.refreshTicketPanel();
         } catch (e) { console.error('[WAR] Gagal menutup tombol Community:', e.message); }

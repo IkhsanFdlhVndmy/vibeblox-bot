@@ -199,6 +199,11 @@ module.exports = function setupFitur(ctx) {
             try { return await war.admit(interaction, gate?.mode); }
             catch (e) { console.error('[WAR] Cek antrean gagal:', e.message); return null; } // cek pasti tetap di dalam antrean
         },
+        // DI DALAM antrean: tombol Community sudah ditutup (Disable / War penuh) saat giliran tiba -> antrean dibubarkan
+        closedInLock: (interaction, type) => {
+            if (type !== 'community') return null;
+            try { return core.communityClosed() ? eligible.CLOSED_MSG : null; } catch (e) { return null; }
+        },
         warStartTurn: (interaction) => { try { war.startTurn(interaction); } catch (e) {} },
         warDequeue: (interaction) => { try { war.dequeue(interaction); } catch (e) {} },
         ticketExtraFields: (interaction, type) => { try { return eligible.ticketExtraFields(interaction, type); } catch (e) { return {}; } },
@@ -236,6 +241,7 @@ module.exports = function setupFitur(ctx) {
             return {};
         },
         afterButtonTicket: safe('afterButtonTicket', async (tipe, applied, panelChannelId) => {
+            if (tipe === 'community') core.setCommunityClosed(!applied.status); // status sudah tersimpan -> salinan di memori ikut
             if (tipe === 'community') await stok.onCommunityModeChanged(applied.status ? (applied.modeLabel === 'Pre-Order' ? 'preorder' : 'normal') : 'disable', panelChannelId);
         }),
         panelLabel: (id, label, config) => { try { return eligible.panelLabel(id, label, config); } catch (e) { return label; } },
