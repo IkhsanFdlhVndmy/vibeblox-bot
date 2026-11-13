@@ -182,14 +182,18 @@ module.exports = function setupWar(ctx, core, bayar) {
         const war = await getWar();
         if (!war.active) {
             if (mode !== 'ketat') return null;
+            // War sengaja DIAKHIRI (pindah ke Normal / Pre-Order) setelah form ini dikirim -> perlakukan seperti Normal
+            if (war.endedAt && war.endedAt >= (interaction.createdTimestamp || 0)) return null;
             // mode Ketat tapi sesi War belum ada -> mulai DI BELAKANG (baca saldo Roblox tidak boleh menahan antrean tiket).
             // Pesanan form ini tetap dicatat (sesi 0) dan otomatis ikut dihitung begitu War berjalan.
             let raw0 = '';
             try { raw0 = interaction.fields.getTextInputValue('jml_robux'); } catch (e) {}
             const r0 = bayar.parseRobux(raw0);
             if (r0) {
-                await WarReservation.create({ key: interaction.id, session: 0, userId: interaction.user.id, robux: r0 });
+                // disimpan tanpa menahan antrean (attach/abort menunggu penyimpanan ini)
                 interaction.__warKey = interaction.id;
+                interaction.__warSave = WarReservation.create({ key: interaction.id, session: 0, userId: interaction.user.id, robux: r0 })
+                    .catch(e => { console.error('[WAR] Gagal simpan pesanan:', e.message); });
             }
             startInBackground();
             return null;
