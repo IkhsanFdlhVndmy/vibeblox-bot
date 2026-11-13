@@ -102,6 +102,55 @@ module.exports = function setupWar(ctx, core, bayar) {
 
     const limitOf = (war) => war.capacity - CFG.WAR_STOP_REMAINING;
 
+    // ===== Antrean War: hanya yang tiketnya BISA dibuat yang boleh ikut antre =====
+    // mem.used  = total pesanan tersimpan (cache, disegarkan dari database)
+    // queued    = total Robux form yang SUDAH masuk antrean tapi belum diproses
+    // Form baru boleh antre hanya kalau (tersimpan + yang sedang antre) belum mencapai batas.
+    const mem = { session: null, used: 0, at: 0 };
+    let queued = 0;
+    const waiting = new Set(); // interaksi yang sedang antre (untuk ditolak serentak kalau War penuh)
+    function memDirty() { mem.at = 0; }
+    async function ensureMem(war) {
+        if (mem.session === war.session && Date.now() - mem.at < 5000) return;
+        const used = (await totals(war.session)).robux;
+        mem.session = war.session; mem.used = used; mem.at = Date.now();
+    }
+    // Return pesan tolak (langsung, tanpa antre) atau null (boleh antre)
+    async function admit(interaction, mode) {
+        if (mode && mode !== 'ketat') return null;
+        const war = await getWar();
+        if (!war.active) return null;
+        if (war.full) return FULL_MSG;
+        await ensureMem(war);
+        let robux = 0;
+        try { robux = bayar.parseRobux(interaction.fields.getTextInputValue('jml_robux')); } catch (e) {}
+        // ---- bagian ini TANPA await: cek & masuk antrean terjadi sekaligus (tidak bisa rebutan) ----
+        if (mem.session !== war.session) return null;
+        if (mem.used + queued >= limitOf(war)) return FULL_MSG; // yang sudah antre sudah cukup menghabiskan stok
+        queued += robux;
+        interaction.__warQueued = { robux, session: war.session };
+        waiting.add(interaction);
+        return null;
+    }
+    // Giliran tiba: tidak lagi "menunggu" (tidak ikut ditolak serentak), tapi jumlahnya tetap dihitung sampai tersimpan
+    function startTurn(interaction) { waiting.delete(interaction); }
+    // Pesanan tersimpan / batal -> keluar dari hitungan antrean
+    function dequeue(interaction) {
+        const q = interaction?.__warQueued;
+        if (!q) return;
+        queued = Math.max(0, queued - q.robux);
+        interaction.__warQueued = null;
+        waiting.delete(interaction);
+    }
+    // War penuh -> semua yang masih antre langsung diberi tahu, tidak menunggu giliran
+    function rejectWaiting() {
+        for (const it of [...waiting]) {
+            it.__warRejected = true;
+            dequeue(it);
+            it.editReply({ content: FULL_MSG }).catch(() => {});
+        }
+    }
+
     // Sebelum masuk antrean: kalau War sudah penuh -> tolak langsung tanpa ikut antre
     async function quickBlock() {
         const war = await getWar();
@@ -127,6 +176,7 @@ module.exports = function setupWar(ctx, core, bayar) {
             return null;
         }
         if (war.full) return FULL_MSG;
+        if (interaction.__warRejected) return FULL_MSG;
         // Form TIDAK ditolak karena jumlahnya: tiket langsung dibuat (VPS lambat, jangan bikin pembeli menunggu).
         // Begitu stok tersisa <= 5.000 (boleh sampai minus sedikit) -> tombol ditutup, form berikutnya ditolak.
         // Kelebihan pesanan ditutup manual oleh staf.
@@ -136,10 +186,12 @@ module.exports = function setupWar(ctx, core, bayar) {
         const used = (await totals(war.session)).robux;
         await WarReservation.create({ key: interaction.id, session: war.session, userId: interaction.user.id, robux });
         interaction.__warKey = interaction.id;
+        if (mem.session === war.session) { mem.used = used + robux; mem.at = Date.now(); }
         if (limitOf(war) - used - robux <= 0) {
-            // tandai penuh SEKARANG (form berikutnya di antrean langsung ditolak),
+            // tandai penuh SEKARANG; yang masih antre langsung ditolak (tidak menunggu giliran),
             // urusan Discord (tutup tombol, info alarm) di belakang supaya antrean tidak tertahan
             await core.setState('war', { ...war, full: true, fullAt: Date.now() });
+            rejectWaiting();
             markFull(war, true).catch(() => {});
         }
         h.schedulePanelStockUpdate();
@@ -150,6 +202,7 @@ module.exports = function setupWar(ctx, core, bayar) {
         if (!interaction?.__warKey) return;
         await WarReservation.deleteOne({ key: interaction.__warKey }).catch(() => {});
         interaction.__warKey = null;
+        memDirty();
         h.schedulePanelStockUpdate();
     }
     async function attach(interaction, channelId) {
@@ -162,10 +215,12 @@ module.exports = function setupWar(ctx, core, bayar) {
         if (!channelId || !(robux > 0)) return;
         const r = await WarReservation.updateMany({ channelId, released: false, done: false, robux: { $ne: robux } }, { $set: { robux } }).catch(() => null);
         if (!r?.modifiedCount) return;
+        memDirty();
         h.schedulePanelStockUpdate();
         const war = await getWar();
         if (war.active && !war.full && limitOf(war) - (await totals(war.session)).robux <= 0) {
             await core.setState('war', { ...war, full: true, fullAt: Date.now() });
+            rejectWaiting();
             markFull(war, true).catch(() => {});
         }
     }
@@ -176,7 +231,7 @@ module.exports = function setupWar(ctx, core, bayar) {
     // Tiket ditutup tanpa ada Done -> pesanan dibatalkan, kapasitas kembali (tombol TIDAK dibuka otomatis)
     async function onChannelDelete(channelId) {
         const r = await WarReservation.updateMany({ channelId, done: false, released: false }, { $set: { released: true } }).catch(() => null);
-        if (r?.modifiedCount) h.schedulePanelStockUpdate();
+        if (r?.modifiedCount) { memDirty(); h.schedulePanelStockUpdate(); }
     }
 
     async function markFull(war, flagged = false) {
@@ -227,5 +282,5 @@ module.exports = function setupWar(ctx, core, bayar) {
         setTimeout(attempt, 20 * 1000);
     }
 
-    return { getWar, start, stop, boot, syncChannel, quickBlock, reserve, abort, attach, onDone, onChannelDelete, panelLines, FULL_MSG };
+    return { getWar, start, stop, boot, syncChannel, quickBlock, admit, startTurn, dequeue, reserve, abort, attach, onDone, onChannelDelete, panelLines, FULL_MSG };
 };

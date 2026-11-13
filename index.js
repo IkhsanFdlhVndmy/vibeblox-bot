@@ -71,11 +71,11 @@ const closingTicketChannels = new Set();
 // jadi tidak akan pernah tabrakan (misal: bot lagi mindahin channel, lalu ada yang open tiket).
 let ticketLockChain = Promise.resolve();
 let ticketLockWaiting = 0; // jumlah form yang sedang antre / diproses (untuk info "antrean ke-N")
-function withTicketLock(task, maxHoldMs = 25000) {
+function withTicketLock(task, maxHoldMs = 10000) {
     ticketLockWaiting++;
     const run = ticketLockChain.then(task, task);
     run.then(() => { ticketLockWaiting--; }, () => { ticketLockWaiting--; });
-    // Antrean berikutnya lanjut setelah tugas ini selesai ATAU paling lama maxHoldMs.
+    // Antrean berikutnya lanjut setelah tugas ini selesai ATAU paling lama maxHoldMs (10 dtk).
     // (Satu tugas yang macet — mis. Discord/Roblox lambat di VPS gratis — tidak boleh membekukan semua tiket.)
     ticketLockChain = Promise.race([run.catch(() => {}), new Promise(r => setTimeout(r, maxHoldMs))]);
     return run;
@@ -3494,11 +3494,19 @@ client.on('interactionCreate', async (interaction) => {
             // Buat Channel + Simpan DB — KEDUANYA DI DALAM KUNCI ANTRIAN,
             // supaya proses auto-geser tidak pernah melihat channel baru yang belum tercatat di DB
             // Info antrean (supaya tidak cuma "thinking..." saat war / ramai)
+            // War: tolak SEKARANG kalau yang sudah antre sudah cukup menghabiskan stok (jangan beri harapan palsu)
+            const warFull = FX ? await FX.warAdmit(interaction, type, fxGate) : null;
+            if (warFull) {
+                if (FX) FX.ticketBlocked();
+                return interaction.editReply({ content: warFull });
+            }
             let queueNote = null;
             if (ticketLockWaiting >= 2) {
                 queueNote = interaction.editReply({ content: `⏳ Kamu di **antrean ke-${ticketLockWaiting + 1}**, tiket sedang dibuat sesuai urutan form masuk. Jangan kirim form ulang ya…` }).catch(() => {});
             }
-            const ticketChannel = await withTicketLock(async () => {
+            const ticketChannel = await withTicketLock(async () => { try {
+                if (interaction.__warRejected) return { fxBlock: null, alreadyReplied: true }; // sudah ditolak saat antre (stok habis)
+                if (FX) FX.warStartTurn(interaction); // giliran tiba: tidak ikut ditolak serentak lagi
                 // Cek ulang DI DALAM kunci: 2 form dengan username sama yang masuk bersamaan tidak bisa lolos dua-duanya
                 const fxTaken = FX ? await FX.inLockCheck(interaction, type, fxGate) : null;
                 if (fxTaken) return { fxBlock: fxTaken };
@@ -3526,9 +3534,12 @@ client.on('interactionCreate', async (interaction) => {
                     throw dbErr;
                 }
                 return newChannel;
-            });
+            } finally {
+                if (FX) FX.warDequeue(interaction); // keluar dari hitungan antrean War SETELAH pesanannya tersimpan
+            } });
 
             if (queueNote) await queueNote; // pesan antrean pasti terkirim duluan, baru hasilnya
+            if (ticketChannel?.alreadyReplied) return; // sudah diberi tahu "stok habis" saat masih antre
             if (ticketChannel?.fxBlock) return interaction.editReply({ content: ticketChannel.fxBlock });
             if (!ticketChannel) {
                 if (FX) await FX.warAbort(interaction); // War: pesanan Robux dikembalikan
@@ -3605,7 +3616,7 @@ client.on('interactionCreate', async (interaction) => {
 
         } catch (e) {
             console.error(e);
-            if (FX) await FX.warAbort(interaction); // War: pesanan Robux dikembalikan kalau tiket gagal dibuat
+            if (FX) { FX.warDequeue(interaction); await FX.warAbort(interaction); } // War: pesanan & antrean dikembalikan
             return interaction.editReply('❌ Tiket gagal dibuat karena Discord sedang sibuk. Silakan kirim form lagi ya.').catch(() => {});
         }
     }

@@ -187,6 +187,14 @@ module.exports = function setupFitur(ctx) {
             return null;
         },
         warAbort: safe('warAbort', (interaction) => war.abort(interaction)),
+        // Sebelum masuk antrean tiket: hanya boleh antre kalau tiketnya masih bisa dibuat (War)
+        warAdmit: async (interaction, type, gate) => {
+            if (type !== 'community') return null;
+            try { return await war.admit(interaction, gate?.mode); }
+            catch (e) { console.error('[WAR] Cek antrean gagal:', e.message); return null; } // cek pasti tetap di dalam antrean
+        },
+        warStartTurn: (interaction) => { try { war.startTurn(interaction); } catch (e) {} },
+        warDequeue: (interaction) => { try { war.dequeue(interaction); } catch (e) {} },
         ticketExtraFields: (interaction, type) => { try { return eligible.ticketExtraFields(interaction, type); } catch (e) { return {}; } },
         channelNameFor: (type, baseName, gate) => (type === 'community' && gate?.mode === 'preorder' ? `${baseName}-po` : baseName),
         afterTicketCreated: safe('afterTicketCreated', async ({ channel, type, interaction, gate }) => {
