@@ -694,14 +694,22 @@ async function updateSpenderRoles(member, userData) {
 // Sekarang: nama disimpan sendiri (6 jam) & diambil BERSAMAAN, query database berjalan BERSAMAAN,
 // dan halaman yang sudah dibuat disimpan 2 menit (otomatis dibuang begitu ada transaksi / anonymous baru).
 const LB_NAME_TTL_MS = 6 * 60 * 60 * 1000;
-const LB_PAGE_TTL_MS = 2 * 60 * 1000;
+const LB_PAGE_TTL_MS = 10 * 60 * 1000; // halaman disegarkan di belakang layar (data berubah -> langsung disiapkan ulang)
 const lbNameCache = new Map();   // userId -> { name, at }
-const lbPageCache = new Map();   // page -> { data, at }
+const lbPageCache = new Map();   // page -> { data, at, version }
 let lbCacheVersion = 0;
+let lbSnap = null;               // { version, at, users(top 100), totalPages, totalAmountServer }
+let lbSnapLoading = null;        // single-flight: 1 pengambilan data untuk semua halaman sekaligus
+let lbWarming = null;
+let lbWarmTimer = null;
 
+// Data berubah (transaksi / anonymous): tandai versi lama. Halaman lama TETAP boleh ditampilkan ke tombol Prev/Next
+// sebentar (beberapa detik) sementara semua halaman disiapkan ulang di belakang layar -> klik tidak pernah menunggu.
+// Pesan leaderboard utama (halaman 1) tetap selalu memakai data terbaru.
 function lbInvalidateCache() {
     lbCacheVersion++;
-    lbPageCache.clear();
+    if (lbWarmTimer) clearTimeout(lbWarmTimer);
+    lbWarmTimer = setTimeout(() => { lbWarmTimer = null; lbWarmAll().catch(() => {}); }, 2500);
 }
 
 function lbClampPage(page) {
@@ -709,9 +717,15 @@ function lbClampPage(page) {
     return Math.min(Math.max(page, 1), 10);
 }
 
-function lbGetCachedPage(page) {
+// allowStale: untuk tombol Prev/Next — tampilkan halaman tersimpan (walau versi lama) & segarkan di belakang layar
+function lbGetCachedPage(page, allowStale = false) {
     const c = lbPageCache.get(lbClampPage(page));
-    return c && Date.now() - c.at < LB_PAGE_TTL_MS ? c.data : null;
+    if (!c) return null;
+    const fresh = c.version === lbCacheVersion && Date.now() - c.at < LB_PAGE_TTL_MS;
+    if (fresh) return c.data;
+    if (!allowStale || Date.now() - c.at > 6 * 60 * 60 * 1000) return null;
+    lbWarmAll().catch(() => {}); // sudah lama / data berubah -> siapkan ulang di belakang layar
+    return c.data;
 }
 
 async function lbResolveName(userId) {
@@ -734,30 +748,37 @@ async function lbResolveName(userId) {
     return name;
 }
 
-async function generateLeaderboard(page) {
-    page = lbClampPage(page);
-    const cached = lbGetCachedPage(page);
-    if (cached) return cached;
+// Ambil data SEMUA halaman (top 100) sekaligus: 4 query database, sekali saja walau banyak yang klik bersamaan
+async function lbLoadSnapshot() {
+    if (lbSnap && lbSnap.version === lbCacheVersion && Date.now() - lbSnap.at < LB_PAGE_TTL_MS) return lbSnap;
+    if (lbSnapLoading) return lbSnapLoading;
     const version = lbCacheVersion;
+    lbSnapLoading = (async () => {
+        const limit = 10;
+        // 4 query database dijalankan BERSAMAAN (bukan satu per satu). .lean() = hemat RAM
+        const [users, totalUsers, storeData, partnerData] = await Promise.all([
+            User.find({ uangMasuk: { $gt: 0 } }).sort({ uangMasuk: -1 }).limit(limit * 10).select('userId uangMasuk isAnonymous').lean(),
+            User.countDocuments({ uangMasuk: { $gt: 0 } }),
+            Store.findOne({ storeId: 'VIBEBLOX_FINANCE' }).select('totalUangMasuk').lean(),
+            Partner.find({}).select('totalUangMasuk').lean()
+        ]);
+        const calculatedPages = Math.ceil(totalUsers / limit) || 1;
+        // MENGHITUNG TOTAL SERVER (UTAMA + PARTNER)
+        const storeTotal = storeData ? (storeData.totalUangMasuk || 0) : 0;
+        const partnerTotal = partnerData.reduce((acc, curr) => acc + (curr.totalUangMasuk || 0), 0);
+        const snap = { version, at: Date.now(), users, totalPages: Math.min(calculatedPages, 10), totalAmountServer: storeTotal + partnerTotal };
+        if (version === lbCacheVersion) lbSnap = snap;
+        return snap;
+    })().finally(() => { lbSnapLoading = null; });
+    return lbSnapLoading;
+}
 
+async function lbRenderPage(page, snap) {
     const limit = 10;
     const skip = (page - 1) * limit;
-
-    // 4 query database dijalankan BERSAMAAN (bukan satu per satu). .lean() = hemat RAM
-    const [users, totalUsers, storeData, partnerData] = await Promise.all([
-        User.find({ uangMasuk: { $gt: 0 } }).sort({ uangMasuk: -1 }).skip(skip).limit(limit).lean(),
-        User.countDocuments({ uangMasuk: { $gt: 0 } }),
-        Store.findOne({ storeId: 'VIBEBLOX_FINANCE' }).lean(),
-        Partner.find({}).select('totalUangMasuk').lean()
-    ]);
-
-    const calculatedPages = Math.ceil(totalUsers / limit) || 1;
-    const totalPages = Math.min(calculatedPages, 10);
-
-    // MENGHITUNG TOTAL SERVER (UTAMA + PARTNER)
-    const storeTotal = storeData ? (storeData.totalUangMasuk || 0) : 0;
-    const partnerTotal = partnerData.reduce((acc, curr) => acc + (curr.totalUangMasuk || 0), 0);
-    const totalAmountServer = storeTotal + partnerTotal;
+    const users = snap.users.slice(skip, skip + limit);
+    const totalPages = snap.totalPages;
+    const totalAmountServer = snap.totalAmountServer;
 
     // Nama semua user di halaman ini diambil BERSAMAAN
     const names = await Promise.all(users.map(u => (u.isAnonymous ? 'Anonymous' : lbResolveName(u.userId))));
@@ -807,9 +828,32 @@ async function generateLeaderboard(page) {
 
     const data = { embeds: [embed.toJSON()], components: [row.toJSON()] };
     Object.defineProperty(data, 'totalPages', { value: totalPages, enumerable: false }); // info internal, tidak ikut dikirim ke Discord
-    // Simpan hanya kalau data tidak berubah selama halaman ini dibuat (cegah data lama tersimpan)
-    if (version === lbCacheVersion) lbPageCache.set(page, { data, at: Date.now() });
+    // Simpan hanya kalau data tidak berubah selama halaman ini dibuat (cegah data lama menimpa yang baru)
+    if (snap.version === lbCacheVersion) lbPageCache.set(page, { data, at: Date.now(), version: snap.version });
     return data;
+}
+
+async function generateLeaderboard(page) {
+    page = lbClampPage(page);
+    const cached = lbGetCachedPage(page);
+    if (cached) return cached;
+    const snap = await lbLoadSnapshot();
+    return lbRenderPage(page, snap);
+}
+
+// Siapkan SEMUA halaman (1-10) di belakang layar -> tombol Prev/Next langsung tampil dari memori
+async function lbWarmAll() {
+    if (lbWarming) return lbWarming;
+    lbWarming = (async () => {
+        const snap = await lbLoadSnapshot();
+        for (let p = 1; p <= snap.totalPages; p++) {
+            if (snap.version !== lbCacheVersion) break; // data berubah lagi -> putaran berikutnya yang menyiapkan
+            const c = lbPageCache.get(p);
+            if (c && c.version === snap.version && Date.now() - c.at < LB_PAGE_TTL_MS) continue;
+            await lbRenderPage(p, snap);
+        }
+    })().catch(e => console.error('[LEADERBOARD] Gagal menyiapkan halaman:', e.message)).finally(() => { lbWarming = null; });
+    return lbWarming;
 }
 async function updateLiveLeaderboard() {
     try {
@@ -979,6 +1023,7 @@ async function catchUpMissedVouches() {
     }
 }
 client.once('ready', () => setTimeout(catchUpMissedVouches, 15000)); // tunggu cache channel siap
+client.once('ready', () => setTimeout(() => lbWarmAll().catch(() => {}), 20000)); // Top Spenders: semua halaman siap di memori
 
 // =====================================================================
 // === AUTO-CLOSE TICKET (validasi berlapis) + TRANSCRIPT LENGKAP ===
@@ -3781,7 +3826,7 @@ client.on('interactionCreate', async (interaction) => {
             const currentPage = parseInt(parts[2], 10) || 1;
             const targetPage = lbClampPage(direction === 'next' ? currentPage + 1 : currentPage - 1);
 
-            const cachedBoard = lbGetCachedPage(targetPage);
+            const cachedBoard = lbGetCachedPage(targetPage, true);
             if (cachedBoard) {
                 // Halaman sudah tersimpan -> langsung tampil (1 request saja)
                 await interaction.update({ embeds: cachedBoard.embeds, components: cachedBoard.components });
@@ -3797,9 +3842,8 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.editReply({ embeds: boardData.embeds, components: boardData.components });
             }
 
-            // Siapkan halaman berikutnya di belakang layar -> klik Next selanjutnya langsung tampil
-            const shown = lbGetCachedPage(targetPage);
-            if (shown && targetPage < shown.totalPages) generateLeaderboard(targetPage + 1).catch(() => {});
+            // Siapkan halaman lain di belakang layar -> klik Prev/Next selanjutnya langsung tampil
+            lbWarmAll().catch(() => {});
         } catch (err) {
             console.error("Button pagination error:", err.message);
             // Jangan biarkan tombol macet di "Loading...": coba tampilkan ulang halaman yang tadi
