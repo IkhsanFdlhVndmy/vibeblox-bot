@@ -359,13 +359,19 @@ if (menuType === 'howtoorder') {
 // === DEBOUNCE LEADERBOARD UPDATE (HEMAT RAM & API CALLS) =====
 // =============================================================
 let leaderboardTimeout = null;
+// Banyak invoice Done beruntun -> DIGABUNG jadi 1x update (tunggu 2 dtk sepi), tapi paling lama 15 dtk
+// (supaya Done yang terus-menerus tidak membuat Top Spenders tidak pernah ter-update).
+let leaderboardFirstAt = 0;
 function scheduleLiveLeaderboardUpdate() {
-    lbInvalidateCache(); // data berubah (transaksi / anonymous) -> halaman tersimpan dibuang SEKARANG
+    lbInvalidateCache(); // data berubah (transaksi / anonymous) -> semua halaman disiapkan ulang di belakang layar
+    if (!leaderboardFirstAt) leaderboardFirstAt = Date.now();
     if (leaderboardTimeout) clearTimeout(leaderboardTimeout);
+    const wait = Math.max(0, Math.min(2000, leaderboardFirstAt + 15000 - Date.now()));
     leaderboardTimeout = setTimeout(() => {
-        updateLiveLeaderboard();
         leaderboardTimeout = null;
-    }, 2000);
+        leaderboardFirstAt = 0;
+        updateLiveLeaderboard();
+    }, wait);
 }
 
 // =============================================================
@@ -756,10 +762,13 @@ let lbWarmTimer = null;
 // Data berubah (transaksi / anonymous): tandai versi lama. Halaman lama TETAP boleh ditampilkan ke tombol Prev/Next
 // sebentar (beberapa detik) sementara semua halaman disiapkan ulang di belakang layar -> klik tidak pernah menunggu.
 // Pesan leaderboard utama (halaman 1) tetap selalu memakai data terbaru.
+let lbWarmFirstAt = 0;
 function lbInvalidateCache() {
     lbCacheVersion++;
+    if (!lbWarmFirstAt) lbWarmFirstAt = Date.now();
     if (lbWarmTimer) clearTimeout(lbWarmTimer);
-    lbWarmTimer = setTimeout(() => { lbWarmTimer = null; lbWarmAll().catch(() => {}); }, 2500);
+    const wait = Math.max(0, Math.min(2500, lbWarmFirstAt + 15000 - Date.now())); // digabung, paling lama 15 dtk
+    lbWarmTimer = setTimeout(() => { lbWarmTimer = null; lbWarmFirstAt = 0; lbWarmAll().catch(() => {}); }, wait);
 }
 
 function lbClampPage(page) {
