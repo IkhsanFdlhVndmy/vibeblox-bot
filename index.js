@@ -241,13 +241,18 @@ setInterval(async () => {
     const down = Date.now() - dbDownSince;
     if (down >= 15 * 60 * 1000) {
         console.error('🔁 [DB] Database putus 15 menit & sambung ulang tidak berhasil -> bot dimatikan, nanti dinyalakan lagi oleh ketukan UptimeRobot.');
+        try { FX?.health.markExit('db'); await Promise.race([FX?.health.dbGivingUp(), new Promise(r => setTimeout(r, 5000))]); } catch (e) { /* abaikan */ }
         process.exit(1);
     }
     if (down >= 3 * 60 * 1000 && !dbFreshBusy && Date.now() - dbFreshAt >= 3 * 60 * 1000) {
         dbFreshBusy = true; dbFreshAt = Date.now();
         console.error(`🔁 [DB] Database putus ${Math.round(down / 60000)} menit -> menyambung ulang dari awal...`);
         try { await mongoose.disconnect(); } catch (e) { /* abaikan */ }
-        try { await mongoose.connect(process.env.MONGODB_URI, MONGO_OPTS); console.log('✅ [DB] Database tersambung lagi (sambung ulang otomatis).'); }
+        try {
+            await mongoose.connect(process.env.MONGODB_URI, MONGO_OPTS);
+            console.log('✅ [DB] Database tersambung lagi (sambung ulang otomatis).');
+            try { FX?.health.dbRecovered(down); } catch (e) { /* abaikan */ }
+        }
         catch (e) { console.error('❌ [DB] Sambung ulang gagal:', e.message); }
         dbFreshBusy = false;
     }
@@ -3478,7 +3483,7 @@ client.on('interactionCreate', async (interaction) => {
         // Balas aman dulu. Kalau sudah lewat 3 detik (VPS sangat lambat), Discord menolak -> berhenti dengan tenang
         // (pembeli melihat "interaction failed" & bisa kirim form lagi; tidak ada tiket setengah jadi)
         try { await interaction.deferReply({ flags: MessageFlags.Ephemeral }); }
-        catch (e) { console.error('[TIKET] Form terlambat dijawab (>3 dtk), dilewati:', e.code || e.message); return; }
+        catch (e) { console.error('[TIKET] Form terlambat dijawab (>3 dtk), dilewati:', e.code || e.message); if (FX) FX.health.lateReply(); return; }
         
         const type = interaction.customId.replace('tm_', '');
 
@@ -3673,6 +3678,7 @@ client.on('interactionCreate', async (interaction) => {
             if (ticketChannel?.alreadyReplied) return; // sudah diberi tahu "stok habis" saat masih antre
             if (ticketChannel?.fxBlock) return interaction.editReply({ content: ticketChannel.fxBlock });
             if (!ticketChannel) {
+                if (FX) FX.health.categoriesFull(); // owner diberi tahu: semua kategori tiket penuh
                 if (FX) await FX.warAbort(interaction); // War: pesanan Robux dikembalikan
                 return interaction.editReply(ticketClosedReply(type)).catch(() => {}); // semua kategori penuh
             }
@@ -3755,6 +3761,7 @@ client.on('interactionCreate', async (interaction) => {
 
         } catch (e) {
             console.error('[TIKET] Tiket gagal dibuat:', e?.code || '', e?.message || e);
+            if (FX) FX.health.ticketFailed(e); // owner diberi tahu penyebabnya
             if (FX) { FX.warDequeue(interaction); await FX.warAbort(interaction); } // War: pesanan & antrean dikembalikan
             // Community sudah ditutup sementara itu -> pesan "ditutup", bukan pesan error
             const closedMsg = FX ? FX.closedInLock(interaction, type) : null;
@@ -5703,9 +5710,11 @@ client.once('ready', () => { FX.start(mongoose).catch(e => console.error('[FITUR
 // Tanpa ini, sejak Node.js v15+, unhandled promise rejection = proses mati total.
 process.on('unhandledRejection', (reason) => {
     console.error('Unhandled Rejection:', reason);
+    try { FX?.health.processError(reason); } catch (e) { /* abaikan */ }
 });
 process.on('uncaughtException', (err) => {
     console.error('Uncaught Exception:', err);
+    try { FX?.health.processError(err); } catch (e) { /* abaikan */ }
 });
 
 client.login(process.env.TOKEN);

@@ -16,6 +16,7 @@ module.exports = function setupFitur(ctx) {
     const payout = require('./payout')(ctx, core, eligible);
     const ops = require('./operasional')(ctx, core, stok);
     const war = require('./war')(ctx, core, bayar);
+    const health = require('./kesehatan')(ctx, core);
     bayar.setOnRobuxChanged((channelId, robux) => { war.syncChannel(channelId, robux).catch(() => {}); });
     // Rencana payout muncul SEBELUM Robux dikirim: saat bukti bayar masuk, atau lewat tombol di invoice
     bayar.setPlanButton((id) => payout.planButton(id));
@@ -129,7 +130,7 @@ module.exports = function setupFitur(ctx) {
     };
 
     const FX = {
-        core, riwayat, eligible, stok, bayar, payout, ops, war,
+        core, riwayat, eligible, stok, bayar, payout, ops, war, health,
         commands, owns, handleInteraction,
 
         // Transaksi
@@ -293,6 +294,7 @@ module.exports = function setupFitur(ctx) {
             bayar.start();
             payout.start();
             ops.start(mongoose);
+            health.start();
             war.boot();
             const runImport = () => riwayat.runImport().catch(() => {});
             setTimeout(runImport, 60 * 1000);
