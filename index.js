@@ -88,9 +88,15 @@ function withTicketLock(task, maxHoldMs = 10000) {
 
 // Pesan ke pembeli kalau tiket TIDAK bisa dibuat karena gangguan (Discord / server / kategori penuh).
 // Sengaja TIDAK menyebut error/Discord — pembeli cukup tahu tiket sedang ditutup (detail error tetap di log bot).
+const TICKET_LABEL = { community: 'Robux Community', robux_plus: 'Robux Send Plus', vilog: 'Robux Vilog', gamepass: 'Robux Gamepass', gig: 'Gift In-Game', limited: 'Limited Item', mm: 'Middleman' };
+// KHUSUS database (MongoDB) putus: tiket ditutup SEMENTARA, pembeli diminta konfirmasi ke admin.
+// (War penuh / Disable / gangguan Discord tetap memakai ticketClosedReply / pesan "stok habis")
+function ticketPausedReply(type) {
+    return `⏳ **Tiket ${TICKET_LABEL[type] || 'ini'} ditutup sementara.**\nSilakan konfirmasi ke admin ya!`;
+}
 function ticketClosedReply(type) {
     if (type === 'mm') return '❌ **Tiket Middleman sudah ditutup untuk sementara.**\nSilakan pantau pengumuman (announce) untuk info selanjutnya ya!';
-    const label = { community: 'Robux Community', robux_plus: 'Robux Send Plus', vilog: 'Robux Vilog', gamepass: 'Robux Gamepass', gig: 'Gift In-Game', limited: 'Limited Item' }[type] || 'ini';
+    const label = TICKET_LABEL[type] || 'ini';
     return `❌ **Tiket ${label} sudah ditutup karena stok sudah habis.**\nSilakan tunggu stok selanjutnya di pengumuman (announce) ya!`;
 }
 
@@ -247,11 +253,11 @@ setInterval(async () => {
     }
 }, 30 * 1000);
 
-// Database sedang putus: jawab LANGSUNG (bukan "thinking" lama). Tiket -> pesan "sudah ditutup".
+// Database sedang putus: jawab LANGSUNG (bukan "thinking" lama). Tiket -> pesan "ditutup sementara".
 function dbDownGuard(interaction) {
     if (dbReady() || interaction.isAutocomplete?.()) return false;
     if (interaction.isButton() && interaction.customId.startsWith('lb_')) return false; // Top Spenders tampil dari memori
-    const closed = (t) => interaction.reply({ content: ticketClosedReply(t), flags: MessageFlags.Ephemeral }).catch(() => {});
+    const closed = (t) => interaction.reply({ content: ticketPausedReply(t), flags: MessageFlags.Ephemeral }).catch(() => {});
     if (interaction.isButton() && interaction.customId.startsWith('tc_')) { closed(interaction.customId.replace('tc_', '')); return true; }
     if (interaction.isModalSubmit() && interaction.customId.startsWith('tm_')) { closed(interaction.customId.replace('tm_', '')); return true; }
     interaction.reply({ content: '⏳ Bot sedang menyambung ulang ke database. Coba lagi 1–2 menit lagi ya.', flags: MessageFlags.Ephemeral }).catch(() => {});
