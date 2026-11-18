@@ -778,6 +778,37 @@ function lbGetCachedPage(page, allowStale = false) {
     return c.data;
 }
 
+// Nama Top Spenders disimpan ke file -> setelah bot restart nama langsung ada (tidak perlu tanya Discord satu per satu)
+const LB_NAMES_FILE = require('path').join(__dirname, '.lb-names.json');
+try {
+    const savedNames = JSON.parse(require('fs').readFileSync(LB_NAMES_FILE, 'utf8'));
+    for (const [id, v] of Object.entries(savedNames)) if (v?.name) lbNameCache.set(id, v);
+} catch (e) { /* belum ada file */ }
+let lbNamesSaveTimer = null;
+function lbSaveNames() {
+    if (lbNamesSaveTimer) return;
+    lbNamesSaveTimer = setTimeout(() => {
+        lbNamesSaveTimer = null;
+        try { require('fs').writeFileSync(LB_NAMES_FILE, JSON.stringify(Object.fromEntries(lbNameCache))); } catch (e) { /* abaikan */ }
+    }, 5000);
+}
+// Ambil nama yang BELUM diketahui sekaligus dalam 1 permintaan (lewat koneksi gateway), bukan 1 permintaan per orang.
+// (Permintaan per orang diantre Discord satu per satu -> dulu bisa puluhan detik setelah bot restart.)
+async function lbPrefetchNames(ids) {
+    const need = ids.filter(id => {
+        const s = lbNameCache.get(id);
+        return !(s && Date.now() - s.at < LB_NAME_TTL_MS) && !client.users.cache.has(id);
+    });
+    if (!need.length) return;
+    for (const guild of client.guilds.cache.values()) {
+        try {
+            const members = await guild.members.fetch({ user: need.slice(0, 100), time: 8000 });
+            members.forEach(m => lbNameCache.set(m.id, { name: m.user.username, at: Date.now() }));
+            if (members.size) lbSaveNames();
+        } catch (e) { /* sisanya diambil satu per satu seperti biasa */ }
+    }
+}
+
 async function lbResolveName(userId) {
     const saved = lbNameCache.get(userId);
     if (saved && Date.now() - saved.at < LB_NAME_TTL_MS) return saved.name;
@@ -795,6 +826,7 @@ async function lbResolveName(userId) {
     }
     if (lbNameCache.size > 500) lbNameCache.clear(); // batas RAM (normalnya cuma ±100 nama: 10 halaman x 10)
     lbNameCache.set(userId, { name, at: Date.now() });
+    lbSaveNames();
     return name;
 }
 
@@ -812,6 +844,9 @@ async function lbLoadSnapshot() {
             Store.findOne({ storeId: 'VIBEBLOX_FINANCE' }).select('totalUangMasuk').lean(),
             Partner.find({}).select('totalUangMasuk').lean()
         ]);
+        // nama 100 pembeli: yang belum diketahui diambil sekaligus (maks 8 dtk; sisanya cara lama)
+        const ids = users.filter(u => !u.isAnonymous).map(u => u.userId);
+        await Promise.race([lbPrefetchNames(ids), new Promise(r => setTimeout(r, 8000))]).catch(() => {});
         const calculatedPages = Math.ceil(totalUsers / limit) || 1;
         // MENGHITUNG TOTAL SERVER (UTAMA + PARTNER)
         const storeTotal = storeData ? (storeData.totalUangMasuk || 0) : 0;
