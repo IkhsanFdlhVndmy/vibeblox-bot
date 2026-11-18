@@ -180,12 +180,13 @@ function scheduleTicketRebalance(guild, delayMs = 1500) {
     }, delayMs);
 }
 
-mongoose.connect(process.env.MONGODB_URI, {
+const MONGO_OPTS = {
     maxPoolSize: 20,                 // batasi koneksi paralel (default 100, kebesaran untuk RAM 256MB)
     minPoolSize: 1,
     serverSelectionTimeoutMS: 8000,  // GAGAL CEPAT kalau MongoDB tidak bisa dihubungi, bukan nunggu tanpa batas
     socketTimeoutMS: 20000           // GAGAL CEPAT kalau query macet di tengah jalan
-})
+};
+mongoose.connect(process.env.MONGODB_URI, MONGO_OPTS)
     .then(async () => {
         console.log('📂 Database MongoDB Tersambung!');
         // Initialize default robux rates jika belum ada
@@ -218,6 +219,44 @@ mongoose.connection.on('reconnected', () => {
 mongoose.connection.on('error', (err) => {
     console.error('❌ Error koneksi MongoDB:', err.message);
 });
+
+// === PENJAGA DATABASE: sambung ulang otomatis (pengganti restart manual) ===
+// Kadang driver terus mencoba server MongoDB yang sedang mati (ECONNREFUSED) & tidak pindah sendiri.
+//  - Putus >= 3 menit  -> bot memutus & menyambung ulang dari awal (sama seperti efek restart), dicoba tiap 3 menit.
+//  - Putus >= 15 menit -> bot mematikan diri; UptimeRobot (ketuk tiap 5 menit) menyalakannya lagi seperti biasa.
+let dbDownSince = null, dbFreshAt = 0, dbFreshBusy = false;
+const dbReady = () => mongoose.connection.readyState === 1;
+mongoose.connection.on('disconnected', () => { if (!dbDownSince) dbDownSince = Date.now(); });
+mongoose.connection.on('connected', () => { dbDownSince = null; });
+mongoose.connection.on('reconnected', () => { dbDownSince = null; });
+setInterval(async () => {
+    if (dbReady()) { dbDownSince = null; return; }
+    if (!dbDownSince) dbDownSince = Date.now();
+    const down = Date.now() - dbDownSince;
+    if (down >= 15 * 60 * 1000) {
+        console.error('🔁 [DB] Database putus 15 menit & sambung ulang tidak berhasil -> bot dimatikan, nanti dinyalakan lagi oleh ketukan UptimeRobot.');
+        process.exit(1);
+    }
+    if (down >= 3 * 60 * 1000 && !dbFreshBusy && Date.now() - dbFreshAt >= 3 * 60 * 1000) {
+        dbFreshBusy = true; dbFreshAt = Date.now();
+        console.error(`🔁 [DB] Database putus ${Math.round(down / 60000)} menit -> menyambung ulang dari awal...`);
+        try { await mongoose.disconnect(); } catch (e) { /* abaikan */ }
+        try { await mongoose.connect(process.env.MONGODB_URI, MONGO_OPTS); console.log('✅ [DB] Database tersambung lagi (sambung ulang otomatis).'); }
+        catch (e) { console.error('❌ [DB] Sambung ulang gagal:', e.message); }
+        dbFreshBusy = false;
+    }
+}, 30 * 1000);
+
+// Database sedang putus: jawab LANGSUNG (bukan "thinking" lama). Tiket -> pesan "sudah ditutup".
+function dbDownGuard(interaction) {
+    if (dbReady() || interaction.isAutocomplete?.()) return false;
+    if (interaction.isButton() && interaction.customId.startsWith('lb_')) return false; // Top Spenders tampil dari memori
+    const closed = (t) => interaction.reply({ content: ticketClosedReply(t), flags: MessageFlags.Ephemeral }).catch(() => {});
+    if (interaction.isButton() && interaction.customId.startsWith('tc_')) { closed(interaction.customId.replace('tc_', '')); return true; }
+    if (interaction.isModalSubmit() && interaction.customId.startsWith('tm_')) { closed(interaction.customId.replace('tm_', '')); return true; }
+    interaction.reply({ content: '⏳ Bot sedang menyambung ulang ke database. Coba lagi 1–2 menit lagi ya.', flags: MessageFlags.Ephemeral }).catch(() => {});
+    return true;
+}
 
 // =============================================================
 // === HELPER: Parse Amount & Format Rupiah ====================
@@ -3308,6 +3347,7 @@ async function renderTicketPanel(channel) {
 
 client.on('interactionCreate', async (interaction) => {
     if (FX?.owns(interaction)) return; // command/tombol fitur baru ditangani di fitur/index.js
+    if (dbDownGuard(interaction)) return; // database putus -> jawab langsung, tidak "thinking" lama
 // =========================================================================
     // === TICKET SYSTEM - AI OPTIMIZED FOR ALWAYSDATA ===
     // =========================================================================
@@ -5649,7 +5689,7 @@ FX = setupFitur({
         hasActiveInvoice: async (channelId) => !!(await InvoiceTracker.findOne({ channelId }).lean().catch(() => null))
     }
 });
-client.on('interactionCreate', (interaction) => { if (FX.owns(interaction)) FX.handleInteraction(interaction); });
+client.on('interactionCreate', (interaction) => { if (FX.owns(interaction) && !dbDownGuard(interaction)) FX.handleInteraction(interaction); });
 client.once('ready', () => { FX.start(mongoose).catch(e => console.error('[FITUR] Gagal start:', e.message)); });
 
 // === GLOBAL ERROR HANDLER ===

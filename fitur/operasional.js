@@ -265,7 +265,9 @@ module.exports = function createOperasional(ctx, core, stok) {
             if (dbDownTimer) return;
             dbDownTimer = setTimeout(() => { core.alarm('mongo', '🚨 **Database MongoDB terputus lebih dari 2 menit.** Sebagian besar fitur bot macet sampai tersambung lagi.', 60 * 60 * 1000); }, 2 * 60 * 1000);
         });
-        mongoose.connection.on('reconnected', () => { if (dbDownTimer) { clearTimeout(dbDownTimer); dbDownTimer = null; } core.clearAlarm('mongo'); });
+        const back = () => { if (dbDownTimer) { clearTimeout(dbDownTimer); dbDownTimer = null; } core.clearAlarm('mongo'); };
+        mongoose.connection.on('reconnected', back);
+        mongoose.connection.on('connected', back); // tersambung lagi lewat sambung ulang otomatis
     }
 
     // ---------------- Balasan cepat ----------------
